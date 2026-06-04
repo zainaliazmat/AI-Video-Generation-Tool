@@ -1,0 +1,72 @@
+{
+  "meta": {
+    "title": "3 Facts About Deep Sea Creatures",
+    "fps": 30,
+    "width": 1080,
+    "height": 1920,
+    "durationInFrames": 450
+  },
+  "audio": {
+    "voiceover": "assets/voiceover.wav",
+    "music": "assets/music/dummy-music.mp3",
+    "musicVolumeDb": -18
+  },
+  "scenes": [
+    {
+      "id": "scene-1",
+      "startFrame": 0,
+      "durationInFrames": 150,
+      "media": {
+        "type": "video",
+        "src": "assets/clip-1.mp4",
+        "fit": "cover",
+        "kenBurns": { "from": 1.0, "to": 1.12, "originX": 0.5, "originY": 0.4 }
+      }
+    },
+    {
+      "id": "scene-2",
+      "startFrame": 150,
+      "durationInFrames": 150,
+      "media": {
+        "type": "video",
+        "src": "assets/clip-2.mp4",
+        "fit": "cover",
+        "kenBurns": { "from": 1.12, "to": 1.0, "originX": 0.4, "originY": 0.5 }
+      }
+    },
+    {
+      "id": "scene-3",
+      "startFrame": 300,
+      "durationInFrames": 150,
+      "media": {
+        "type": "video",
+        "src": "assets/clip-3.mp4",
+        "fit": "cover",
+        "kenBurns": { "from": 1.0, "to": 1.15, "originX": 0.6, "originY": 0.6 }
+      }
+    }
+  ],
+  "captions": [
+    { "text": "Three", "startFrame": 10, "endFrame": 40 },
+    { "text": "facts", "startFrame": 42, "endFrame": 78 },
+    { "text": "about", "startFrame": 80, "endFrame": 105 },
+    { "text": "deep", "startFrame": 107, "endFrame": 140 },
+    { "text": "sea", "startFrame": 142, "endFrame": 170 },
+    { "text": "creatures", "startFrame": 172, "endFrame": 225 },
+    { "text": "that", "startFrame": 227, "endFrame": 250 },
+    { "text": "will", "startFrame": 252, "endFrame": 278 },
+    { "text": "blow", "startFrame": 280, "endFrame": 315 },
+    { "text": "your", "startFrame": 317, "endFrame": 345 },
+    { "text": "mind", "startFrame": 347, "endFrame": 385 },
+    { "text": "right", "startFrame": 387, "endFrame": 415 },
+    { "text": "now", "startFrame": 417, "endFrame": 445 }
+  ],
+  "style": {
+    "captionFontFamily": "Inter",
+    "captionFontWeight": 800,
+    "captionColor": "#FFFFFF",
+    "captionHighlightColor": "#FFE600",
+    "captionStrokeColor": "#000000",
+    "captionPositionY": 0.78
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "faceless-video-remotion",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Remotion renderer for the faceless video generator — reads spec.json, outputs 1080x1920 MP4.",
+  "scripts": {
+    "copy-spec": "node -e \"require('fs').copyFileSync('../sample-spec.json','public/sample-spec.json')\"",
+    "studio": "npm run copy-spec && remotion studio",
+    "render": "npm run copy-spec && remotion render Video out/video.mp4",
+    "bundle": "npm run copy-spec && remotion bundle",
+    "typecheck": "tsc --noEmit",
+    "upgrade": "remotion upgrade"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.472",
+    "@remotion/google-fonts": "4.0.472",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "remotion": "4.0.472"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.16",
+    "@types/react-dom": "19.2.3",
+    "typescript": "5.9.3"
+  }
+}

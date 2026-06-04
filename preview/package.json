@@ -1,0 +1,37 @@
+{
+  "name": "faceless-video-preview",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Next.js 15 preview app: scrub the Remotion composition in @remotion/player and trigger a local render.",
+  "scripts": {
+    "copy-assets": "node scripts/copy-assets.mjs",
+    "predev": "npm run copy-assets",
+    "dev": "next dev",
+    "prebuild": "npm run copy-assets",
+    "build": "next build",
+    "prestart": "npm run copy-assets",
+    "start": "next start",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/google-fonts": "4.0.472",
+    "@remotion/player": "4.0.472",
+    "clsx": "2.1.1",
+    "framer-motion": "12.40.0",
+    "next": "15.5.19",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "remotion": "4.0.472",
+    "sonner": "2.0.7",
+    "tailwind-merge": "3.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "19.2.16",
+    "@types/react-dom": "19.2.3",
+    "autoprefixer": "10.5.0",
+    "postcss": "8.5.15",
+    "tailwindcss": "3.4.19",
+    "typescript": "5.9.3"
+  }
+}

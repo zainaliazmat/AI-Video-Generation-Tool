@@ -1,0 +1,33 @@
+# vendored gstack tooling — project-local install (~1 GB incl. node_modules +
+# a 94 MB browse binary). Re-run ./setup to regenerate after a fresh clone.
+.claude/skills/
+
+# dependencies / build output
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+.next/
+*.tsbuildinfo
+remotion/out/
+out/
+
+# secrets / env
+.env
+.env.local
+.env.*.local
+
+# generated at runtime (real runs overwrite the dummy skeleton assets)
+/spec.json
+# spec copied into remotion/public/ by the copy-spec script (source of truth is root)
+remotion/public/sample-spec.json
+remotion/public/spec.json
+# preview app generated copies (mirrored from remotion/public + root by copy-assets)
+preview/public/assets/
+preview/public/sample-spec.json
+preview/public/spec.json
+preview/next-env.d.ts
+
+# OS / editor
+.DS_Store
+.gstack/

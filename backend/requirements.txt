@@ -1,0 +1,11 @@
+# Faceless Video Generator — backend dependencies.
+# Installed in Phase 4 into a local venv (.venv). Not needed for Phase 1-3.
+
+pydantic>=2.6,<3          # spec.json contract models (schema.py)
+kokoro>=0.9.4             # local TTS (voiceover) — Apache-2.0, CPU
+soundfile>=0.12           # write Kokoro audio to wav
+faster-whisper>=1.1       # word-level caption timestamps from the voiceover
+openai>=1.40             # DeepSeek-V4 (OpenAI-compatible endpoint) — default LLM
+anthropic>=0.40          # optional LLM provider (LLM_PROVIDER=anthropic)
+requests>=2.32           # Pexels / Pixabay footage API + downloads
+python-dotenv>=1.0       # load .env (API keys, LLM_PROVIDER)
