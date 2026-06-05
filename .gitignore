@@ -19,6 +19,8 @@ out/
 
 # generated at runtime (real runs overwrite the dummy skeleton assets)
 /spec.json
+# stock footage downloaded by the Phase 4 pipeline (regenerated per run)
+remotion/public/assets/footage_*.mp4
 # spec copied into remotion/public/ by the copy-spec script (source of truth is root)
 remotion/public/sample-spec.json
 remotion/public/spec.json

@@ -9,3 +9,4 @@ openai>=1.40             # DeepSeek-V4 (OpenAI-compatible endpoint) — default 
 anthropic>=0.40          # optional LLM provider (LLM_PROVIDER=anthropic)
 requests>=2.32           # Pexels / Pixabay footage API + downloads
 python-dotenv>=1.0       # load .env (API keys, LLM_PROVIDER)
+pytest>=8.0              # unit tests (dev)
