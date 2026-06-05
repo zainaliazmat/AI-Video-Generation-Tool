@@ -2,13 +2,21 @@
 
 import {useEffect, useState} from 'react';
 import {motion} from 'framer-motion';
+import {toast} from 'sonner';
 import type {Spec} from '@remotion-src/schema';
 import {PlayerClient} from './PlayerClient';
 import {TopicInput} from './TopicInput';
-import {PipelineStepper} from './PipelineStepper';
+import {
+  PipelineStepper,
+  DEFAULT_STAGES,
+  type Stage,
+  type StageState,
+} from './PipelineStepper';
 import {RenderControls, type RenderRecord} from './RenderControls';
 import {HistoryList} from './HistoryList';
 import {Badge, Eyebrow} from './ui';
+
+const freshStages = (): Stage[] => DEFAULT_STAGES.map((s) => ({...s, state: 'queued'}));
 
 const rise = {
   initial: {opacity: 0, y: 12},
@@ -20,6 +28,9 @@ export function Studio() {
   const [spec, setSpec] = useState<Spec | null>(null);
   const [failed, setFailed] = useState(false);
   const [history, setHistory] = useState<RenderRecord[]>([]);
+  const [stages, setStages] = useState<Stage[]>(freshStages);
+  const [generating, setGenerating] = useState(false);
+  const [genNonce, setGenNonce] = useState(0); // bump to remount the Player on a new spec
 
   useEffect(() => {
     const ac = new AbortController();
@@ -36,6 +47,79 @@ export function Studio() {
       });
     return () => ac.abort();
   }, []);
+
+  async function generate(topic: string) {
+    setGenerating(true);
+    setStages(freshStages());
+    const toastId = toast.loading('Generating video…', {
+      description: 'script → voice → timing → footage → assemble',
+    });
+
+    try {
+      const res = await fetch('/api/generate', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({topic}),
+      });
+      if (res.status === 409) {
+        toast.error('A generation is already in progress', {id: toastId});
+        return;
+      }
+      if (!res.ok || !res.body) {
+        throw new Error(`Request failed (${res.status})`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let finished = false;
+
+      for (;;) {
+        const {value, done} = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, {stream: true});
+        const frames = buffer.split('\n\n');
+        buffer = frames.pop() ?? '';
+        for (const f of frames) {
+          const line = f.split('\n').find((l) => l.startsWith('data: '));
+          if (!line) continue;
+          let msg: {type: string; [k: string]: unknown};
+          try {
+            msg = JSON.parse(line.slice(6));
+          } catch {
+            continue;
+          }
+          if (msg.type === 'stage') {
+            const stage = msg.stage as string;
+            const state = msg.state as StageState;
+            setStages((prev) =>
+              prev.map((s) => (s.key === stage ? {...s, state} : s)),
+            );
+          } else if (msg.type === 'done') {
+            finished = true;
+            const r = await fetch(`/spec.json?t=${Date.now()}`);
+            const s: Spec = await r.json();
+            setSpec(s);
+            setFailed(false);
+            setGenNonce((n) => n + 1);
+            toast.success('Video generated', {id: toastId, description: s.meta.title});
+          } else if (msg.type === 'error') {
+            finished = true;
+            throw new Error(String(msg.message));
+          }
+        }
+      }
+      if (!finished) toast.dismiss(toastId);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Generation failed';
+      setStages((prev) =>
+        prev.map((s) => (s.state === 'running' ? {...s, state: 'failed'} : s)),
+      );
+      toast.error('Generation failed', {id: toastId, description: message});
+    } finally {
+      setGenerating(false);
+    }
+  }
 
   return (
     <main className="relative z-[1] mx-auto max-w-[1040px] px-7 py-10 sm:px-8 sm:py-14">
@@ -55,7 +139,7 @@ export function Studio() {
         {/* Left column — controls */}
         <div className="flex flex-col gap-5">
           <motion.div {...rise} transition={{...rise.transition, delay: 0.04}}>
-            <TopicInput />
+            <TopicInput onGenerate={generate} busy={generating} />
           </motion.div>
 
           <motion.div
@@ -65,13 +149,21 @@ export function Studio() {
           >
             <div className="flex items-center justify-between">
               <Eyebrow>Pipeline</Eyebrow>
-              <Badge tone="dim">Idle</Badge>
+              {generating ? (
+                <Badge tone="blue" dot>
+                  Running
+                </Badge>
+              ) : (
+                <Badge tone="dim">Idle</Badge>
+              )}
             </div>
             <div className="mt-5 px-1">
-              <PipelineStepper />
+              <PipelineStepper stages={stages} />
             </div>
             <p className="mt-4 font-ui text-[12px] text-ink-muted">
-              The 5-stage backend runs here once it lands in Phase 4.
+              {generating
+                ? 'Running the pipeline locally — this takes a couple of minutes on CPU.'
+                : 'Enter a topic above and hit Generate to run the full pipeline.'}
             </p>
           </motion.div>
 
@@ -112,7 +204,7 @@ export function Studio() {
                   <code className="mx-1 font-mono">npm run copy-assets</code> in preview/.
                 </div>
               ) : spec ? (
-                <PlayerClient spec={spec} />
+                <PlayerClient key={genNonce} spec={spec} />
               ) : (
                 <div className="aspect-[1080/1920] w-full animate-pulse-dot bg-white/[0.03]" />
               )}
