@@ -23,7 +23,7 @@ export function Studio() {
 
   useEffect(() => {
     const ac = new AbortController();
-    fetch('/sample-spec.json', {signal: ac.signal})
+    fetch('/spec.json', {signal: ac.signal})
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
@@ -31,7 +31,7 @@ export function Studio() {
       .then((s: Spec) => setSpec(s))
       .catch((e) => {
         if (ac.signal.aborted) return;
-        console.error('Failed to load sample-spec.json:', e);
+        console.error('Failed to load spec.json:', e);
         setFailed(true);
       });
     return () => ac.abort();
@@ -108,7 +108,7 @@ export function Studio() {
             <div className="overflow-hidden rounded-[var(--radius-md)] bg-black">
               {failed ? (
                 <div className="flex aspect-[1080/1920] items-center justify-center p-6 text-center font-ui text-[13px] text-ink-muted">
-                  Could not load sample-spec.json. Run{' '}
+                  Could not load spec.json. Run{' '}
                   <code className="mx-1 font-mono">npm run copy-assets</code> in preview/.
                 </div>
               ) : spec ? (

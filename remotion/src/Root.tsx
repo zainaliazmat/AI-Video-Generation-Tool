@@ -11,7 +11,7 @@ import type {Spec} from './schema';
 // copies the repo-root spec there before studio/render). Loading it via
 // staticFile()+fetch avoids a fragile cross-root JSON import and lets us swap
 // the spec without rebundling.
-const SPEC_PUBLIC_PATH = 'sample-spec.json';
+const SPEC_PUBLIC_PATH = 'spec.json';
 
 type RootProps = {
   spec: Spec;

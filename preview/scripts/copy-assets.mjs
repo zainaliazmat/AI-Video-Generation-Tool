@@ -23,11 +23,13 @@ if (existsSync(srcAssets)) {
   console.warn(`[copy-assets] WARN: ${srcAssets} not found`);
 }
 
-const srcSpec = resolve(repoRoot, 'sample-spec.json');
-const dstSpec = resolve(previewPublic, 'sample-spec.json');
-if (existsSync(srcSpec)) {
+const override = process.env.SPEC_PATH ? resolve(repoRoot, process.env.SPEC_PATH) : null;
+const specCandidates = [override, resolve(repoRoot, 'spec.json'), resolve(repoRoot, 'sample-spec.json')];
+const srcSpec = specCandidates.find((p) => p && existsSync(p));
+const dstSpec = resolve(previewPublic, 'spec.json');
+if (srcSpec) {
   copyFileSync(srcSpec, dstSpec);
-  console.log(`[copy-assets] sample-spec.json -> ${dstSpec}`);
+  console.log(`[copy-assets] ${srcSpec} -> ${dstSpec}`);
 } else {
-  console.warn(`[copy-assets] WARN: ${srcSpec} not found`);
+  console.warn('[copy-assets] WARN: no spec.json or sample-spec.json found');
 }
