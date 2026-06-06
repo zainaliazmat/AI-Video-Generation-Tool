@@ -52,6 +52,14 @@ export interface Manifest {
   /** example props used to auto-render the gallery preview */
   sampleProps: Record<string, unknown>;
   durationFrames: DurationFrames;
+  /**
+   * A full-text template (hook/stat/outro hero cards) renders its own on-screen
+   * text, so the renderer SUPPRESSES the global karaoke caption over its scene
+   * span (else the same words show twice). Footage/overlay templates omit it (the
+   * caption is wanted over footage). Defaults to false when absent.
+   * MUST stay in lockstep with backend/manifest.py.
+   */
+  rendersOwnText?: boolean;
 }
 
 /** staticFile-resolved absolute paths for any media a template references. */

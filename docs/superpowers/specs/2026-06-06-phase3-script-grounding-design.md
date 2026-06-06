@@ -415,3 +415,39 @@ subtitle, single-digit stat scaling) — unless one is trivially adjacent.
 | Tests (pattern) | [backend/tests/test_script.py](../../../backend/tests/test_script.py) · [test_content.py](../../../backend/tests/test_content.py) | DI fake-client / shape tests to mirror for TDD. |
 | New (3.1) | `backend/pipeline/retrieval.py` | Thin Tavily seam + cache (to be created). |
 | New (3.3) | `sources.json` (sidecar) | Description list / client hand-off (to be created). |
+
+## Post-review caption-layer fix (frame review)
+
+The two committed key frames surfaced a caption-layer issue independent of the
+grounding work. Root cause: the karaoke caption layer is **global** (root-level in
+[Video.tsx](../../../remotion/src/Video.tsx), fed by a flat `spec.captions`), so it
+rendered the spoken words over the full-text hero cards (hook/stat/outro) that
+already display that text — duplicating it. The 3.2 "hook is the hero" change
+*promoted* the hook duplication (the hero is now `beat.text`, exactly what the
+caption shows); the stat/outro duplication, the `,700` number fragment, and the
+gigatonnes/gigatons mismatch were all pre-existing.
+
+Shipped in this PR (TDD; audio-sync math `seqDurᵢ = dᵢ + Tᵢ` and spec contract
+untouched):
+
+1. **Caption suppression over hero cards.** New optional `rendersOwnText` manifest
+   envelope flag (hand-authored alongside `kind`/`durationFrames`, NOT derived from
+   zod, so `gen-manifests` preserves it; mirrored in
+   [sdk.ts](../../../templates/sdk.ts) `Manifest` + [manifest.py](../../../backend/manifest.py),
+   set `true` on hook/stat/outro). The renderer builds `[start,end)` suppress spans
+   from scenes whose template declares it and hides the caption there
+   ([Captions.tsx](../../../remotion/src/Captions.tsx)); captions still play over
+   footage. Core hardcodes no template id — the policy rides the manifest flag.
+2. **Number-atomic captions.** [timing.py](../../../backend/pipeline/timing.py) now
+   re-glues a numeric tail (`"37"` + `",700"` → `"37,700"`) so the karaoke never
+   shows a leading-comma fragment.
+
+### Deferred follow-up (non-blocking, tracked here)
+
+3. **stat `label` ↔ spoken `beat.text` wording.** The LLM emits `data.label`
+   ("gigatonnes …") and the narration `beat.text` ("gigatons …") as independent
+   strings, so the viewer can *hear* one spelling and *read* another. Suppressing
+   the caption removes the on-screen conflict but NOT this audio↔screen mismatch.
+   Planned fix: a system-prompt rule that `data.label` reuse the spoken wording
+   ([script.py](../../../backend/pipeline/script.py) `SYSTEM_PROMPT`); ruled
+   non-blocking for the Phase-3 merge.

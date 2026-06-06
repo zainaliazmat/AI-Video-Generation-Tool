@@ -84,6 +84,18 @@ export const Video: React.FC<{spec: Spec}> = ({spec}) => {
 
   const anyTransition = scenes.some((s, i) => transitionOf(s, i) !== undefined);
 
+  // Absolute [start, end) spans of scenes whose template renders its OWN full text
+  // (hook/stat/outro hero cards, declared via manifest.rendersOwnText). The global
+  // karaoke caption is hidden over these so the same words don't show twice; over
+  // footage scenes (rendersOwnText falsy) the caption still plays. Core hardcodes
+  // no template id — the policy rides on the manifest flag.
+  const captionSuppressRanges = scenes.flatMap((s): Array<[number, number]> => {
+    const entry = s.template ? registry[s.template] : undefined;
+    return entry && entry.type === 'render' && entry.manifest.rendersOwnText
+      ? [[s.startFrame, s.startFrame + s.durationInFrames]]
+      : [];
+  });
+
   // With transitions, scenes go through <TransitionSeries>. Each sequence is
   // EXTENDED by its outgoing transition (dur = dᵢ + Tᵢ); TransitionSeries
   // reclaims the Tᵢ overlap, so every scene's content-start stays pinned to its
@@ -172,7 +184,11 @@ export const Video: React.FC<{spec: Spec}> = ({spec}) => {
       {/* Captions overlay sits at the composition ROOT (not inside a Sequence),
           so useCurrentFrame() stays ABSOLUTE and matches the caption frames —
           audio-aligned regardless of any transition overlaps inside the scenes. */}
-      <Captions captions={captions} caption={theme.caption} />
+      <Captions
+        captions={captions}
+        caption={theme.caption}
+        suppressRanges={captionSuppressRanges}
+      />
     </AbsoluteFill>
   );
 };

@@ -56,11 +56,25 @@ function findAnchorIndex(captions: Caption[], frame: number): number {
 export const Captions: React.FC<{
   captions: Caption[];
   caption: CaptionStyle;
-}> = ({captions, caption: style}) => {
+  /**
+   * Absolute [start, end) frame spans (half-open) over which the karaoke caption
+   * is hidden — the full-text hero cards (hook/stat/outro) already render their
+   * own text, so showing the same words again duplicates them. Footage scenes are
+   * not in this list, so captions still play over footage. Empty/absent = always
+   * show (the previous behavior).
+   */
+  suppressRanges?: ReadonlyArray<readonly [number, number]>;
+}> = ({captions, caption: style, suppressRanges}) => {
   // ROOT-level component => useCurrentFrame() is ABSOLUTE, matching the absolute
   // startFrame/endFrame in captions[]. Do not offset.
   const frame = useCurrentFrame();
   const {height} = useVideoConfig();
+
+  // Suppressed over full-text hero cards (half-open so the contiguous scene
+  // boundary frame isn't double-counted). The card is the text treatment there.
+  const suppressed = (suppressRanges ?? []).some(
+    ([a, b]) => frame >= a && frame < b,
+  );
 
   const activeIndex = useMemo(
     () => findActiveIndex(captions, frame),
@@ -93,7 +107,7 @@ export const Captions: React.FC<{
     return slice;
   }, [captions, anchorIndex]);
 
-  if (windowWords.length === 0) {
+  if (suppressed || windowWords.length === 0) {
     return null;
   }
 

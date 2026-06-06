@@ -49,3 +49,8 @@ class Manifest(BaseModel):
     inputSchema: dict       # JSON Schema for this template's props (from zod)
     sampleProps: dict       # example props used to auto-render the gallery preview
     durationFrames: DurationFrames
+    # A full-text template (hook/stat/outro hero cards) renders its own on-screen
+    # text, so the global karaoke caption is SUPPRESSED over its scene span by the
+    # renderer (else the same words show twice). Footage/overlay templates leave it
+    # False and keep captions. Renderer-side policy; the backend just carries it.
+    rendersOwnText: bool = False

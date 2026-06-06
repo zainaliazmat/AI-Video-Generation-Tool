@@ -5,10 +5,15 @@ The manifest is the language-neutral contract read by BOTH the Python backend
 Python validates manifest.json files; the inputSchema is JSON Schema generated
 from each template's zod schema.
 """
+import pathlib
+
 import pytest
 from pydantic import ValidationError
 
 from manifest import Manifest
+from pipeline.validate import load_catalog
+
+_TEMPLATES_DIR = pathlib.Path(__file__).resolve().parents[2] / "templates"
 
 
 def _valid() -> dict:
@@ -65,3 +70,20 @@ def test_all_declared_slots_accepted(kind):
     ok = _valid()
     ok["kind"] = kind
     assert Manifest.model_validate(ok).kind == kind
+
+
+def test_renders_own_text_defaults_false_and_parses():
+    # Absent → False (footage/transition templates let the global caption show).
+    assert Manifest.model_validate(_valid()).rendersOwnText is False
+    flagged = {**_valid(), "rendersOwnText": True}
+    assert Manifest.model_validate(flagged).rendersOwnText is True
+
+
+def test_core_full_text_templates_declare_rendersOwnText():
+    # The full-text hero cards own their on-screen text, so the karaoke caption is
+    # suppressed over them; footage/overlay templates keep captions.
+    catalog = load_catalog(_TEMPLATES_DIR)
+    for hero in ("hook", "stat", "outro"):
+        assert catalog[hero].rendersOwnText is True, f"{hero} must set rendersOwnText"
+    for footage in ("scene", "overlay"):
+        assert catalog[footage].rendersOwnText is False, f"{footage} must not own text"
