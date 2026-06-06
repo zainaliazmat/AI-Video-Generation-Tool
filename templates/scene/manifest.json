@@ -1,0 +1,96 @@
+{
+  "id": "scene",
+  "name": "Scene — Footage + Ken Burns",
+  "version": "1.0.0",
+  "author": "core",
+  "apiVersion": "1",
+  "kind": "scene",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "media": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "video",
+              "image"
+            ]
+          },
+          "src": {
+            "type": "string"
+          },
+          "fit": {
+            "type": "string",
+            "enum": [
+              "cover",
+              "contain"
+            ]
+          },
+          "kenBurns": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "number"
+                  },
+                  "to": {
+                    "type": "number"
+                  },
+                  "originX": {
+                    "type": "number"
+                  },
+                  "originY": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "from",
+                  "to",
+                  "originX",
+                  "originY"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "loop": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "type",
+          "src",
+          "fit"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "media"
+    ],
+    "additionalProperties": false
+  },
+  "sampleProps": {
+    "media": {
+      "type": "video",
+      "src": "assets/clip-1.mp4",
+      "fit": "cover",
+      "kenBurns": {
+        "from": 1,
+        "to": 1.12,
+        "originX": 0.5,
+        "originY": 0.4
+      }
+    }
+  },
+  "durationFrames": {
+    "min": 30,
+    "max": 300
+  }
+}

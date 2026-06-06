@@ -1,0 +1,51 @@
+{
+  "meta": {
+    "title": "Transition Sync Check",
+    "fps": 30,
+    "width": 1080,
+    "height": 1920,
+    "durationInFrames": 270
+  },
+  "audio": {
+    "voiceover": "assets/voiceover.wav",
+    "music": null,
+    "musicVolumeDb": -18
+  },
+  "scenes": [
+    {
+      "id": "scene-0",
+      "startFrame": 0,
+      "durationInFrames": 90,
+      "template": "hook",
+      "templateProps": { "title": "Scene ONE", "subtitle": "fades to two" },
+      "transition": { "template": "fade", "durationInFrames": 20 }
+    },
+    {
+      "id": "scene-1",
+      "startFrame": 90,
+      "durationInFrames": 90,
+      "template": "stat",
+      "templateProps": { "value": "2", "label": "Scene TWO", "icon": "✌️" },
+      "transition": { "template": "slide", "durationInFrames": 24, "props": { "direction": "from-right" } }
+    },
+    {
+      "id": "scene-2",
+      "startFrame": 180,
+      "durationInFrames": 90,
+      "template": "outro",
+      "templateProps": { "title": "Scene THREE", "cta": "the end" }
+    }
+  ],
+  "captions": [
+    { "text": "ONE", "startFrame": 10, "endFrame": 80 },
+    { "text": "TWO", "startFrame": 100, "endFrame": 170 },
+    { "text": "THREE", "startFrame": 190, "endFrame": 260 }
+  ],
+  "theme": {
+    "palette": { "background": "#0A0E1A", "foreground": "#FFFFFF", "accent": "#5EE6C2", "muted": "#94A3B8" },
+    "fonts": { "heading": "Inter", "body": "Inter" },
+    "transition": "fade",
+    "caption": { "fontFamily": "Inter", "fontWeight": 800, "color": "#FFFFFF", "highlightColor": "#5EE6C2", "strokeColor": "#000000", "positionY": 0.82 }
+  },
+  "layers": []
+}

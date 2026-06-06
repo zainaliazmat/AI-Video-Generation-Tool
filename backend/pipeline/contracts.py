@@ -21,6 +21,18 @@ class WordTiming:
 
 @dataclass
 class Clip:
-    index: int
+    index: int  # beat index (scene position) this clip belongs to
     query: str
     path: str  # relative to remotion/public/, e.g. "assets/footage_ab12cd34.mp4"
+    duration_frames: int | None = None  # clip length; None if unknown (no loop fallback)
+
+
+@dataclass
+class FootageRequest:
+    """A request for one footage clip, emitted by the recipe plan for each
+    `scene`-kind beat. `min_frames` biases selection toward a clip long enough to
+    cover the scene span (dᵢ + transition headroom), so the loop fallback rarely
+    fires."""
+    index: int       # beat index (scene position)
+    query: str
+    min_frames: int = 0

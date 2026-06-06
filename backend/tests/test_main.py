@@ -1,13 +1,36 @@
+"""Step 6.4 — main orchestrates: script → recipe.plan → tts → timing →
+footage(by plan) → assemble(plan) → validate → write."""
 import json
 import main as m
-from pipeline.contracts import LineOffset, WordTiming, Clip
+from pipeline.content import BeatsScript
+from pipeline.contracts import LineOffset, WordTiming, Clip, FootageRequest
 
 
-def test_run_emits_stage_progress_in_order(monkeypatch, tmp_path):
-    monkeypatch.setattr(m.script_stage, "generate_script", lambda topic: {"title": "T", "lines": ["a", "b"]})
-    monkeypatch.setattr(m.tts_stage, "synthesize", lambda lines, out: [LineOffset(0, "a", 0.0, 1.0), LineOffset(1, "b", 1.0, 2.0)])
+def test_run_builds_multi_template_spec_from_a_plan(monkeypatch, tmp_path):
+    seen = {}
+
+    # hook / stat(numeric) / scene(plain, footage) / outro
+    beats = [
+        {"text": "the hook"},
+        {"text": "a big stat", "data": {"value": "90%", "label": "unmapped"}},
+        {"text": "a plain scene", "keywords": "ocean"},
+        {"text": "follow for more"},
+    ]
+    monkeypatch.setattr(m.script_stage, "generate_script", lambda topic: BeatsScript(title="T", beats=beats))
+    monkeypatch.setattr(
+        m.tts_stage, "synthesize",
+        lambda lines, out: seen.update(tts_lines=lines) or [
+            LineOffset(0, "a", 0.0, 1.0), LineOffset(1, "b", 1.2, 2.0),
+            LineOffset(2, "c", 2.2, 3.0), LineOffset(3, "d", 3.2, 4.0),
+        ],
+    )
     monkeypatch.setattr(m.timing_stage, "transcribe_words", lambda wav, fps: [WordTiming("a", 0, 15)])
-    monkeypatch.setattr(m.footage_stage, "fetch_footage", lambda lines, out: [Clip(0, "a", "assets/f0.mp4"), Clip(1, "b", "assets/f1.mp4")])
+
+    def fake_footage(reqs, out, *, fps):
+        seen["footage_reqs"] = list(reqs)
+        return [Clip(index=r.index, query=r.query, path=f"assets/f{r.index}.mp4", duration_frames=300) for r in reqs]
+
+    monkeypatch.setattr(m.footage_stage, "fetch_footage", fake_footage)
     monkeypatch.setattr(m, "ASSETS_DIR", tmp_path / "assets")
     monkeypatch.setattr(m, "SPEC_OUT", tmp_path / "spec.json")
 
@@ -21,8 +44,16 @@ def test_run_emits_stage_progress_in_order(monkeypatch, tmp_path):
         ("footage", "running"), ("footage", "done"),
         ("assemble", "running"), ("assemble", "done"),
     ]
-    assert (tmp_path / "spec.json").exists()
+    # every beat narrated, in order
+    assert seen["tts_lines"] == ["the hook", "a big stat", "a plain scene", "follow for more"]
+    # footage requested ONLY for the scene beat (index 2), as FootageRequests
+    assert [r.index for r in seen["footage_reqs"]] == [2]
+    assert all(isinstance(r, FootageRequest) for r in seen["footage_reqs"])
+    assert seen["footage_reqs"][0].query == "ocean"
+    assert seen["footage_reqs"][0].min_frames > 0          # biased by scene duration
+
+    # the written spec is multi-template and valid (validate ran without raising)
     written = json.loads((tmp_path / "spec.json").read_text())
+    assert [s["template"] for s in written["scenes"]] == ["hook", "stat", "scene", "outro"]
     assert written["meta"]["title"] == "T"
-    assert len(written["scenes"]) == 2
-    assert spec.meta.title == "T"
+    assert spec.meta.durationInFrames == 120               # round(4.0 * 30)
