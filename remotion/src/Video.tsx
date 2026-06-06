@@ -42,7 +42,7 @@ export const Video: React.FC<{spec: Spec}> = ({spec}) => {
     return null;
   }
 
-  const {scenes, captions, audio, theme, meta} = spec;
+  const {scenes, captions, audio, theme, meta, layers} = spec;
 
   return (
     <AbsoluteFill style={{backgroundColor: theme.palette.background}}>
@@ -82,6 +82,32 @@ export const Video: React.FC<{spec: Spec}> = ({spec}) => {
           loop
         />
       ) : null}
+
+      {/* Overlay layers composited on top of the scenes (overlay-kind templates),
+          each within its own <Sequence>. Rendered BELOW captions so the caption
+          band stays legible. Resolved by id from the registry; unknown id → the
+          loud placeholder, never a silent built-in. */}
+      {(layers ?? []).map((layer) => {
+        const entry = registry[layer.template];
+        return (
+          <Sequence
+            key={layer.id}
+            from={layer.startFrame}
+            durationInFrames={layer.durationInFrames}
+          >
+            {entry ? (
+              <entry.component
+                data={layer.props ?? {}}
+                theme={theme}
+                timing={{fps: meta.fps, durationInFrames: layer.durationInFrames}}
+                assets={{}}
+              />
+            ) : (
+              <MissingTemplate templateId={layer.template} />
+            )}
+          </Sequence>
+        );
+      })}
 
       {/* Captions overlay sits at the composition ROOT (not inside a Sequence),
           so useCurrentFrame() stays ABSOLUTE and matches the caption frames.

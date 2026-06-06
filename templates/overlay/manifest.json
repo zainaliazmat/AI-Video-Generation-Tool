@@ -1,0 +1,20 @@
+{
+  "id": "overlay",
+  "name": "Overlay — Brand Bug",
+  "version": "1.0.0",
+  "author": "core",
+  "apiVersion": "1",
+  "kind": "overlay",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "text": { "type": "string" }
+    },
+    "required": ["text"]
+  },
+  "sampleProps": {
+    "text": "@yourchannel"
+  },
+  "durationFrames": { "min": 30, "max": 1800 }
+}
