@@ -10,6 +10,8 @@
     "render": "npm run build-registry && npm run copy-spec && remotion render Video out/video.mp4",
     "bundle": "npm run build-registry && npm run copy-spec && remotion bundle",
     "typecheck": "npm run build-registry && tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "upgrade": "remotion upgrade",
     "gen-previews": "npm run build-registry && node scripts/gen-previews.mjs",
     "check-previews": "node scripts/gen-previews.mjs --check"
@@ -25,6 +27,7 @@
   "devDependencies": {
     "@types/react": "19.2.16",
     "@types/react-dom": "19.2.3",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "vitest": "^3.2.6"
   }
 }

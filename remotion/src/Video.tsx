@@ -3,6 +3,7 @@ import {AbsoluteFill, Audio, Sequence, staticFile} from 'remotion';
 import {TransitionSeries, linearTiming} from '@remotion/transitions';
 import type {Spec, Scene as SceneType, Theme} from './schema';
 import {Captions} from './Captions';
+import {deriveCaptionSuppressRanges} from './captions-suppress';
 import {registry} from '../../templates/registry.generated';
 
 /**
@@ -88,13 +89,13 @@ export const Video: React.FC<{spec: Spec}> = ({spec}) => {
   // (hook/stat/outro hero cards, declared via manifest.rendersOwnText). The global
   // karaoke caption is hidden over these so the same words don't show twice; over
   // footage scenes (rendersOwnText falsy) the caption still plays. Core hardcodes
-  // no template id — the policy rides on the manifest flag.
-  const captionSuppressRanges = scenes.flatMap((s): Array<[number, number]> => {
-    const entry = s.template ? registry[s.template] : undefined;
-    return entry && entry.type === 'render' && entry.manifest.rendersOwnText
-      ? [[s.startFrame, s.startFrame + s.durationInFrames]]
-      : [];
-  });
+  // no template id — the policy rides on the manifest flag (derivation is unit-
+  // tested in captions-suppress.test.ts).
+  const ownsText = (templateId: string | undefined): boolean => {
+    const entry = templateId ? registry[templateId] : undefined;
+    return Boolean(entry && entry.type === 'render' && entry.manifest.rendersOwnText);
+  };
+  const captionSuppressRanges = deriveCaptionSuppressRanges(scenes, ownsText);
 
   // With transitions, scenes go through <TransitionSeries>. Each sequence is
   // EXTENDED by its outgoing transition (dur = dᵢ + Tᵢ); TransitionSeries

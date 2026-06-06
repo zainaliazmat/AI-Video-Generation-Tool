@@ -8,6 +8,7 @@ import {
 } from 'remotion';
 import {loadFont} from '@remotion/google-fonts/Inter';
 import type {Caption, CaptionStyle} from './schema';
+import {isFrameSuppressed, type FrameRange} from './captions-suppress';
 
 // Load Inter ONCE at module top-level. loadFont auto-manages delayRender, so the
 // render blocks until glyphs are ready — no fallback-font flash, no manual
@@ -63,7 +64,7 @@ export const Captions: React.FC<{
    * not in this list, so captions still play over footage. Empty/absent = always
    * show (the previous behavior).
    */
-  suppressRanges?: ReadonlyArray<readonly [number, number]>;
+  suppressRanges?: ReadonlyArray<FrameRange>;
 }> = ({captions, caption: style, suppressRanges}) => {
   // ROOT-level component => useCurrentFrame() is ABSOLUTE, matching the absolute
   // startFrame/endFrame in captions[]. Do not offset.
@@ -72,9 +73,7 @@ export const Captions: React.FC<{
 
   // Suppressed over full-text hero cards (half-open so the contiguous scene
   // boundary frame isn't double-counted). The card is the text treatment there.
-  const suppressed = (suppressRanges ?? []).some(
-    ([a, b]) => frame >= a && frame < b,
-  );
+  const suppressed = isFrameSuppressed(frame, suppressRanges ?? []);
 
   const activeIndex = useMemo(
     () => findActiveIndex(captions, frame),
