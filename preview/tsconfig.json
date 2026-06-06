@@ -24,7 +24,9 @@
       "react-dom": ["node_modules/@types/react-dom"],
       "react-dom/*": ["node_modules/@types/react-dom/*"],
       "remotion": ["node_modules/remotion"],
-      "remotion/*": ["node_modules/remotion/*"]
+      "remotion/*": ["node_modules/remotion/*"],
+      "@remotion/transitions": ["node_modules/@remotion/transitions"],
+      "@remotion/transitions/*": ["node_modules/@remotion/transitions/*"]
     }
   },
   "include": [

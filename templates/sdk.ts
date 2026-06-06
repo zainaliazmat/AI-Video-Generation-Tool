@@ -16,6 +16,8 @@
  * extracted to a standalone npm package, `Theme`/`CaptionStyle` should move to a
  * shared contract package and both the spec and this SDK import from there.
  */
+import type {ComponentType} from 'react';
+import type {TransitionPresentation} from '@remotion/transitions';
 import type {Theme} from '../remotion/src/schema';
 
 export type {Theme};
@@ -67,3 +69,34 @@ export interface TemplateProps<Data = Record<string, unknown>> {
   /** staticFile-resolved paths for any media the template needs */
   assets: ResolvedAssets;
 }
+
+/**
+ * A `transition`-kind template is the structural odd-one-out: it provides a
+ * <TransitionSeries> PRESENTATION factory, NOT a TemplateProps component. The
+ * factory receives `scene.transition.props` (e.g. slide direction) and returns
+ * a TransitionPresentation. Build presentations from `remotion` primitives so a
+ * template never has to depend on @remotion/transitions at runtime.
+ */
+export type TransitionFactory = (
+  props?: Record<string, unknown>,
+) => TransitionPresentation<Record<string, unknown>>;
+
+/**
+ * Registry entry, DISCRIMINATED by `type` so a transition can never be
+ * dispatched as a scene/overlay component, nor a component used as a transition
+ * — enforced at the type level, on top of the runtime placeholder.
+ */
+export interface RenderTemplateEntry {
+  type: 'render';
+  manifest: Manifest;
+  // TemplateProps<any> so a component typed to its own Data (e.g.
+  // FC<TemplateProps<SceneData>>) stays assignable to the registry entry.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  component: ComponentType<TemplateProps<any>>;
+}
+export interface TransitionTemplateEntry {
+  type: 'transition';
+  manifest: Manifest;
+  presentation: TransitionFactory;
+}
+export type TemplateEntry = RenderTemplateEntry | TransitionTemplateEntry;

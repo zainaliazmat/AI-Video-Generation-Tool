@@ -1,0 +1,15 @@
+{
+  "id": "fade",
+  "name": "Fade",
+  "version": "1.0.0",
+  "author": "core",
+  "apiVersion": "1",
+  "kind": "transition",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "sampleProps": {},
+  "durationFrames": { "min": 6, "max": 30 }
+}

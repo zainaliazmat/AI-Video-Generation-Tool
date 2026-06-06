@@ -1,6 +1,7 @@
 import React from 'react';
 import {AbsoluteFill, Audio, Sequence, staticFile} from 'remotion';
-import type {Spec} from './schema';
+import {TransitionSeries, linearTiming} from '@remotion/transitions';
+import type {Spec, Scene as SceneType, Theme} from './schema';
 import {Captions} from './Captions';
 import {registry} from '../../templates/registry.generated';
 
@@ -12,9 +13,10 @@ const dbToLinear = (db: number): number =>
   Math.min(1, Math.max(0, Math.pow(10, db / 20)));
 
 /**
- * Loud, deliberate placeholder for a scene whose `template` id isn't in the
- * registry (or is missing). Core renders NO built-in template — an unknown id
- * must FAIL VISIBLY, never silently fall back to some hardcoded renderer.
+ * Loud, deliberate placeholder for a scene/layer whose `template` id isn't a
+ * `render`-kind entry in the registry (missing, or — caught by the discriminated
+ * registry — a transition used where a component is required). Core renders NO
+ * built-in template; a bad id FAILS VISIBLY.
  */
 const MissingTemplate: React.FC<{templateId?: string}> = ({templateId}) => (
   <AbsoluteFill
@@ -30,10 +32,33 @@ const MissingTemplate: React.FC<{templateId?: string}> = ({templateId}) => (
       ⚠ Unknown template
     </div>
     <div style={{marginTop: 16, fontFamily: 'monospace', fontSize: 32, color: '#fecaca'}}>
-      {templateId ? `"${templateId}"` : '(no template set on scene)'}
+      {templateId ? `"${templateId}"` : '(no template set)'}
     </div>
   </AbsoluteFill>
 );
+
+/** Render a scene's content via its `render`-kind template. The discriminated
+ * registry guarantees a transition can't be dispatched here (it narrows out). */
+function renderScene(
+  scene: SceneType,
+  theme: Theme,
+  fps: number,
+  durationInFrames: number,
+): React.ReactNode {
+  const entry = scene.template ? registry[scene.template] : undefined;
+  if (entry && entry.type === 'render') {
+    const Component = entry.component;
+    return (
+      <Component
+        data={scene.templateProps ?? {}}
+        theme={theme}
+        timing={{fps, durationInFrames}}
+        assets={{}}
+      />
+    );
+  }
+  return <MissingTemplate templateId={scene.template} />;
+}
 
 export const Video: React.FC<{spec: Spec}> = ({spec}) => {
   // Defensive: calculateMetadata always supplies a real spec before render, but
@@ -43,34 +68,70 @@ export const Video: React.FC<{spec: Spec}> = ({spec}) => {
   }
 
   const {scenes, captions, audio, theme, meta, layers} = spec;
+  const fps = meta.fps;
+  const lastIdx = scenes.length - 1;
+
+  // The OUTGOING transition of scene i (i < last) that resolves to a valid
+  // transition-kind template. Anything else (missing id, or a render template
+  // mis-referenced as a transition) yields no transition → a hard cut.
+  const transitionOf = (scene: SceneType, i: number) => {
+    if (i >= lastIdx || !scene.transition) return undefined;
+    const entry = registry[scene.transition.template];
+    return entry && entry.type === 'transition'
+      ? {entry, transition: scene.transition}
+      : undefined;
+  };
+
+  const anyTransition = scenes.some((s, i) => transitionOf(s, i) !== undefined);
+
+  // With transitions, scenes go through <TransitionSeries>. Each sequence is
+  // EXTENDED by its outgoing transition (dur = dᵢ + Tᵢ); TransitionSeries
+  // reclaims the Tᵢ overlap, so every scene's content-start stays pinned to its
+  // voiceover frame Sᵢ (zero cumulative drift) and the series total collapses to
+  // Σdᵢ = meta.durationInFrames. Captions/audio/layers stay at the root on
+  // absolute frames, so they remain audio-aligned.
+  const sceneNodes = anyTransition ? (
+    <TransitionSeries>
+      {scenes.flatMap((scene, i) => {
+        const tx = transitionOf(scene, i);
+        const T = tx ? tx.transition.durationInFrames : 0;
+        const seqDur = scene.durationInFrames + T;
+        const nodes: React.ReactNode[] = [
+          <TransitionSeries.Sequence key={scene.id} durationInFrames={seqDur}>
+            {renderScene(scene, theme, fps, seqDur)}
+          </TransitionSeries.Sequence>,
+        ];
+        if (tx) {
+          nodes.push(
+            <TransitionSeries.Transition
+              key={`${scene.id}-transition`}
+              presentation={tx.entry.presentation(tx.transition.props)}
+              timing={linearTiming({durationInFrames: T})}
+            />,
+          );
+        }
+        return nodes;
+      })}
+    </TransitionSeries>
+  ) : (
+    scenes.map((scene) => (
+      <Sequence
+        key={scene.id}
+        from={scene.startFrame}
+        durationInFrames={scene.durationInFrames}
+      >
+        {renderScene(scene, theme, fps, scene.durationInFrames)}
+      </Sequence>
+    ))
+  );
 
   return (
     <AbsoluteFill style={{backgroundColor: theme.palette.background}}>
-      {/* Scenes laid end to end. Each <Sequence> resets useCurrentFrame() to 0
-          inside the scene's component (what per-template animation expects).
-          The template is resolved from the registry by id — core hardcodes
-          nothing; an unknown id renders the loud MissingTemplate placeholder. */}
-      {scenes.map((scene) => {
-        const entry = scene.template ? registry[scene.template] : undefined;
-        return (
-          <Sequence
-            key={scene.id}
-            from={scene.startFrame}
-            durationInFrames={scene.durationInFrames}
-          >
-            {entry ? (
-              <entry.component
-                data={scene.templateProps ?? {}}
-                theme={theme}
-                timing={{fps: meta.fps, durationInFrames: scene.durationInFrames}}
-                assets={{}}
-              />
-            ) : (
-              <MissingTemplate templateId={scene.template} />
-            )}
-          </Sequence>
-        );
-      })}
+      {/* Scenes resolve their template from the registry by id — core hardcodes
+          nothing. Either laid end-to-end (<Sequence>) or, when any scene carries
+          a transition, woven through <TransitionSeries> with the dᵢ+Tᵢ overlap
+          absorption above. */}
+      {sceneNodes}
 
       {/* Audio bed. Voiceover spans the whole composition. Music (if any) is
           ducked via dB->linear and looped; the composition duration bounds it. */}
@@ -84,9 +145,8 @@ export const Video: React.FC<{spec: Spec}> = ({spec}) => {
       ) : null}
 
       {/* Overlay layers composited on top of the scenes (overlay-kind templates),
-          each within its own <Sequence>. Rendered BELOW captions so the caption
-          band stays legible. Resolved by id from the registry; unknown id → the
-          loud placeholder, never a silent built-in. */}
+          each in its own <Sequence>, BELOW captions so the caption band stays
+          legible. Unknown/non-render id → the loud placeholder. */}
       {(layers ?? []).map((layer) => {
         const entry = registry[layer.template];
         return (
@@ -95,11 +155,11 @@ export const Video: React.FC<{spec: Spec}> = ({spec}) => {
             from={layer.startFrame}
             durationInFrames={layer.durationInFrames}
           >
-            {entry ? (
+            {entry && entry.type === 'render' ? (
               <entry.component
                 data={layer.props ?? {}}
                 theme={theme}
-                timing={{fps: meta.fps, durationInFrames: layer.durationInFrames}}
+                timing={{fps, durationInFrames: layer.durationInFrames}}
                 assets={{}}
               />
             ) : (
@@ -110,8 +170,8 @@ export const Video: React.FC<{spec: Spec}> = ({spec}) => {
       })}
 
       {/* Captions overlay sits at the composition ROOT (not inside a Sequence),
-          so useCurrentFrame() stays ABSOLUTE and matches the caption frames.
-          Captions remain a top-level field this phase (layers[] is overlay-only). */}
+          so useCurrentFrame() stays ABSOLUTE and matches the caption frames —
+          audio-aligned regardless of any transition overlaps inside the scenes. */}
       <Captions captions={captions} caption={theme.caption} />
     </AbsoluteFill>
   );
