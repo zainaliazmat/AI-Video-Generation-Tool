@@ -4,8 +4,19 @@
 **Status:** APPROVED 2026-06-06 — layout = **hybrid (showcase grid + detail drawer)**; mechanism
 per recommendations (TemplatePreview composition, gen-previews script + CI freshness +
 graceful-missing, two labelled placeholder cards for transition previews). Build 5.1→5.3; stop
-for review after 5.1 and 5.3. **5.1 DONE** (TemplatePreview composition; render + transition
-kinds verified by stills; remotion typecheck green).
+for review after 5.1 and 5.3. **5.1, 5.2, 5.3 DONE.**
+- 5.1 — TemplatePreview composition (render + transition kinds verified by stills).
+- 5.2 — `gen-previews.mjs` (idempotent + incremental) → 7 MP4 + poster pairs into
+  `preview/public/previews/`; freshness = **input-hash** (entry source + sampleProps + harness),
+  NOT byte-diff (rendered MP4/JPG aren't byte-stable across toolchains); `--check` proven to
+  catch a missing/stale preview + regenerate just it. `gen-previews` / `check-previews` npm scripts.
+- 5.3 — `/templates` route + global Nav (Studio ↔ Templates) + **hybrid** showcase grid
+  (poster-first, hover-to-play, lazy) + detail drawer (sampleProps + inputSchema props table) +
+  kind filter pills. Server reads manifests via fs (no Remotion components pulled into the page
+  bundle). Verified: `next build` green, typecheck green, `/templates` HTTP 200 server-rendering
+  all 7 templates + every preview URL, Studio still 200. **In-browser interaction glance
+  (drawer/filter/hover) BLOCKED** by the env's AppArmor/userns Chromium-sandbox restriction
+  (documented limitation) — dev server left live on :3100 for a human glance.
 **Spec authority:** `claude-code-template-plugin-phase-prompt.md` §5 (previews), §9 step 5;
 locked decision #4 (previews = short looping MP4 ~1.5s + poster still, auto-rendered from
 sampleProps).

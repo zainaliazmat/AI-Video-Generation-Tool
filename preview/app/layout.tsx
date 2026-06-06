@@ -1,6 +1,7 @@
 import type {Metadata} from 'next';
 import {DM_Sans, DM_Mono} from 'next/font/google';
 import {Toaster} from 'sonner';
+import {Nav} from '@/components/Nav';
 import './globals.css';
 
 // next/font must be loaded in a server component. Exposed as CSS variables that
@@ -28,6 +29,7 @@ export default function RootLayout({children}: {children: React.ReactNode}) {
   return (
     <html lang="en" className={`${dmSans.variable} ${dmMono.variable}`}>
       <body>
+        <Nav />
         {children}
         <Toaster theme="dark" position="bottom-right" />
       </body>
