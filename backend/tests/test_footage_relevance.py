@@ -61,6 +61,25 @@ def test_demoted_stat_without_keywords_uses_title_not_sentence():
     assert p.scenes[1].query == "Deep Ocean"            # TITLE fallback, NOT the sentence
 
 
+def test_demoted_stat_with_keywords_uses_its_keywords_as_query():
+    # The PRIMARY demote path: "keywords on every beat" must hold UNDER demotion. A
+    # stat that loses its data in verify re-renders as a footage scene and uses its
+    # own KEYWORDS (the filmable hint) — not the title fallback, not a crash.
+    script = BeatsScript(title="Deep Ocean", beats=[
+        Beat(text="hook line", source="https://a"),
+        Beat(text="the trench plunges to eleven kilometers below the surface",
+             data={"value": "11 km", "label": "max depth"}, keywords="ocean trench", source="https://a"),
+        Beat(text="follow for more"),
+    ])
+    verify_stage.verify_script(script, _ctx(("https://a", "A", "snip")), verify_fn=_supportive_vfn)
+    assert script.beats[1].data is None                  # number unsupported -> demoted
+    assert script.beats[1].keywords == "ocean trench"    # keywords survive demotion
+
+    p = plan(script, theme=Theme())
+    assert p.scenes[1].role == "scene"                   # demoted stat -> footage scene
+    assert p.scenes[1].query == "ocean trench"           # its KEYWORDS, not the title fallback
+
+
 # ── cross-stage: broaden-on-empty ──────────────────────────────────────────
 
 def test_fetch_broadens_to_title_when_specific_query_empty(tmp_path):
