@@ -43,6 +43,7 @@ class Media(BaseModel):
     src: str                            # path relative to remotion/public/
     fit: Literal["cover", "contain"] = "cover"
     kenBurns: Optional[KenBurns] = None
+    loop: bool = False                  # clip-length fallback: repeat a short clip to fill the span
 
 
 class Transition(BaseModel):

@@ -8,5 +8,6 @@ faster-whisper>=1.1       # word-level caption timestamps from the voiceover
 openai>=1.40             # DeepSeek-V4 (OpenAI-compatible endpoint) — default LLM
 anthropic>=0.40          # optional LLM provider (LLM_PROVIDER=anthropic)
 requests>=2.32           # Pexels / Pixabay footage API + downloads
+jsonschema>=4.20         # validate scene templateProps against each template's inputSchema (step 6.3)
 python-dotenv>=1.0       # load .env (API keys, LLM_PROVIDER)
 pytest>=8.0              # unit tests (dev)

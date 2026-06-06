@@ -35,3 +35,6 @@ preview/next-env.d.ts
 # OS / editor
 .DS_Store
 .gstack/
+
+# footage duration sidecars (cache, like the .mp4s)
+remotion/public/assets/*.frames

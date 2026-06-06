@@ -39,6 +39,8 @@ export interface Media {
   src: string;
   fit: Fit;
   kenBurns?: KenBurns | null;
+  /** clip-length fallback: loop a short clip to fill the scene span (dᵢ+Tᵢ) */
+  loop?: boolean;
 }
 
 /** A transition leading OUT of a scene into the next (references a

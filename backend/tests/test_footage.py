@@ -1,5 +1,5 @@
-from pipeline.footage import pick_video_file, fetch_footage, query_slug
-from pipeline.contracts import Clip
+from pipeline.footage import pick_video_file, select_clip, fetch_footage
+from pipeline.contracts import Clip, FootageRequest
 
 
 def test_pick_prefers_portrait_mp4_near_1920():
@@ -15,23 +15,83 @@ def test_pick_returns_none_when_no_mp4():
     assert pick_video_file([{"link": "x", "width": 1080, "height": 1920, "file_type": "video/webm"}]) is None
 
 
-def test_fetch_caches_by_query(tmp_path):
-    calls = {"search": 0, "download": 0}
+def _video(link, duration):
+    return {"duration": duration, "video_files": [
+        {"link": link, "width": 1080, "height": 1920, "file_type": "video/mp4"}]}
 
+
+def test_select_clip_returns_link_and_duration_frames():
+    link, dur_f = select_clip([_video("a", 6)], min_frames=0, fps=30)
+    assert link == "a"
+    assert dur_f == 180  # 6s * 30fps
+
+
+def test_select_clip_biases_toward_long_enough_clip():
+    # second video is long enough for min_frames=120 (4s@30), first is not
+    link, dur_f = select_clip([_video("short", 2), _video("long", 5)], min_frames=120, fps=30)
+    assert link == "long"
+    assert dur_f == 150
+
+
+def test_select_clip_falls_back_to_first_when_none_long_enough():
+    link, dur_f = select_clip([_video("a", 1), _video("b", 2)], min_frames=999, fps=30)
+    assert link == "a"  # relevance order preserved when nothing qualifies
+    assert dur_f == 30
+
+
+def test_select_clip_handles_missing_duration():
+    link, dur_f = select_clip([{"video_files": [
+        {"link": "x", "width": 1080, "height": 1920, "file_type": "video/mp4"}]}], min_frames=0, fps=30)
+    assert link == "x"
+    assert dur_f is None
+
+
+# ── fetch_footage: request-driven, cached, duration recorded ────────────────
+
+def _fake_search_factory(calls):
     def fake_search(query, key):
         calls["search"] += 1
-        return {"videos": [{"video_files": [
-            {"link": "u", "width": 1080, "height": 1920, "file_type": "video/mp4"}]}]}
+        # duration keyed off query so we can assert mapping
+        dur = 3 if query == "coral reef" else 6
+        return {"videos": [_video(f"url-{query}", dur)]}
+    return fake_search
+
+
+def test_fetch_by_request_records_duration_and_caches(tmp_path):
+    calls = {"search": 0, "download": 0}
 
     def fake_download(url, dest):
         calls["download"] += 1
         dest.write_bytes(b"fakevideo")
 
-    lines = ["ocean waves", "ocean waves", "coral reef"]  # dup query
-    clips = fetch_footage(lines, tmp_path, key="K", search=fake_search, downloader=fake_download)
+    reqs = [
+        FootageRequest(index=1, query="ocean waves", min_frames=60),
+        FootageRequest(index=3, query="ocean waves", min_frames=60),  # dup query
+        FootageRequest(index=4, query="coral reef", min_frames=60),
+    ]
+    clips = fetch_footage(reqs, tmp_path, fps=30, key="K",
+                          search=_fake_search_factory(calls), downloader=fake_download)
 
-    assert len(clips) == 3
-    assert calls["download"] == 2          # "ocean waves" downloaded once, reused
-    assert clips[0].path == clips[1].path  # same query -> same file
-    assert clips[0].path == f"assets/footage_{query_slug('ocean waves')}.mp4"
+    assert [c.index for c in clips] == [1, 3, 4]            # keyed to beat index
+    assert calls["download"] == 2                            # dup query downloaded once
+    assert clips[0].path == clips[1].path
+    assert clips[0].duration_frames == 180                  # 6s * 30
+    assert clips[2].duration_frames == 90                   # coral reef 3s * 30
     assert all(isinstance(c, Clip) for c in clips)
+
+
+def test_fetch_cache_hit_recovers_duration_from_sidecar(tmp_path):
+    calls = {"search": 0, "download": 0}
+
+    def fake_download(url, dest):
+        calls["download"] += 1
+        dest.write_bytes(b"fakevideo")
+
+    search = _fake_search_factory(calls)
+    req = [FootageRequest(index=0, query="ocean waves", min_frames=0)]
+    first = fetch_footage(req, tmp_path, fps=30, key="K", search=search, downloader=fake_download)
+    # second run: file is cached; duration must survive without re-searching
+    second = fetch_footage(req, tmp_path, fps=30, key="K", search=search, downloader=fake_download)
+
+    assert calls["download"] == 1                            # cached, not re-downloaded
+    assert second[0].duration_frames == first[0].duration_frames == 180

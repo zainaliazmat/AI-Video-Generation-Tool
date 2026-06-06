@@ -17,5 +17,7 @@ export interface SceneData {
       originX: number;
       originY: number;
     } | null;
+    /** clip-length fallback: loop a short clip to fill the scene span (dᵢ+Tᵢ) */
+    loop?: boolean;
   };
 }

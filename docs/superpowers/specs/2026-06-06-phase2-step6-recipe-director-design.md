@@ -192,6 +192,26 @@ Keep the `--progress-json` stepper; `recipe` is fast/local so it can fold into t
 | **6.3** | zod swap + manifest JSON-Schema codegen + `validate.py` (slots + props) | A bad prop / wrong-slot id fails loudly; sample specs validate; all typechecks green |
 | **6.4** | footage-by-plan + clip-duration + `assemble` rewrite + clip-length fallback + `main.py` reorder | **The big one: first real multi-template video rendered E2E from a topic** (hook→scene/stat→outro, transitions, audio-synced) |
 
+### Status update (2026-06-06)
+- **6.3 SPLIT.** The `validate.py` half is DONE (`load_catalog` + `validate_spec`: per-template
+  JSON-Schema props + slot/kind rules; 10 tests; all 4 real specs validate). The **zod→JSON-Schema
+  codegen half is DEFERRED to a gated mechanism proposal** — it's the bundler-sensitive piece
+  (no tsx/ts-node exists; `templates/` has no `node_modules`; build prompt §1 says to confirm the
+  codegen mechanism against the bundlers). `validate.py` runs against the already-correct
+  hand-authored manifest `inputSchema`s, so it didn't block the value chain.
+- **6.4 DONE & rendered E2E (live).** `topic → DeepSeek beats → recipe → Kokoro → whisper → Pexels →
+  assemble → validate → render`. First real multi-template video: hook (topic title + spoken-hook
+  subtitle) → 5 keyword-relevant footage scenes (Ken Burns) → outro (CTA), fade cross-dissolve into
+  the outro, word-synced captions, gap-filling contiguous timing. 91 backend tests green; remotion +
+  preview typecheck green; render EXIT=0 (47.7 MB / 936 frames). This generation emitted no numeric
+  beats so no `stat` scene rendered, but the live recipe smoke-test confirmed stats land correctly
+  (`3 hearts`, `500M neurons` → stat) and the unit tests cover the stat/transition paths.
+- **Prop-filling decision JUDGED ON PIXELS (was the flagged taste call):** topic-as-title reads
+  strong on the rendered hook; keeping the current mapping (no flip to spoken-hook-dominant).
+- **Clip-length loop fallback:** mechanism in place (`media.loop` → scene template `<Video loop>`,
+  since OffthreadVideo has no `loop` in Remotion 4.0.472) and unit-tested at the spec level; not
+  visually exercised in this render because the selection bias kept every clip long enough.
+
 I'll stop for your review after **6.2** (the brain, before it touches I/O) and again at
 **6.4** (the E2E checkpoint you named).
 

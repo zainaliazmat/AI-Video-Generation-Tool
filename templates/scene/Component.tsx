@@ -3,6 +3,7 @@ import {
   AbsoluteFill,
   Img,
   OffthreadVideo,
+  Video,
   interpolate,
   staticFile,
   useCurrentFrame,
@@ -56,11 +57,24 @@ const Component: React.FC<TemplateProps<SceneData>> = ({data, theme, timing}) =>
         }}
       >
         {media.type === 'video' ? (
-          <OffthreadVideo
-            src={staticFile(media.src)}
-            muted
-            style={{width: '100%', height: '100%', objectFit: media.fit}}
-          />
+          // Clip-length fallback: a clip too short for the scene span (dᵢ+Tᵢ)
+          // loops to fill it. OffthreadVideo has no loop in this Remotion; the
+          // short-clip path uses <Video loop> (native looping). The normal path
+          // keeps OffthreadVideo for its render quality.
+          media.loop ? (
+            <Video
+              src={staticFile(media.src)}
+              muted
+              loop
+              style={{width: '100%', height: '100%', objectFit: media.fit}}
+            />
+          ) : (
+            <OffthreadVideo
+              src={staticFile(media.src)}
+              muted
+              style={{width: '100%', height: '100%', objectFit: media.fit}}
+            />
+          )
         ) : (
           <Img
             src={staticFile(media.src)}

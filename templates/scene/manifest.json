@@ -24,7 +24,8 @@
               "originX": { "type": "number" },
               "originY": { "type": "number" }
             }
-          }
+          },
+          "loop": { "type": "boolean" }
         },
         "required": ["type", "src", "fit"]
       }
