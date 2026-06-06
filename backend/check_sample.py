@@ -16,7 +16,7 @@ import os
 import sys
 
 PUBLIC_DIR = os.path.join("remotion", "public")
-TOP_KEYS = ("meta", "audio", "scenes", "captions", "style")
+TOP_KEYS = ("meta", "audio", "scenes", "captions", "theme")
 
 
 def fail(msg: str) -> None:
@@ -52,7 +52,7 @@ def main() -> None:
     cursor = 0
     missing_assets: list[str] = []
     for i, s in enumerate(scenes):
-        for k in ("id", "startFrame", "durationInFrames", "media"):
+        for k in ("id", "startFrame", "durationInFrames"):
             if k not in s:
                 fail(f"scene[{i}] missing key: {k}")
         if s["startFrame"] != cursor:
@@ -61,15 +61,17 @@ def main() -> None:
                 f"{cursor} (scenes should be contiguous)"
             )
         cursor = s["startFrame"] + s["durationInFrames"]
-        media = s["media"]
-        for k in ("type", "src"):
-            if k not in media:
-                fail(f"scene[{i}].media missing key: {k}")
-        if media["type"] not in ("video", "image"):
-            fail(f"scene[{i}].media.type invalid: {media['type']}")
-        asset = os.path.join(PUBLIC_DIR, media["src"])
-        if not os.path.exists(asset):
-            missing_assets.append(asset)
+        # media may be top-level (legacy) or inside a template's props.
+        media = s.get("media") or (s.get("templateProps") or {}).get("media")
+        if media:
+            for k in ("type", "src"):
+                if k not in media:
+                    fail(f"scene[{i}] media missing key: {k}")
+            if media["type"] not in ("video", "image"):
+                fail(f"scene[{i}] media.type invalid: {media['type']}")
+            asset = os.path.join(PUBLIC_DIR, media["src"])
+            if not os.path.exists(asset):
+                missing_assets.append(asset)
 
     if cursor != total:
         print(

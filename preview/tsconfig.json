@@ -14,9 +14,17 @@
     "jsx": "preserve",
     "incremental": true,
     "plugins": [{"name": "next"}],
+    "baseUrl": ".",
     "paths": {
       "@/*": ["./*"],
-      "@remotion-src/*": ["../remotion/src/*"]
+      "@remotion-src/*": ["../remotion/src/*"],
+      "@templates/*": ["../templates/*"],
+      "react": ["node_modules/@types/react"],
+      "react/*": ["node_modules/@types/react/*"],
+      "react-dom": ["node_modules/@types/react-dom"],
+      "react-dom/*": ["node_modules/@types/react-dom/*"],
+      "remotion": ["node_modules/remotion"],
+      "remotion/*": ["node_modules/remotion/*"]
     }
   },
   "include": [

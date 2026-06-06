@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "types": []
+  },
+  "comment": "Standalone check of the SDK contract only. Template components import remotion/react and are typechecked through the consumers (remotion + preview) that have those installed; templates/ keeps no node_modules of its own.",
+  "include": ["sdk.ts"],
+  "exclude": ["node_modules"]
+}

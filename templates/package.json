@@ -1,0 +1,15 @@
+{
+  "name": "@faceless/templates",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Drop-in video template plugins (manifest + Remotion component). Auto-discovered into a typed registry consumed by the renderer and the app's templates gallery. Designed to later ship as installable npm packages (phase-2 prompt §7).",
+  "scripts": {
+    "build-registry": "node scripts/build-registry.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "remotion": "^4.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  }
+}

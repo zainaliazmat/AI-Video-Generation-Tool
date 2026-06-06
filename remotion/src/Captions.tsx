@@ -7,7 +7,7 @@ import {
   useVideoConfig,
 } from 'remotion';
 import {loadFont} from '@remotion/google-fonts/Inter';
-import type {Caption, Style} from './schema';
+import type {Caption, CaptionStyle} from './schema';
 
 // Load Inter ONCE at module top-level. loadFont auto-manages delayRender, so the
 // render blocks until glyphs are ready — no fallback-font flash, no manual
@@ -55,8 +55,8 @@ function findAnchorIndex(captions: Caption[], frame: number): number {
 
 export const Captions: React.FC<{
   captions: Caption[];
-  style: Style;
-}> = ({captions, style}) => {
+  caption: CaptionStyle;
+}> = ({captions, caption: style}) => {
   // ROOT-level component => useCurrentFrame() is ABSOLUTE, matching the absolute
   // startFrame/endFrame in captions[]. Do not offset.
   const frame = useCurrentFrame();
@@ -109,7 +109,7 @@ export const Captions: React.FC<{
 
   // positionY: 0 (top) .. 1 (bottom). translateY(-50%) anchors the band on its
   // own vertical center so the extremes don't clip.
-  const topPx = interpolate(style.captionPositionY, [0, 1], [0, height], {
+  const topPx = interpolate(style.positionY, [0, 1], [0, height], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
@@ -159,15 +159,15 @@ export const Captions: React.FC<{
               style={{
                 display: 'inline-block',
                 fontFamily,
-                fontWeight: style.captionFontWeight,
+                fontWeight: style.fontWeight,
                 fontSize,
                 lineHeight: 1.1,
                 color: isActive
-                  ? style.captionHighlightColor
-                  : style.captionColor,
+                  ? style.highlightColor
+                  : style.color,
                 transform: `scale(${scale})`,
                 transformOrigin: 'center',
-                WebkitTextStroke: `${strokeWidth}px ${style.captionStrokeColor}`,
+                WebkitTextStroke: `${strokeWidth}px ${style.strokeColor}`,
                 paintOrder: 'stroke',
                 textShadow: `0 ${Math.round(fontSize * 0.04)}px ${Math.round(
                   fontSize * 0.12,

@@ -4,11 +4,12 @@
   "private": true,
   "description": "Remotion renderer for the faceless video generator — reads spec.json, outputs 1080x1920 MP4.",
   "scripts": {
+    "build-registry": "node ../templates/scripts/build-registry.mjs",
     "copy-spec": "node scripts/copy-spec.mjs",
-    "studio": "npm run copy-spec && remotion studio",
-    "render": "npm run copy-spec && remotion render Video out/video.mp4",
-    "bundle": "npm run copy-spec && remotion bundle",
-    "typecheck": "tsc --noEmit",
+    "studio": "npm run build-registry && npm run copy-spec && remotion studio",
+    "render": "npm run build-registry && npm run copy-spec && remotion render Video out/video.mp4",
+    "bundle": "npm run build-registry && npm run copy-spec && remotion bundle",
+    "typecheck": "npm run build-registry && tsc --noEmit",
     "upgrade": "remotion upgrade"
   },
   "dependencies": {

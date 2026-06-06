@@ -13,7 +13,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # backend/
 import json
 from pathlib import Path
 
-from schema import Spec, Meta, Audio, Scene, Media, KenBurns, Caption, Style
+from schema import Spec, Meta, Audio, Scene, Media, KenBurns, Caption, Theme
 from pipeline.frames import seconds_to_frames
 from pipeline.contracts import LineOffset, WordTiming, Clip
 
@@ -27,12 +27,16 @@ def build_spec(title, line_offsets, word_timings, clips, *, fps: int = 30, music
         clip = clips_by_index.get(lo.index)
         if clip is None:
             raise ValueError(f"No clip for scene index {lo.index}")
+        # Route through the `scene` template plugin: the footage lives in
+        # templateProps (by_alias so kenBurns.from is emitted, not from_).
+        media = Media(type="video", src=clip.path, fit="cover", kenBurns=KenBurns())
         scenes.append(
             Scene(
                 id=f"scene-{lo.index}",
                 startFrame=start_f,
                 durationInFrames=max(1, end_f - start_f),
-                media=Media(type="video", src=clip.path, fit="cover", kenBurns=KenBurns()),
+                template="scene",
+                templateProps={"media": media.model_dump(by_alias=True)},
             )
         )
 
@@ -47,7 +51,7 @@ def build_spec(title, line_offsets, word_timings, clips, *, fps: int = 30, music
         audio=Audio(voiceover="assets/voiceover.wav", music=music, musicVolumeDb=-18.0),
         scenes=scenes,
         captions=captions,
-        style=Style(),
+        theme=Theme(),
     )
 
 

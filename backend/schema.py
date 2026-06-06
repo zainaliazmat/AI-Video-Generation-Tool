@@ -9,7 +9,7 @@ Run as a script to validate a spec file (requires pydantic, installed in Phase 4
 """
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -45,11 +45,26 @@ class Media(BaseModel):
     kenBurns: Optional[KenBurns] = None
 
 
+class Transition(BaseModel):
+    """A transition leading OUT of a scene into the next one (references a
+    `transition`-kind template). Ignored on the final scene."""
+    template: str                       # id of a transition-kind template
+    durationInFrames: int
+    props: Dict = Field(default_factory=dict)
+
+
 class Scene(BaseModel):
     id: str
     startFrame: int
     durationInFrames: int
-    media: Media
+    # A template-driven scene carries its content in `templateProps` (validated
+    # against the template's inputSchema in a later step). `media` is optional —
+    # the `scene` template puts its footage in templateProps; non-media templates
+    # (e.g. a stat callout) have neither.
+    template: Optional[str] = None
+    templateProps: Optional[Dict] = None
+    media: Optional[Media] = None
+    transition: Optional[Transition] = None  # transition OUT of this scene
 
 
 class Caption(BaseModel):
@@ -58,13 +73,47 @@ class Caption(BaseModel):
     endFrame: int
 
 
-class Style(BaseModel):
-    captionFontFamily: str = "Inter"
-    captionFontWeight: int = 800
-    captionColor: str = "#FFFFFF"
-    captionHighlightColor: str = "#FFE600"   # color of the word currently spoken
-    captionStrokeColor: str = "#000000"
-    captionPositionY: float = 0.78           # 0 = top, 1 = bottom
+class Layer(BaseModel):
+    """An overlay composited on top of the scenes (an `overlay`-kind template,
+    e.g. Lottie or transparent video). Overlay-only this phase; captions remain
+    a dedicated top-level field and graduate into this model later."""
+    id: str
+    template: str                       # id of an overlay-kind template
+    startFrame: int
+    durationInFrames: int
+    props: Dict = Field(default_factory=dict)
+
+
+class Palette(BaseModel):
+    background: str = "#000000"
+    foreground: str = "#FFFFFF"
+    accent: str = "#FFE600"
+    muted: str = "#9CA3AF"
+
+
+class Fonts(BaseModel):
+    heading: str = "Inter"
+    body: str = "Inter"
+
+
+class CaptionStyle(BaseModel):
+    # Was the top-level `Style`; now nested under theme.caption (the `caption`
+    # field prefix is dropped since it's redundant under .caption).
+    fontFamily: str = "Inter"
+    fontWeight: int = 800
+    color: str = "#FFFFFF"
+    highlightColor: str = "#FFE600"     # color of the word currently spoken
+    strokeColor: str = "#000000"
+    positionY: float = 0.78             # 0 = top, 1 = bottom
+
+
+class Theme(BaseModel):
+    """Resolved look of a video, separate from templates so any template
+    re-themes without code changes."""
+    palette: Palette = Field(default_factory=Palette)
+    fonts: Fonts = Field(default_factory=Fonts)
+    transition: str = "fade"            # default transition style name
+    caption: CaptionStyle = Field(default_factory=CaptionStyle)
 
 
 class Spec(BaseModel):
@@ -72,7 +121,8 @@ class Spec(BaseModel):
     audio: Audio
     scenes: List[Scene]
     captions: List[Caption]
-    style: Style
+    theme: Theme = Field(default_factory=Theme)
+    layers: List[Layer] = Field(default_factory=list)
 
 
 if __name__ == "__main__":
@@ -86,6 +136,7 @@ if __name__ == "__main__":
     print(
         f"OK: {path} is a valid Spec — "
         f"{len(spec.scenes)} scenes, {len(spec.captions)} captions, "
+        f"{len(spec.layers)} layers, "
         f"{spec.meta.durationInFrames} frames @ {spec.meta.fps}fps "
         f"({spec.meta.width}x{spec.meta.height})"
     )
