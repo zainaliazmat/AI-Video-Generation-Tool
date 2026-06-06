@@ -451,3 +451,27 @@ untouched):
    Planned fix: a system-prompt rule that `data.label` reuse the spoken wording
    ([script.py](../../../backend/pipeline/script.py) `SYSTEM_PROMPT`); ruled
    non-blocking for the Phase-3 merge.
+
+### Accepted dev-tooling advisory (vitest)
+
+Standing up the renderer test runner pulled in `vitest` 3.2.6, which carries a
+**critical** advisory: [GHSA-5xrq-8626-4rwp](https://github.com/advisories/GHSA-5xrq-8626-4rwp)
+— *"When the Vitest UI server is listening, an arbitrary file can be read and
+executed"* (affects `vitest <4.1.0`).
+
+**Accepted, not patched, because:**
+- **Not reachable in our usage.** The exploit requires the **Vitest UI server**
+  (`vitest --ui` / browser mode) to be listening. Our scripts are `vitest run`
+  (headless, one-shot — no server, no listening socket); `test:watch` is also
+  terminal-only. The vulnerable path is never started.
+- **Dev-only.** `vitest` is a `devDependency`; it is never bundled into the
+  rendered MP4 (renderer ships React/Remotion only).
+- **The only patch is incompatible with our runtime.** The fix is `vitest@4.1.0+`,
+  whose `rolldown` bundler imports `node:util.styleText` (Node ≥ 20.12). This
+  project runs **Node 18.19.1**; vitest 4 fails to start with a `SyntaxError`.
+  Bumping Node across the whole Remotion toolchain is out of scope for a dev-only
+  advisory.
+
+**Revisit when** the project moves to Node 20+: bump `vitest` to `≥ 4.1.0`
+(`npm install -D vitest@^4`) and confirm `npm test` + `tsc --noEmit` stay green
+(API surface used is just `describe`/`it`/`expect`, stable across the v3→v4 major).
