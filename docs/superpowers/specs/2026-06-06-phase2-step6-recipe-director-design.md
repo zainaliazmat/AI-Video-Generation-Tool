@@ -208,6 +208,21 @@ the toolchain is absent), so the render/build hot path never hard-depends on it.
 all 4 real specs validate against the regenerated manifests; remotion + preview typecheck
 green (zod resolves from `templates/node_modules`); 91 backend tests green.
 
+### Pixel-locked taste calls (2026-06-06, on the stat-bearing render + an independent design panel)
+A second live render forced a stat-rich plan (hook → stat·3 hearts → scene → stat·9 brains →
+scene → stat·66% → outro, fades into all 3 stats + outro). A 3-critic design panel (grounded in
+the rendered stills) locked the three deferred calls:
+1. **Hook text → KEEP topic-as-title.** Reads strong/dominant on frame 60. (Open polish, not done:
+   the spoken-hook subtitle is dim grey + often restates the title — brighten/trim later.)
+2. **Stat presentation → KEEP full-frame number on black** (panel REVERSED the earlier lean toward
+   stat-over-B-roll): a number over footage desaturates and camouflages into the clip (frame 382 —
+   "9 brains" went dim olive), killing the pop a stat needs; full-frame yellow-on-black punches and
+   gives rhythmic contrast to the footage scenes. Over-B-roll only viable later WITH a dark scrim.
+3. **Fade rhythm → KEEP selective cadence, HARD-CUT text→text boundaries.** Implemented: selective
+   fires into a stat/outro ONLY from a footage `scene` source; text-card→text-card (hook→stat,
+   stat→outro, stat→stat) hard-cuts (a crossfade double-exposes two centered text cards — frames
+   149/798). Footage→text fades stay. `recipe._assign_transitions` + 2 tests (93 backend green).
+
 ### Status update (2026-06-06)
 - **6.3 DONE (both halves).** The `validate.py` half is DONE (`load_catalog` + `validate_spec`: per-template
   JSON-Schema props + slot/kind rules; 10 tests; all 4 real specs validate). The **zod→JSON-Schema

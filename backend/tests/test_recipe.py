@@ -177,6 +177,27 @@ def test_selective_default_no_transitions_when_all_plain_scenes():
     assert [s.transition is not None for s in p.scenes] == [False, False, True, False]
 
 
+def test_selective_no_fade_from_a_text_card_source():
+    # hook(text) -> stat -> outro: both boundaries are text-card -> text-card.
+    # A crossfade between two centered text cards double-exposes (verified on the
+    # render), so selective fades fire ONLY from a footage scene → all hard cuts.
+    p = plan(
+        _script(_beat("h"), _beat("f", data={"value": "5", "label": "x"}), _beat("o")),
+        theme=Theme(),
+    )
+    assert [s.transition is not None for s in p.scenes] == [False, False, False]
+
+
+def test_selective_fade_only_from_footage_source():
+    # hook, scene(footage), stat, outro: scene->stat fades (footage source, clean);
+    # stat->outro hard-cuts (text source would double-expose).
+    p = plan(
+        _script(_beat("h"), _beat("plain scene"), _beat("f", data={"value": "5", "label": "x"}), _beat("o")),
+        theme=Theme(),
+    )
+    assert [s.transition is not None for s in p.scenes] == [False, True, False, False]
+
+
 def test_policy_every_puts_transition_on_all_but_last():
     p = plan(_script(_beat("h"), _beat("a"), _beat("o")), theme=Theme(), transition_policy="every")
     assert [s.transition is not None for s in p.scenes] == [True, True, False]

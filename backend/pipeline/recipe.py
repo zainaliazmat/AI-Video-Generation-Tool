@@ -130,10 +130,19 @@ def plan(
 
 def _assign_transitions(scenes: List[PlannedScene], transition_template: str, policy: TransitionPolicy) -> None:
     """Set the OUTGOING transition on each scene per policy. The final scene
-    never gets one (no scene follows it)."""
+    never gets one (no scene follows it).
+
+    SELECTIVE fires into an emphasis target (stat / outro) ONLY from a footage
+    `scene` source. A crossfade between two centered text cards (hook→stat,
+    stat→outro, stat→stat) double-exposes the text — verified on the render — so
+    those boundaries hard-cut. A footage source fades cleanly (the held footage
+    carries no typographic structure). `every` is literal (all boundaries)."""
     if policy == "none":
         return
     for i in range(len(scenes) - 1):
-        nxt = scenes[i + 1]
-        if policy == "every" or (policy == "selective" and nxt.role in _EMPHASIS_ROLES):
-            scenes[i].transition = TransitionIntent(template=transition_template, props={})
+        cur, nxt = scenes[i], scenes[i + 1]
+        fire = policy == "every" or (
+            policy == "selective" and nxt.role in _EMPHASIS_ROLES and cur.role == "scene"
+        )
+        if fire:
+            cur.transition = TransitionIntent(template=transition_template, props={})
