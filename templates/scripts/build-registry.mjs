@@ -13,10 +13,32 @@
 import {readdirSync, existsSync, writeFileSync, readFileSync} from 'node:fs';
 import {dirname, resolve, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {execFileSync} from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const templatesDir = resolve(__dirname, '..');
 const outFile = resolve(templatesDir, 'registry.generated.ts');
+
+// Best-effort zod → JSON-Schema manifest codegen before discovery. Needs the
+// templates/ dev toolchain (tsx); when absent (e.g. a consumer that didn't
+// `npm install` in templates/), we SKIP and fall back to the committed
+// inputSchemas — so the render/build hot path never hard-depends on it.
+function tryGenManifests() {
+  const tsx = resolve(templatesDir, 'node_modules', '.bin', 'tsx');
+  const gen = join(__dirname, 'gen-manifests.ts');
+  if (!existsSync(tsx) || !existsSync(gen)) {
+    console.warn(
+      '[build-registry] skipping manifest codegen (templates/ dev toolchain not installed) — ' +
+        'using committed inputSchemas. Run `npm install` in templates/ to regenerate from zod.',
+    );
+    return;
+  }
+  try {
+    execFileSync(tsx, [gen], {stdio: 'inherit'});
+  } catch (err) {
+    console.warn(`[build-registry] manifest codegen failed (${err.message}) — using committed inputSchemas.`);
+  }
+}
 
 function hasEntry(dir, base) {
   return existsSync(join(dir, `${base}.tsx`)) || existsSync(join(dir, `${base}.ts`));
@@ -82,6 +104,7 @@ function generate(templates) {
   );
 }
 
+tryGenManifests();
 const templates = discover();
 writeFileSync(outFile, generate(templates), 'utf8');
 const labels = templates.map((t) => `${t.id}${t.isTransition ? ' (transition)' : ''}`);

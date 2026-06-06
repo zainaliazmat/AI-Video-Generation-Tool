@@ -7,18 +7,30 @@
   "kind": "stat",
   "inputSchema": {
     "type": "object",
-    "additionalProperties": false,
     "properties": {
-      "value": { "type": "string" },
-      "label": { "type": "string" },
-      "icon": { "type": "string" }
+      "value": {
+        "type": "string"
+      },
+      "label": {
+        "type": "string"
+      },
+      "icon": {
+        "type": "string"
+      }
     },
-    "required": ["value", "label"]
+    "required": [
+      "value",
+      "label"
+    ],
+    "additionalProperties": false
   },
   "sampleProps": {
     "value": "90%",
     "label": "of the ocean is unexplored",
     "icon": "🌊"
   },
-  "durationFrames": { "min": 45, "max": 120 }
+  "durationFrames": {
+    "min": 45,
+    "max": 120
+  }
 }

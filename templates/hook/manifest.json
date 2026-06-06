@@ -7,16 +7,25 @@
   "kind": "hook",
   "inputSchema": {
     "type": "object",
-    "additionalProperties": false,
     "properties": {
-      "title": { "type": "string" },
-      "subtitle": { "type": "string" }
+      "title": {
+        "type": "string"
+      },
+      "subtitle": {
+        "type": "string"
+      }
     },
-    "required": ["title"]
+    "required": [
+      "title"
+    ],
+    "additionalProperties": false
   },
   "sampleProps": {
     "title": "3 facts that sound fake",
     "subtitle": "but are completely true"
   },
-  "durationFrames": { "min": 30, "max": 120 }
+  "durationFrames": {
+    "min": 30,
+    "max": 120
+  }
 }

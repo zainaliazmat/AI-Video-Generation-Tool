@@ -192,8 +192,24 @@ Keep the `--progress-json` stepper; `recipe` is fast/local so it can fold into t
 | **6.3** | zod swap + manifest JSON-Schema codegen + `validate.py` (slots + props) | A bad prop / wrong-slot id fails loudly; sample specs validate; all typechecks green |
 | **6.4** | footage-by-plan + clip-duration + `assemble` rewrite + clip-length fallback + `main.py` reorder | **The big one: first real multi-template video rendered E2E from a topic** (hook→scene/stat→outro, transitions, audio-synced) |
 
+### zod→JSON-Schema codegen mechanism (6.3, second half) — user-gated & DONE
+Mechanism chosen by the user: **templates-local dev toolchain.** `templates/package.json`
+gains `tsx` + `zod` + `zod-to-json-schema` as **devDependencies**; `templates/.npmrc`
+(`legacy-peer-deps=true`) keeps react/remotion OUT of `templates/node_modules` (verified —
+only 5 pkgs added, no peer leak), preserving the single-copy dedupe in consumers. Each
+content template authors its input contract once as a zod `schema` in `<id>/schema.ts`
+(single source of truth); `scripts/gen-manifests.ts` (run via tsx) exports it to that
+template's `manifest.json.inputSchema` (JSON Schema), replacing only that field. zod is a
+**TYPE-only import** in the Components (`z.infer`), and `schema.ts` is imported as a runtime
+value ONLY by the build-time codegen — so zod never enters the render bundle. `.strict()` →
+`additionalProperties:false`. The codegen is wired **best-effort** into `build-registry.mjs`
+(runs before discovery; SKIPS with a warning and falls back to committed inputSchemas when
+the toolchain is absent), so the render/build hot path never hard-depends on it. Verified:
+all 4 real specs validate against the regenerated manifests; remotion + preview typecheck
+green (zod resolves from `templates/node_modules`); 91 backend tests green.
+
 ### Status update (2026-06-06)
-- **6.3 SPLIT.** The `validate.py` half is DONE (`load_catalog` + `validate_spec`: per-template
+- **6.3 DONE (both halves).** The `validate.py` half is DONE (`load_catalog` + `validate_spec`: per-template
   JSON-Schema props + slot/kind rules; 10 tests; all 4 real specs validate). The **zod→JSON-Schema
   codegen half is DEFERRED to a gated mechanism proposal** — it's the bundler-sensitive piece
   (no tsx/ts-node exists; `templates/` has no `node_modules`; build prompt §1 says to confirm the

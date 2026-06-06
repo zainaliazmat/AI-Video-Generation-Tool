@@ -4,12 +4,20 @@
   "private": true,
   "description": "Drop-in video template plugins (manifest + Remotion component). Auto-discovered into a typed registry consumed by the renderer and the app's templates gallery. Designed to later ship as installable npm packages (phase-2 prompt §7).",
   "scripts": {
+    "gen-manifests": "tsx scripts/gen-manifests.ts",
     "build-registry": "node scripts/build-registry.mjs",
+    "build": "npm run gen-manifests && npm run build-registry",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "peerDependencies": {
     "remotion": "^4.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
+  },
+  "comment:devDependencies": "BUILD-TIME ONLY. zod authors each template's inputSchema (single source of truth); gen-manifests (tsx) exports it to manifest.json as JSON Schema for Python. zod is a TYPE-only import in components (z.infer), so it never enters the render bundle, and devDeps are not shipped — the npm-package trajectory is unaffected. .npmrc legacy-peer-deps keeps react/remotion OUT of this package's node_modules (single-copy dedupe in consumers).",
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "^3.23.5"
   }
 }

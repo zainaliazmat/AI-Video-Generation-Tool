@@ -38,3 +38,6 @@ preview/next-env.d.ts
 
 # footage duration sidecars (cache, like the .mp4s)
 remotion/public/assets/*.frames
+
+# remotion bundle output
+remotion/build/

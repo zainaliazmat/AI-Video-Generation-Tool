@@ -7,14 +7,21 @@
   "kind": "overlay",
   "inputSchema": {
     "type": "object",
-    "additionalProperties": false,
     "properties": {
-      "text": { "type": "string" }
+      "text": {
+        "type": "string"
+      }
     },
-    "required": ["text"]
+    "required": [
+      "text"
+    ],
+    "additionalProperties": false
   },
   "sampleProps": {
     "text": "@yourchannel"
   },
-  "durationFrames": { "min": 30, "max": 1800 }
+  "durationFrames": {
+    "min": 30,
+    "max": 1800
+  }
 }

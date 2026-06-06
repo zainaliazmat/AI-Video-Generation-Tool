@@ -7,38 +7,90 @@
   "kind": "scene",
   "inputSchema": {
     "type": "object",
-    "additionalProperties": false,
     "properties": {
       "media": {
         "type": "object",
-        "additionalProperties": false,
         "properties": {
-          "type": { "enum": ["video", "image"] },
-          "src": { "type": "string" },
-          "fit": { "enum": ["cover", "contain"] },
-          "kenBurns": {
-            "type": ["object", "null"],
-            "properties": {
-              "from": { "type": "number" },
-              "to": { "type": "number" },
-              "originX": { "type": "number" },
-              "originY": { "type": "number" }
-            }
+          "type": {
+            "type": "string",
+            "enum": [
+              "video",
+              "image"
+            ]
           },
-          "loop": { "type": "boolean" }
+          "src": {
+            "type": "string"
+          },
+          "fit": {
+            "type": "string",
+            "enum": [
+              "cover",
+              "contain"
+            ]
+          },
+          "kenBurns": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "number"
+                  },
+                  "to": {
+                    "type": "number"
+                  },
+                  "originX": {
+                    "type": "number"
+                  },
+                  "originY": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "from",
+                  "to",
+                  "originX",
+                  "originY"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "loop": {
+            "type": "boolean"
+          }
         },
-        "required": ["type", "src", "fit"]
+        "required": [
+          "type",
+          "src",
+          "fit"
+        ],
+        "additionalProperties": false
       }
     },
-    "required": ["media"]
+    "required": [
+      "media"
+    ],
+    "additionalProperties": false
   },
   "sampleProps": {
     "media": {
       "type": "video",
       "src": "assets/clip-1.mp4",
       "fit": "cover",
-      "kenBurns": { "from": 1.0, "to": 1.12, "originX": 0.5, "originY": 0.4 }
+      "kenBurns": {
+        "from": 1,
+        "to": 1.12,
+        "originX": 0.5,
+        "originY": 0.4
+      }
     }
   },
-  "durationFrames": { "min": 30, "max": 300 }
+  "durationFrames": {
+    "min": 30,
+    "max": 300
+  }
 }

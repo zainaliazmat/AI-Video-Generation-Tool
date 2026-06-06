@@ -7,16 +7,25 @@
   "kind": "outro",
   "inputSchema": {
     "type": "object",
-    "additionalProperties": false,
     "properties": {
-      "title": { "type": "string" },
-      "cta": { "type": "string" }
+      "title": {
+        "type": "string"
+      },
+      "cta": {
+        "type": "string"
+      }
     },
-    "required": ["title"]
+    "required": [
+      "title"
+    ],
+    "additionalProperties": false
   },
   "sampleProps": {
     "title": "Follow for more",
     "cta": "@yourchannel"
   },
-  "durationFrames": { "min": 30, "max": 120 }
+  "durationFrames": {
+    "min": 30,
+    "max": 120
+  }
 }
