@@ -9,6 +9,7 @@ from pipeline.script import (
     generate_grounded_script,
     _reselect_hook_if_dropped,
     _count_agnostic_title,
+    _enforce_floor,
 )
 from pipeline.retrieval import RetrievedContext, RetrievedSnippet
 
@@ -193,7 +194,12 @@ def test_grounded_retains_all_hook_candidates_scored():
 def test_grounded_verify_drops_unsupported_beat():
     ctx = _ctx(("https://a", "A", "snip"))
     content = _script_json(
-        beats=[{"text": "hook", "source": "https://a"}, {"text": "bad claim", "source": "https://a"}, {"text": "Follow."}]
+        beats=[
+            {"text": "hook", "source": "https://a"},
+            {"text": "a good fact", "source": "https://a"},
+            {"text": "bad claim", "source": "https://a"},
+            {"text": "Follow."},
+        ]
     )
 
     def vfn(items):  # support everything except the "bad" claim
@@ -212,6 +218,7 @@ def test_grounded_verify_drops_unsupported_beat():
         retrieve_fn=_fake_retrieve(ctx), verify_fn=vfn,
     )
     assert "bad claim" not in [b.text for b in out.beats]   # unsupported claim dropped by verify
+    assert "a good fact" in [b.text for b in out.beats]      # supported claim kept (and clears the floor)
     assert out.verify_report is not None
 
 
@@ -292,3 +299,17 @@ def test_reselect_hook_noop_when_hook_survived():
     _reselect_hook_if_dropped(script, ctx, vfn)
     assert script.beats[0].text == "kept hook"
     assert calls["n"] == 0  # no extra verify call when the hook survived
+
+
+def test_floor_hard_fails_at_zero_supported_claims():
+    script = BeatsScript(title="T", beats=[Beat(text="hook", source="https://a"), Beat(text="outro")])
+    with pytest.raises(ValueError):
+        _enforce_floor(script)  # 0 body claims → refuse to ship
+
+
+def test_floor_warns_at_one_without_raising():
+    script = BeatsScript(
+        title="T",
+        beats=[Beat(text="hook", source="https://a"), Beat(text="one fact", source="https://a"), Beat(text="outro")],
+    )
+    _enforce_floor(script)  # 1 body claim → warns to stderr, does not raise

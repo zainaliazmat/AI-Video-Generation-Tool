@@ -197,8 +197,8 @@ def generate_grounded_script(
             retrieval_key=retrieval_key, cache_dir=cache_dir,
         )
         _reselect_hook_if_dropped(script, ctx, vfn)
+        _enforce_floor(script)
     script.title = _count_agnostic_title(script.title)
-    _warn_if_thin(script)
     return script
 
 
@@ -341,10 +341,18 @@ def _reselect_hook_if_dropped(script: BeatsScript, ctx, verify_fn) -> None:
     script.beats.insert(0, Beat(text=script.title))  # non-asserting fallback
 
 
-def _warn_if_thin(script: BeatsScript) -> None:
-    n_facts = sum(1 for b in script.beats[1:] if b.source)
-    if n_facts < 2:
-        print(f"[script] warning: only {n_facts} verified fact(s) survived — consider a richer topic", file=sys.stderr)
+def _enforce_floor(script: BeatsScript) -> None:
+    """Two-tier fact floor over surviving body claims — kept AND demoted beats
+    (excluding the hook and outro): HARD-FAIL at 0 (refuse a claimless video),
+    WARN at 1. Demotions count: a demoted stat keeps its source/claim."""
+    n = sum(1 for b in script.beats[1:] if b.source)
+    if n == 0:
+        raise ValueError(
+            "verification left 0 supported claims — refusing to ship a claimless video; "
+            "try a richer or more specific topic"
+        )
+    if n == 1:
+        print("[script] warning: only 1 supported claim survived verification — consider a richer topic", file=sys.stderr)
 
 
 if __name__ == "__main__":

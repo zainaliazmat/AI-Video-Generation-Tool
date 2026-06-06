@@ -63,10 +63,10 @@ The verify pass (default-on for client output) + hook-drop + floor handling, val
 - **Verify:** ONE batched DeepSeek check per claim against its retrieved snippet; a **coverage guard** default-denies any beat the verifier omits (never ships unverified); the rescue is **batched** (≤2 verify calls/video); a **targeted per-claim Tavily lookup** rescues a true fact the broad search missed before any drop — all within the ≤4-Tavily / ≤3-LLM bound. On the run, all 6 facts verified-and-kept; verdicts recorded in `sources.json`.
 - **Verdict → action:** spoken-claim-unsupported → **DROP**; only-the-number-unsupported (narration stands) → **DEMOTE** (strip the on-screen number, keep the scene). The spoken claim is the test, since it's what reaches the viewer.
 - **Hook-drop:** if the chosen hook fails verification, **re-select** the next-best grounded candidate (re-verified in one batched check); fall back to the title as a non-asserting opener if none verify.
-- **Floor:** **count-agnostic titles** ("Deep Ocean Secrets…", no "N facts") so a dropped fact never leaves a stale count; warn if <2 facts survive; no regeneration (stays in budget).
+- **Floor:** **count-agnostic titles** ("Deep Ocean Secrets…", no "N facts") so a dropped fact never leaves a stale count; a **two-tier floor over surviving claims (kept + demoted, excl. hook/outro)** — **hard-fail at 0** (refuse a claimless video), **warn at 1**; no regeneration (stays in budget).
 - Stat value **auto-fit** confirmed on "37,700".
 
-**Residual (minor, not a blocker):** the de-dup nudge is a soft prompt instruction — a chosen hook can still overlap a body fact (here, 700°F in both). A post-selection de-dup (drop a body beat that restates the chosen hook) would fully close it; deferred.
+**Residual — top of the next queue (not a blocker):** the de-dup nudge is a soft prompt instruction — a chosen hook can still echo a body fact (700°F here), which reads as a bug to a viewer even though it's technically correct. A post-selection de-dup (drop a body beat that restates the chosen hook) closes it — small, but when it drops a beat it must count toward the fact floor. **Footage relevance** stays a separate later phase.
 
 **Phase 3 definition of done — met:** factual claims grounded in retrieved sources with citations; a deliberately generated/selected, grounded hook; sources surfaced (sidecar); full pipeline E2E green; provider stays DeepSeek; all changes additive; new shapes TDD'd. **135 tests green.**
 
