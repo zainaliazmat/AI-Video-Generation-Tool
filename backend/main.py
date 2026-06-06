@@ -33,6 +33,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 ASSETS_DIR = REPO_ROOT / "remotion" / "public" / "assets"
 TEMPLATES_DIR = REPO_ROOT / "templates"
 SPEC_OUT = REPO_ROOT / "spec.json"
+SOURCES_OUT = REPO_ROOT / "sources.json"   # grounding citation sidecar (Phase 3 §5.2)
+RETRIEVAL_CACHE = REPO_ROOT / ".cache" / "retrieval"   # Tavily results cached by query (cost bound)
 DEFAULT_FPS = 30
 
 # Stage keys match the preview's PipelineStepper (script -> voice -> ... -> assemble).
@@ -41,6 +43,16 @@ PIPELINE_STAGES = ["script", "voice", "timing", "footage", "assemble"]
 
 def _log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
+
+
+def build_sources_sidecar(script) -> dict:
+    """The client-facing citation list derived from a grounded BeatsScript: each
+    cited (sourced) beat with its URL, plus the de-duped source list. Written next
+    to spec.json so sources surface for clients WITHOUT touching the render contract
+    (Phase 3 §5.2 — sidecar over render-contract churn)."""
+    facts = [{"text": b.text, "source": b.source} for b in script.beats if b.source]
+    sources = [{"url": s.url, "title": s.title} for s in (script.sources or [])]
+    return {"title": script.title, "facts": facts, "sources": sources}
 
 
 def run(topic: str, fps: int = DEFAULT_FPS, on_stage=None):
@@ -54,8 +66,8 @@ def run(topic: str, fps: int = DEFAULT_FPS, on_stage=None):
     theme = Theme()
 
     emit("script", "running")
-    _log("[1/5] script (LLM) + recipe plan...")
-    script_result = script_stage.generate_script(topic)
+    _log("[1/5] script (grounded LLM) + recipe plan...")
+    script_result = script_stage.generate_grounded_script(topic, cache_dir=RETRIEVAL_CACHE)
     # The recipe/director (deterministic) decides which template renders each
     # beat. Fast + local, so it folds into the script stage.
     plan = recipe_stage.plan(script_result, theme=theme)
@@ -86,7 +98,9 @@ def run(topic: str, fps: int = DEFAULT_FPS, on_stage=None):
     spec = assemble_stage.build_spec(plan, offsets, words, clips, catalog=catalog, fps=fps)
     validate_stage.validate_spec(spec, catalog)  # fail fast before writing
     assemble_stage.write_spec(spec, SPEC_OUT)
+    SOURCES_OUT.write_text(json.dumps(build_sources_sidecar(script_result), indent=2), encoding="utf-8")
     _log(f"      wrote {SPEC_OUT}  ({spec.meta.durationInFrames} frames @ {fps}fps)")
+    _log(f"      wrote {SOURCES_OUT}  ({len(script_result.sources or [])} sources cited)")
     emit("assemble", "done")
     return spec
 

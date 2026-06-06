@@ -19,26 +19,39 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # backend/
 import json
 
 from pipeline.config import get_env, require_env
-from pipeline.content import BeatsScript, parse_beats_response
+from pipeline.content import BeatsScript, Source, parse_beats_response
+from pipeline import retrieval
 
 SYSTEM_PROMPT = (
     "You are a scriptwriter for short-form faceless videos (vertical, ~60-90s). "
     "Respond ONLY with a JSON object of the form "
     '{"title": string, "beats": Beat[]} where a Beat is '
-    '{"text": string, "data"?: object, "keywords"?: string}. '
+    '{"text": string, "data"?: object, "keywords"?: string, "source"?: string}. '
     "Each beat's `text` is ONE spoken narration sentence (8-18 words). Produce 5-8 beats. "
     "The FIRST beat must be a punchy hook that opens the video; the LAST beat must be a "
     "closing call to action (e.g. follow for more). "
     'For any beat whose point is a single striking number or statistic, include '
     '"data": {"value": "<the number, e.g. 90%>", "label": "<short context, 2-5 words>"}. '
     'Optionally add "keywords": "<2-4 words>" to a beat to guide stock-footage search. '
+    "When grounding SOURCES are provided in the user message, state ONLY facts those "
+    'sources support and set each factual beat\'s "source" to the exact URL of the '
+    "specific source that backs it; never invent a URL or an unsupported fact. "
     "No emojis, no markdown, no numbering."
 )
 
 MAX_RETRIES = 1  # one retry on an invalid reply, then fail loudly (6.1 v1)
 
 
-def build_user_prompt(topic: str) -> str:
+def build_user_prompt(topic: str, evidence_block: str | None = None) -> str:
+    if evidence_block:
+        return (
+            f"Topic: {topic}\n\n"
+            "Ground every factual claim in the SOURCES below. State ONLY what they support; "
+            'set each factual beat\'s "source" to the exact URL of the specific source you used; '
+            "if nothing below supports a point, leave it out.\n\n"
+            f"SOURCES:\n{evidence_block}\n\n"
+            "Return the JSON object now."
+        )
     return f"Topic: {topic}\nReturn the JSON object now."
 
 
@@ -56,11 +69,16 @@ def _parse_with_retry(do_call) -> BeatsScript:
     )
 
 
-def generate_script(topic: str, *, provider: str | None = None, client=None, model: str | None = None) -> BeatsScript:
+def generate_script(
+    topic: str, *, provider: str | None = None, client=None, model: str | None = None,
+    evidence_block: str | None = None,
+) -> BeatsScript:
+    """Pure LLM generation. `evidence_block` (optional) injects retrieved grounding
+    sources into the prompt; `generate_grounded_script` is the grounded entry point."""
     provider = provider or get_env("LLM_PROVIDER", "deepseek")
     if provider == "deepseek":
         return _generate_openai_compatible(
-            topic, client=client, model=model,
+            topic, client=client, model=model, evidence_block=evidence_block,
             default_model="deepseek-v4-flash",
             api_key_env="DEEPSEEK_API_KEY",
             base_url=get_env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
@@ -68,18 +86,18 @@ def generate_script(topic: str, *, provider: str | None = None, client=None, mod
         )
     if provider == "ollama":
         return _generate_openai_compatible(
-            topic, client=client, model=model,
+            topic, client=client, model=model, evidence_block=evidence_block,
             default_model="llama3.1",
             api_key_env=None,
             base_url=get_env("OLLAMA_BASE_URL", "http://localhost:11434") + "/v1",
             model_env="OLLAMA_MODEL",
         )
     if provider == "anthropic":
-        return _generate_anthropic(topic, client=client, model=model)
+        return _generate_anthropic(topic, client=client, model=model, evidence_block=evidence_block)
     raise ValueError(f"Unknown LLM_PROVIDER: {provider!r}")
 
 
-def _generate_openai_compatible(topic, *, client, model, default_model, api_key_env, base_url, model_env) -> BeatsScript:
+def _generate_openai_compatible(topic, *, client, model, default_model, api_key_env, base_url, model_env, evidence_block=None) -> BeatsScript:
     if client is None:
         from openai import OpenAI
         api_key = require_env(api_key_env) if api_key_env else "ollama"
@@ -91,7 +109,7 @@ def _generate_openai_compatible(topic, *, client, model, default_model, api_key_
             model=model,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": build_user_prompt(topic)},
+                {"role": "user", "content": build_user_prompt(topic, evidence_block)},
             ],
             response_format={"type": "json_object"},
             temperature=0.8,
@@ -101,7 +119,7 @@ def _generate_openai_compatible(topic, *, client, model, default_model, api_key_
     return _parse_with_retry(do_call)
 
 
-def _generate_anthropic(topic, *, client, model) -> BeatsScript:
+def _generate_anthropic(topic, *, client, model, evidence_block=None) -> BeatsScript:
     if client is None:
         import anthropic
         client = anthropic.Anthropic(api_key=require_env("ANTHROPIC_API_KEY"))
@@ -112,11 +130,52 @@ def _generate_anthropic(topic, *, client, model) -> BeatsScript:
             model=model,
             max_tokens=1024,
             system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": build_user_prompt(topic)}],
+            messages=[{"role": "user", "content": build_user_prompt(topic, evidence_block)}],
         )
         return msg.content[0].text
 
     return _parse_with_retry(do_call)
+
+
+def generate_grounded_script(
+    topic: str,
+    *,
+    provider: str | None = None,
+    client=None,
+    model: str | None = None,
+    retrieve_fn=None,
+    retrieval_key: str | None = None,
+    cache_dir=None,
+) -> BeatsScript:
+    """Retrieval-grounded generation (3.1).
+
+    Tavily-search the topic, generate beats grounded in the retrieved material,
+    then ENFORCE that any citation a beat carries is a URL we actually retrieved —
+    citations are trustworthy by construction, not merely present. `retrieve_fn` is
+    injectable so this runs fully offline in tests; the LLM provider stays DeepSeek."""
+    retrieve_fn = retrieve_fn or retrieval.retrieve
+    ctx = retrieve_fn(topic, key=retrieval_key, cache_dir=cache_dir)
+    script = generate_script(
+        topic, provider=provider, client=client, model=model, evidence_block=ctx.prompt_block()
+    )
+    return _enforce_grounding(script, ctx)
+
+
+def _enforce_grounding(script: BeatsScript, ctx) -> BeatsScript:
+    """Strict grounding: drop any beat citation that isn't a URL we actually
+    retrieved, and set `script.sources` to the de-duped set of real cited sources."""
+    valid = ctx.urls
+    title_by_url = {s.url: s.title for s in ctx.snippets}
+    cited: list[Source] = []
+    seen: set[str] = set()
+    for beat in script.beats:
+        if beat.source and beat.source not in valid:
+            beat.source = None  # cited something we never retrieved → not trustworthy
+        if beat.source and beat.source not in seen:
+            seen.add(beat.source)
+            cited.append(Source(url=beat.source, title=title_by_url.get(beat.source)))
+    script.sources = cited or None
+    return script
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ class Beat(BaseModel):
     text: str
     data: Optional[Dict] = None       # e.g. {"value": "90%", "label": "..."} → recipe may pick `stat`
     keywords: Optional[str] = None    # footage search hint; falls back to `text`
+    source: Optional[str] = None      # URL backing this beat's fact (grounding); set/checked in script.py
 
     @field_validator("text", "keywords")
     @classmethod
@@ -37,9 +38,17 @@ class Beat(BaseModel):
         return v
 
 
+class Source(BaseModel):
+    """A retrieved source the script is grounded in (one Tavily result)."""
+
+    url: str
+    title: Optional[str] = None
+
+
 class BeatsScript(BaseModel):
     title: str
     beats: List[Beat]
+    sources: Optional[List[Source]] = None   # retrieved evidence set (grounding); set in script.py
 
     @field_validator("title")
     @classmethod

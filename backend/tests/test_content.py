@@ -8,7 +8,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from pipeline.content import Beat, BeatsScript, parse_beats_response
+from pipeline.content import Beat, BeatsScript, Source, parse_beats_response
 
 
 def test_beat_minimal_is_text_only():
@@ -68,3 +68,45 @@ def test_parse_beats_response_invalid_json_raises():
 def test_parse_beats_response_schema_violation_raises():
     with pytest.raises(ValueError):
         parse_beats_response(json.dumps({"title": "T"}))  # no beats
+
+
+# --- Phase 3 (grounding): a beat may carry the source URL backing its fact ---
+
+
+def test_beat_carries_optional_source():
+    b = Beat.model_validate({"text": "90% of the ocean is unmapped.", "source": "https://noaa.gov/oceans"})
+    assert b.source == "https://noaa.gov/oceans"
+
+
+def test_beat_without_source_defaults_none():
+    assert Beat.model_validate({"text": "Octopuses have three hearts."}).source is None
+
+
+def test_parse_beats_response_preserves_beat_source():
+    content = json.dumps({"title": "T", "beats": [{"text": "a", "source": "https://src/1"}]})
+    s = parse_beats_response(content)
+    assert s.beats[0].source == "https://src/1"
+
+
+# --- Phase 3 (grounding): the script carries the retrieved evidence set ---
+
+
+def test_source_has_url_and_optional_title():
+    s = Source.model_validate({"url": "https://noaa.gov/x", "title": "NOAA"})
+    assert s.url == "https://noaa.gov/x"
+    assert s.title == "NOAA"
+
+
+def test_source_title_defaults_none():
+    assert Source.model_validate({"url": "https://noaa.gov/x"}).title is None
+
+
+def test_beats_script_carries_sources():
+    s = BeatsScript.model_validate(
+        {"title": "Deep Sea", "beats": [{"text": "one"}], "sources": [{"url": "https://noaa.gov/x", "title": "NOAA"}]}
+    )
+    assert s.sources[0].url == "https://noaa.gov/x"
+
+
+def test_beats_script_without_sources_defaults_none():
+    assert BeatsScript.model_validate({"title": "T", "beats": [{"text": "x"}]}).sources is None

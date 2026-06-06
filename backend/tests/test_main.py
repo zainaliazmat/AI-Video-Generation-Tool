@@ -2,8 +2,33 @@
 footage(by plan) → assemble(plan) → validate → write."""
 import json
 import main as m
-from pipeline.content import BeatsScript
+from pipeline.content import BeatsScript, Beat, Source
 from pipeline.contracts import LineOffset, WordTiming, Clip, FootageRequest
+
+
+# --- Phase 3 (3.1): the sources.json sidecar (client-facing citation list) ---
+
+
+def test_build_sources_sidecar_lists_cited_facts_and_sources():
+    script = BeatsScript(
+        title="Deep Sea",
+        beats=[
+            Beat(text="Intro hook"),                                    # no source → not a cited fact
+            Beat(text="90% is unmapped", source="https://noaa.gov/x"),
+            Beat(text="Follow for more"),                               # no source
+        ],
+        sources=[Source(url="https://noaa.gov/x", title="NOAA")],
+    )
+    out = m.build_sources_sidecar(script)
+    assert out["title"] == "Deep Sea"
+    assert out["facts"] == [{"text": "90% is unmapped", "source": "https://noaa.gov/x"}]
+    assert out["sources"] == [{"url": "https://noaa.gov/x", "title": "NOAA"}]
+
+
+def test_build_sources_sidecar_handles_ungrounded_script():
+    out = m.build_sources_sidecar(BeatsScript(title="T", beats=[Beat(text="a")]))
+    assert out["facts"] == []
+    assert out["sources"] == []
 
 
 def test_run_builds_multi_template_spec_from_a_plan(monkeypatch, tmp_path):
@@ -16,7 +41,14 @@ def test_run_builds_multi_template_spec_from_a_plan(monkeypatch, tmp_path):
         {"text": "a plain scene", "keywords": "ocean"},
         {"text": "follow for more"},
     ]
+    captured = {}
+
+    def fake_grounded(topic, **kwargs):
+        captured.update(topic=topic, **kwargs)
+        return BeatsScript(title="T", beats=beats)
+
     monkeypatch.setattr(m.script_stage, "generate_script", lambda topic: BeatsScript(title="T", beats=beats))
+    monkeypatch.setattr(m.script_stage, "generate_grounded_script", fake_grounded)
     monkeypatch.setattr(
         m.tts_stage, "synthesize",
         lambda lines, out: seen.update(tts_lines=lines) or [
@@ -33,6 +65,7 @@ def test_run_builds_multi_template_spec_from_a_plan(monkeypatch, tmp_path):
     monkeypatch.setattr(m.footage_stage, "fetch_footage", fake_footage)
     monkeypatch.setattr(m, "ASSETS_DIR", tmp_path / "assets")
     monkeypatch.setattr(m, "SPEC_OUT", tmp_path / "spec.json")
+    monkeypatch.setattr(m, "SOURCES_OUT", tmp_path / "sources.json")
 
     events = []
     spec = m.run("anything", on_stage=lambda key, state: events.append((key, state)))
@@ -57,3 +90,9 @@ def test_run_builds_multi_template_spec_from_a_plan(monkeypatch, tmp_path):
     assert [s["template"] for s in written["scenes"]] == ["hook", "stat", "scene", "outro"]
     assert written["meta"]["title"] == "T"
     assert spec.meta.durationInFrames == 120               # round(4.0 * 30)
+
+    # the sources sidecar is written next to the spec on the grounded path
+    sidecar = json.loads((tmp_path / "sources.json").read_text())
+    assert sidecar["title"] == "T"
+    assert sidecar["facts"] == [] and sidecar["sources"] == []  # these beats carry no source
+    assert captured["cache_dir"] is not None                    # retrieval is cached (cost bound)
