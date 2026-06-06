@@ -10,7 +10,9 @@
     "render": "npm run build-registry && npm run copy-spec && remotion render Video out/video.mp4",
     "bundle": "npm run build-registry && npm run copy-spec && remotion bundle",
     "typecheck": "npm run build-registry && tsc --noEmit",
-    "upgrade": "remotion upgrade"
+    "upgrade": "remotion upgrade",
+    "gen-previews": "npm run build-registry && node scripts/gen-previews.mjs",
+    "check-previews": "node scripts/gen-previews.mjs --check"
   },
   "dependencies": {
     "@remotion/cli": "4.0.472",
