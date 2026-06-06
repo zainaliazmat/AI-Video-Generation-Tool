@@ -48,9 +48,13 @@ def run(topic: str, fps: int = DEFAULT_FPS, on_stage=None):
 
     emit("script", "running")
     _log("[1/5] script (LLM)...")
-    result = script_stage.generate_script(topic)
-    title, lines = result["title"], result["lines"]
-    _log(f"      title={title!r}  lines={len(lines)}")
+    script_result = script_stage.generate_script(topic)
+    title = script_result.title
+    # Every beat is narrated; tts/footage/captions key off the narration text.
+    # (Step 6.4 wires the recipe in between to choose a template per beat; until
+    # then assemble still emits one `scene` per beat — same output, beat-driven.)
+    lines = [b.text for b in script_result.beats]
+    _log(f"      title={title!r}  beats={len(script_result.beats)}")
     emit("script", "done")
 
     emit("voice", "running")
