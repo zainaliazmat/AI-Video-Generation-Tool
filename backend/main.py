@@ -56,7 +56,13 @@ def build_sources_sidecar(script) -> dict:
         {"text": h.text, "pattern": h.pattern, "score": h.score, "chosen": h.chosen}
         for h in (script.hook_candidates or [])
     ]
-    return {"title": script.title, "hooks": hooks, "facts": facts, "sources": sources}
+    return {
+        "title": script.title,
+        "hooks": hooks,
+        "facts": facts,
+        "sources": sources,
+        "verification": script.verify_report or [],
+    }
 
 
 def run(topic: str, fps: int = DEFAULT_FPS, on_stage=None):

@@ -3,8 +3,13 @@ validated by Pydantic, with a single retry on an invalid LLM reply."""
 import json
 import pytest
 
-from pipeline.content import BeatsScript
-from pipeline.script import generate_script, generate_grounded_script
+from pipeline.content import Beat, BeatsScript, HookCandidate
+from pipeline.script import (
+    generate_script,
+    generate_grounded_script,
+    _reselect_hook_if_dropped,
+    _count_agnostic_title,
+)
 from pipeline.retrieval import RetrievedContext, RetrievedSnippet
 
 
@@ -88,7 +93,7 @@ def _fake_retrieve(ctx):
 def test_grounded_injects_retrieved_sources_into_prompt():
     ctx = _ctx(("https://noaa.gov/x", "NOAA", "90% of the ocean is unmapped"))
     fake = _FakeClient(_valid(beats=[{"text": "a", "source": "https://noaa.gov/x"}]))
-    generate_grounded_script("oceans", provider="deepseek", client=fake, model="m", retrieve_fn=_fake_retrieve(ctx))
+    generate_grounded_script("oceans", provider="deepseek", client=fake, model="m", retrieve_fn=_fake_retrieve(ctx), verify=False)
     user_msg = fake._completions.captured["messages"][1]["content"]
     assert "https://noaa.gov/x" in user_msg
     assert "90% of the ocean is unmapped" in user_msg
@@ -97,7 +102,7 @@ def test_grounded_injects_retrieved_sources_into_prompt():
 def test_grounded_attaches_cited_sources():
     ctx = _ctx(("https://noaa.gov/x", "NOAA", "fact"))
     fake = _FakeClient(_valid(beats=[{"text": "a", "source": "https://noaa.gov/x"}]))
-    out = generate_grounded_script("t", provider="deepseek", client=fake, model="m", retrieve_fn=_fake_retrieve(ctx))
+    out = generate_grounded_script("t", provider="deepseek", client=fake, model="m", retrieve_fn=_fake_retrieve(ctx), verify=False)
     assert out.sources is not None
     assert out.sources[0].url == "https://noaa.gov/x"
     assert out.sources[0].title == "NOAA"
@@ -107,7 +112,7 @@ def test_grounded_strips_source_not_in_retrieved_set():
     ctx = _ctx(("https://noaa.gov/x", "NOAA", "fact"))
     # the model cited a URL we never retrieved → it must be dropped (untrustworthy).
     fake = _FakeClient(_valid(beats=[{"text": "a", "source": "https://made-up.example/z"}]))
-    out = generate_grounded_script("t", provider="deepseek", client=fake, model="m", retrieve_fn=_fake_retrieve(ctx))
+    out = generate_grounded_script("t", provider="deepseek", client=fake, model="m", retrieve_fn=_fake_retrieve(ctx), verify=False)
     assert out.beats[0].source is None
     assert out.sources is None  # nothing validly cited
 
@@ -117,7 +122,7 @@ def test_grounded_keeps_valid_source_and_drops_bogus_one():
     fake = _FakeClient(
         _valid(beats=[{"text": "one", "source": "https://a"}, {"text": "two", "source": "https://nope"}])
     )
-    out = generate_grounded_script("t", provider="deepseek", client=fake, model="m", retrieve_fn=_fake_retrieve(ctx))
+    out = generate_grounded_script("t", provider="deepseek", client=fake, model="m", retrieve_fn=_fake_retrieve(ctx), verify=False)
     assert out.beats[0].source == "https://a"
     assert out.beats[1].source is None
     assert [s.url for s in out.sources] == ["https://a"]
@@ -139,7 +144,7 @@ def test_grounded_selects_highest_scoring_hook_as_beat0():
         beats=[{"text": "Let me tell you about the ocean."}, {"text": "body", "source": "https://a"}, {"text": "Follow for more."}],
         hooks=[{"text": "90% of the ocean is unmapped — why?", "pattern": "surprising stat", "source": "https://a"}],
     )
-    out = generate_grounded_script("t", provider="deepseek", client=_FakeClient(content), model="m", retrieve_fn=_fake_retrieve(ctx))
+    out = generate_grounded_script("t", provider="deepseek", client=_FakeClient(content), model="m", retrieve_fn=_fake_retrieve(ctx), verify=False)
     assert out.beats[0].text == "90% of the ocean is unmapped — why?"   # the stronger candidate becomes beat 0
     assert out.beats[0].source == "https://a"
     chosen = [h for h in out.hook_candidates if h.chosen]
@@ -149,7 +154,7 @@ def test_grounded_selects_highest_scoring_hook_as_beat0():
 def test_grounded_falls_back_to_model_opener_when_no_candidates():
     ctx = _ctx(("https://a", "A", "s"))
     content = _script_json(beats=[{"text": "Original opener."}, {"text": "Follow."}], hooks=None)
-    out = generate_grounded_script("t", provider="deepseek", client=_FakeClient(content), model="m", retrieve_fn=_fake_retrieve(ctx))
+    out = generate_grounded_script("t", provider="deepseek", client=_FakeClient(content), model="m", retrieve_fn=_fake_retrieve(ctx), verify=False)
     assert out.beats[0].text == "Original opener."                       # unchanged — its own opener competes and wins by default
     assert out.hook_candidates is not None and len(out.hook_candidates) == 1
     assert out.hook_candidates[0].chosen is True
@@ -161,7 +166,7 @@ def test_grounded_strips_chosen_hook_source_not_retrieved():
         beats=[{"text": "Weak."}, {"text": "Follow."}],
         hooks=[{"text": "An amazing 11 km deep — really?", "pattern": "surprising stat", "source": "https://not-retrieved"}],
     )
-    out = generate_grounded_script("t", provider="deepseek", client=_FakeClient(content), model="m", retrieve_fn=_fake_retrieve(ctx))
+    out = generate_grounded_script("t", provider="deepseek", client=_FakeClient(content), model="m", retrieve_fn=_fake_retrieve(ctx), verify=False)
     assert out.beats[0].text == "An amazing 11 km deep — really?"        # still wins on number+question+brevity
     assert out.beats[0].source is None                                  # bogus source dropped → no false citation on the hook
 
@@ -175,8 +180,115 @@ def test_grounded_retains_all_hook_candidates_scored():
             {"text": "Did you know 90% is unmapped?", "pattern": "surprising stat", "source": "https://a"},
         ],
     )
-    out = generate_grounded_script("t", provider="deepseek", client=_FakeClient(content), model="m", retrieve_fn=_fake_retrieve(ctx))
+    out = generate_grounded_script("t", provider="deepseek", client=_FakeClient(content), model="m", retrieve_fn=_fake_retrieve(ctx), verify=False)
     assert len(out.hook_candidates) == 3                                 # 2 model candidates + the model's own opener
     assert all(h.score is not None for h in out.hook_candidates)
     assert sum(1 for h in out.hook_candidates if h.chosen) == 1
     assert out.beats[0].text == "Did you know 90% is unmapped?"          # grounded stat-question wins
+
+
+# --- Phase 3.3: verify wired into grounded generation (default-on, skippable) ---
+
+
+def test_grounded_verify_drops_unsupported_beat():
+    ctx = _ctx(("https://a", "A", "snip"))
+    content = _script_json(
+        beats=[{"text": "hook", "source": "https://a"}, {"text": "bad claim", "source": "https://a"}, {"text": "Follow."}]
+    )
+
+    def vfn(items):  # support everything except the "bad" claim
+        return [
+            {
+                "index": it["index"],
+                "claim_supported": "bad" not in it["claim"],
+                "number_supported": None,
+                "source": "https://a" if "bad" not in it["claim"] else None,
+            }
+            for it in items
+        ]
+
+    out = generate_grounded_script(
+        "t", provider="deepseek", client=_FakeClient(content), model="m",
+        retrieve_fn=_fake_retrieve(ctx), verify_fn=vfn,
+    )
+    assert "bad claim" not in [b.text for b in out.beats]   # unsupported claim dropped by verify
+    assert out.verify_report is not None
+
+
+def test_grounded_verify_false_skips_verification():
+    ctx = _ctx(("https://a", "A", "snip"))
+    content = _script_json(beats=[{"text": "hook", "source": "https://a"}, {"text": "unchecked", "source": "https://a"}])
+    out = generate_grounded_script(
+        "t", provider="deepseek", client=_FakeClient(content), model="m",
+        retrieve_fn=_fake_retrieve(ctx), verify=False,
+    )
+    assert "unchecked" in [b.text for b in out.beats]   # not verified → not dropped
+    assert out.verify_report is None
+
+
+# --- Phase 3.3: count-agnostic titles + hook re-selection on drop ---
+
+
+def test_count_agnostic_title_strips_leading_count():
+    assert _count_agnostic_title("3 Surprising Facts About the Deep Ocean") == "Surprising Facts About the Deep Ocean"
+    assert _count_agnostic_title("Top 5 Ocean Facts") == "Ocean Facts"
+    assert _count_agnostic_title("The Deep Ocean") == "The Deep Ocean"  # no count → unchanged
+
+
+def test_reselect_hook_promotes_supported_alternative():
+    ctx = _ctx(("https://a", "A", "snip"))
+    script = BeatsScript(
+        title="Topic",
+        beats=[Beat(text="surviving fact", source="https://a"), Beat(text="outro")],  # chosen hook was dropped
+        hook_candidates=[
+            HookCandidate(text="dropped hook", source="https://a", score=5.0, chosen=True),
+            HookCandidate(text="good alt", source="https://a", score=4.0),
+            HookCandidate(text="bad alt", source="https://a", score=3.0),
+        ],
+    )
+
+    def vfn(items):
+        return [
+            {"index": it["index"], "claim_supported": it["claim"] == "good alt",
+             "number_supported": None, "source": "https://a" if it["claim"] == "good alt" else None}
+            for it in items
+        ]
+
+    _reselect_hook_if_dropped(script, ctx, vfn)
+    assert script.beats[0].text == "good alt"  # best supported grounded alternative promoted to hook
+
+
+def test_reselect_hook_falls_back_to_title_when_none_verify():
+    ctx = _ctx(("https://a", "A", "s"))
+    script = BeatsScript(
+        title="The Deep Ocean",
+        beats=[Beat(text="fact", source="https://a"), Beat(text="outro")],
+        hook_candidates=[
+            HookCandidate(text="dropped", source="https://a", score=5.0, chosen=True),
+            HookCandidate(text="alt", source="https://a", score=4.0),
+        ],
+    )
+
+    def vfn(items):  # nothing verifies
+        return [{"index": it["index"], "claim_supported": False, "number_supported": None, "source": None} for it in items]
+
+    _reselect_hook_if_dropped(script, ctx, vfn)
+    assert script.beats[0].text == "The Deep Ocean"  # non-asserting fallback = the title
+
+
+def test_reselect_hook_noop_when_hook_survived():
+    ctx = _ctx(("https://a", "A", "s"))
+    script = BeatsScript(
+        title="T",
+        beats=[Beat(text="kept hook", source="https://a"), Beat(text="outro")],
+        hook_candidates=[HookCandidate(text="kept hook", source="https://a", score=5.0, chosen=True)],
+    )
+    calls = {"n": 0}
+
+    def vfn(items):
+        calls["n"] += 1
+        return []
+
+    _reselect_hook_if_dropped(script, ctx, vfn)
+    assert script.beats[0].text == "kept hook"
+    assert calls["n"] == 0  # no extra verify call when the hook survived

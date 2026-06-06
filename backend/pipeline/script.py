@@ -18,9 +18,12 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # backend/
 
 import json
 
+import re
+
 from pipeline.config import get_env, require_env
-from pipeline.content import BeatsScript, HookCandidate, Source, parse_beats_response
+from pipeline.content import Beat, BeatsScript, HookCandidate, Source, parse_beats_response
 from pipeline import retrieval
+from pipeline import verify as verify_stage
 
 SYSTEM_PROMPT = (
     "You are a scriptwriter for short-form faceless videos (vertical, ~60-90s). "
@@ -32,6 +35,7 @@ SYSTEM_PROMPT = (
     "Pace for retention: open tight, deliver a clear payoff, no filler or dead air. "
     "The FIRST beat must be a punchy hook that opens the video; the LAST beat must be a "
     "closing call to action (e.g. follow for more). "
+    "The title must NOT promise a fixed count (avoid 'N facts ...') — unverifiable facts may be dropped. "
     'For any beat whose point is a single striking number or statistic, include '
     '"data": {"value": "<the number, e.g. 90%>", "label": "<short context, 2-5 words>"}. '
     'Optionally add "keywords": "<2-4 words>" to a beat to guide stock-footage search. '
@@ -39,6 +43,18 @@ SYSTEM_PROMPT = (
     'sources support and set each factual beat\'s "source" to the exact URL of the '
     "specific source that backs it; never invent a URL or an unsupported fact. "
     "No emojis, no markdown, no numbering."
+)
+
+VERIFY_SYSTEM_PROMPT = (
+    "You are a strict fact-checker. Each item has a CLAIM, an optional on-screen "
+    "VALUE (a number), and candidate SOURCES (snippets with URLs). Respond ONLY with "
+    'JSON {"verdicts": Verdict[]} where a Verdict is {"index": int, '
+    '"claim_supported": bool, "number_supported": bool|null, "source": string|null}. '
+    "Set claim_supported true ONLY if a SOURCE snippet actually states the claim. If a "
+    "VALUE is given, set number_supported true only if a snippet states that exact "
+    "number, else false; use null when no VALUE is given. Set source to the URL of the "
+    "snippet that best supports the claim (or null). Judge ONLY from the snippets given; "
+    "never use outside knowledge. Return a verdict for EVERY item index."
 )
 
 MAX_RETRIES = 1  # one retry on an invalid reply, then fail loudly (6.1 v1)
@@ -58,7 +74,8 @@ def build_user_prompt(topic: str, evidence_block: str | None = None) -> str:
             '- Also return 3-4 "hook_candidates": punchy one-line openers, each grounded in ONE fact '
             'above (set its "source") and spanning different patterns (curiosity gap, surprising '
             "stat, bold claim, direct question) — the most striking TRUE fact framed to stop the "
-            "scroll, never invented.\n\n"
+            "scroll, never invented.\n"
+            "- Each fact/stat must add NEW information — do not restate the fact used in the hook.\n\n"
             f"SOURCES:\n{evidence_block}\n\n"
             "Return the JSON object now."
         )
@@ -156,20 +173,33 @@ def generate_grounded_script(
     retrieve_fn=None,
     retrieval_key: str | None = None,
     cache_dir=None,
+    verify: bool = True,
+    verify_fn=None,
 ) -> BeatsScript:
-    """Retrieval-grounded generation (3.1).
+    """Retrieval-grounded generation (3.1) + hook selection (3.2) + verification (3.3).
 
     Tavily-search the topic, generate beats grounded in the retrieved material,
-    then ENFORCE that any citation a beat carries is a URL we actually retrieved —
-    citations are trustworthy by construction, not merely present. `retrieve_fn` is
-    injectable so this runs fully offline in tests; the LLM provider stays DeepSeek."""
+    enforce that any citation is a URL we actually retrieved, pick the strongest
+    hook, then (default-on, `verify=False` to skip for reach-only runs) verify each
+    claim is actually supported. `retrieve_fn`/`verify_fn` are injectable so this
+    runs fully offline in tests; the LLM provider stays DeepSeek."""
     retrieve_fn = retrieve_fn or retrieval.retrieve
     ctx = retrieve_fn(topic, key=retrieval_key, cache_dir=cache_dir)
     script = generate_script(
         topic, provider=provider, client=client, model=model, evidence_block=ctx.prompt_block()
     )
     _select_hook(script, ctx)
-    return _enforce_grounding(script, ctx)
+    _enforce_grounding(script, ctx)
+    if verify:
+        vfn = verify_fn or _build_verify_fn(provider=provider, client=client, model=model)
+        verify_stage.verify_script(
+            script, ctx, verify_fn=vfn, retrieve_fn=retrieve_fn,
+            retrieval_key=retrieval_key, cache_dir=cache_dir,
+        )
+        _reselect_hook_if_dropped(script, ctx, vfn)
+    script.title = _count_agnostic_title(script.title)
+    _warn_if_thin(script)
+    return script
 
 
 def _enforce_grounding(script: BeatsScript, ctx) -> BeatsScript:
@@ -231,6 +261,90 @@ def _select_hook(script: BeatsScript, ctx) -> BeatsScript:
     head.source = best.source
     script.hook_candidates = pool
     return script
+
+
+def _openai_client_and_model(provider, client, model):
+    """(client, model) for an OpenAI-compatible provider — used by the verifier."""
+    if provider == "ollama":
+        base, key = get_env("OLLAMA_BASE_URL", "http://localhost:11434") + "/v1", "ollama"
+        model = model or get_env("OLLAMA_MODEL", "llama3.1")
+    else:  # deepseek (default)
+        base, key = get_env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"), require_env("DEEPSEEK_API_KEY")
+        model = model or get_env("DEEPSEEK_MODEL", "deepseek-v4-flash")
+    if client is None:
+        from openai import OpenAI
+        client = OpenAI(api_key=key, base_url=base)
+    return client, model
+
+
+def _build_verify_fn(*, provider=None, client=None, model=None):
+    """Default claim verifier: ONE batched LLM call (same provider as generation,
+    DeepSeek by default) judging each claim against its candidate snippets. Injected
+    into verify_script; tests pass their own fake, so this runs only on real E2E."""
+    provider = provider or get_env("LLM_PROVIDER", "deepseek")
+
+    def verify_fn(items):
+        user = "Verify these items:\n" + json.dumps(items)
+        if provider == "anthropic":
+            import anthropic
+            ac = client or anthropic.Anthropic(api_key=require_env("ANTHROPIC_API_KEY"))
+            m = model or get_env("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+            msg = ac.messages.create(
+                model=m, max_tokens=1500, system=VERIFY_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user}],
+            )
+            content = msg.content[0].text
+        else:
+            c, m = _openai_client_and_model(provider, client, model)
+            resp = c.chat.completions.create(
+                model=m,
+                messages=[
+                    {"role": "system", "content": VERIFY_SYSTEM_PROMPT},
+                    {"role": "user", "content": user},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0,
+            )
+            content = resp.choices[0].message.content
+        return json.loads(content).get("verdicts", [])
+
+    return verify_fn
+
+
+_COUNT_PREFIX = re.compile(r"^\s*(?:top\s+)?\d+\s+", re.IGNORECASE)
+
+
+def _count_agnostic_title(title: str) -> str:
+    """Strip a leading count ('3 ', 'Top 5 ') so a dropped fact never leaves the
+    title promising more than the video delivers (Phase 3.3 floor handling)."""
+    return _COUNT_PREFIX.sub("", title, count=1).strip() or title
+
+
+def _reselect_hook_if_dropped(script: BeatsScript, ctx, verify_fn) -> None:
+    """If verification dropped the chosen hook, promote the next-best GROUNDED hook
+    candidate that verifies (ONE batched re-check), else fall back to the title — a
+    non-asserting opener with no claim to fail (Phase 3.3 hook-drop policy)."""
+    cands = script.hook_candidates or []
+    chosen = next((c for c in cands if c.chosen), None)
+    if not chosen or not script.beats or script.beats[0].text == chosen.text:
+        return  # no hook selection, or the chosen hook survived verification
+    alts = sorted((c for c in cands if c is not chosen and c.source), key=lambda c: c.score or 0, reverse=True)
+    if alts:
+        snippets = [{"url": s.url, "content": s.content} for s in ctx.snippets]
+        items = [{"index": j, "claim": c.text, "value": None, "snippets": snippets} for j, c in enumerate(alts)]
+        verdicts = {v["index"]: v for v in verify_fn(items)}
+        for j, c in enumerate(alts):
+            v = verdicts.get(j)
+            if v and v.get("claim_supported"):
+                script.beats.insert(0, Beat(text=c.text, source=v.get("source") or c.source))
+                return
+    script.beats.insert(0, Beat(text=script.title))  # non-asserting fallback
+
+
+def _warn_if_thin(script: BeatsScript) -> None:
+    n_facts = sum(1 for b in script.beats[1:] if b.source)
+    if n_facts < 2:
+        print(f"[script] warning: only {n_facts} verified fact(s) survived — consider a richer topic", file=sys.stderr)
 
 
 if __name__ == "__main__":

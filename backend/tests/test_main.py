@@ -22,6 +22,7 @@ def test_build_sources_sidecar_lists_cited_facts_and_sources():
             HookCandidate(text="90% unmapped — why?", pattern="surprising stat", score=5.0, chosen=True),
             HookCandidate(text="The ocean is vast.", pattern="bold claim", score=1.0),
         ],
+        verify_report=[{"text": "90% is unmapped", "verdict": "kept"}],
     )
     out = m.build_sources_sidecar(script)
     assert out["title"] == "Deep Sea"
@@ -31,6 +32,7 @@ def test_build_sources_sidecar_lists_cited_facts_and_sources():
         {"text": "90% unmapped — why?", "pattern": "surprising stat", "score": 5.0, "chosen": True},
         {"text": "The ocean is vast.", "pattern": "bold claim", "score": 1.0, "chosen": False},
     ]
+    assert out["verification"] == [{"text": "90% is unmapped", "verdict": "kept"}]
 
 
 def test_build_sources_sidecar_handles_ungrounded_script():
@@ -38,6 +40,7 @@ def test_build_sources_sidecar_handles_ungrounded_script():
     assert out["facts"] == []
     assert out["sources"] == []
     assert out["hooks"] == []
+    assert out["verification"] == []
 
 
 def test_run_builds_multi_template_spec_from_a_plan(monkeypatch, tmp_path):

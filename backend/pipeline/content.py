@@ -70,6 +70,7 @@ class BeatsScript(BaseModel):
     beats: List[Beat]
     sources: Optional[List[Source]] = None                 # retrieved evidence set (grounding); set in script.py
     hook_candidates: Optional[List[HookCandidate]] = None  # ranked opening hooks (3.2); set in script.py
+    verify_report: Optional[List[Dict]] = None             # per-beat verify verdicts (3.3); set in verify.py
 
     @field_validator("title")
     @classmethod

@@ -54,6 +54,22 @@ Hooks + the prompt nudge, validated on a re-run (same topic; Tavily cached, Deep
 - **De-dup nudge (3.3)** — "stats should cover facts not already in the hook" (mild hook/stat overlap: comparison in the hook, absolute in the stat).
 - **Footage relevance (later phase)** — weak / off-message clips ("deep ocean" → lakeside litter); the footage-relevance lever, out of Phase 3 scope.
 
+---
+
+## 🛡️ 3.3 validation (2026-06-06)
+
+The verify pass (default-on for client output) + hook-drop + floor handling, validated E2E:
+
+- **Verify:** ONE batched DeepSeek check per claim against its retrieved snippet; a **coverage guard** default-denies any beat the verifier omits (never ships unverified); the rescue is **batched** (≤2 verify calls/video); a **targeted per-claim Tavily lookup** rescues a true fact the broad search missed before any drop — all within the ≤4-Tavily / ≤3-LLM bound. On the run, all 6 facts verified-and-kept; verdicts recorded in `sources.json`.
+- **Verdict → action:** spoken-claim-unsupported → **DROP**; only-the-number-unsupported (narration stands) → **DEMOTE** (strip the on-screen number, keep the scene). The spoken claim is the test, since it's what reaches the viewer.
+- **Hook-drop:** if the chosen hook fails verification, **re-select** the next-best grounded candidate (re-verified in one batched check); fall back to the title as a non-asserting opener if none verify.
+- **Floor:** **count-agnostic titles** ("Deep Ocean Secrets…", no "N facts") so a dropped fact never leaves a stale count; warn if <2 facts survive; no regeneration (stays in budget).
+- Stat value **auto-fit** confirmed on "37,700".
+
+**Residual (minor, not a blocker):** the de-dup nudge is a soft prompt instruction — a chosen hook can still overlap a body fact (here, 700°F in both). A post-selection de-dup (drop a body beat that restates the chosen hook) would fully close it; deferred.
+
+**Phase 3 definition of done — met:** factual claims grounded in retrieved sources with citations; a deliberately generated/selected, grounded hook; sources surfaced (sidecar); full pipeline E2E green; provider stays DeepSeek; all changes additive; new shapes TDD'd. **135 tests green.**
+
 This document is the `§0` deliverable from the build prompt: a map of the current
 path, the constraints the code imposes, rulings on the open decisions, and a
 sub-step plan with gates. It is the single read-everything reference for the phase.
