@@ -116,13 +116,14 @@ def run(topic: str, fps: int = DEFAULT_FPS, on_stage=None):
 
 
 def _footage_requests(plan, offsets, catalog, fps):
-    """One FootageRequest per `scene`-kind beat, biased to a clip long enough to
-    cover the scene span plus the widest possible transition (so the loop
-    fallback rarely fires)."""
+    """One FootageRequest per `scene`-kind beat. `min_frames` (scene span + widest
+    transition) is computed for a future duration floor; selection itself is
+    relevance-first now. `broad_query` carries the title so fetch_footage can
+    broaden a too-specific query that returns no portrait clip."""
     _, durations, _ = assemble_stage.scene_spans(offsets, fps)
     headroom = max((m.durationFrames.max for m in catalog.values() if m.kind == "transition"), default=0)
     return [
-        FootageRequest(index=i, query=ps.query, min_frames=durations[i] + headroom)
+        FootageRequest(index=i, query=ps.query, min_frames=durations[i] + headroom, broad_query=plan.title)
         for i, ps in enumerate(plan.scenes)
         if ps.needs_footage
     ]

@@ -26,11 +26,14 @@ def test_select_clip_returns_link_and_duration_frames():
     assert dur_f == 180  # 6s * 30fps
 
 
-def test_select_clip_biases_toward_long_enough_clip():
-    # second video is long enough for min_frames=120 (4s@30), first is not
-    link, dur_f = select_clip([_video("short", 2), _video("long", 5)], min_frames=120, fps=30)
-    assert link == "long"
-    assert dur_f == 150
+def test_select_clip_returns_most_relevant_ignoring_duration():
+    # Phase 4 ②+③: relevance (Pexels order) wins — the FIRST usable clip is returned
+    # even when a later clip is longer. Duration no longer gates selection; the
+    # assemble loop seam, not selection, covers a short clip over the span.
+    link, dur_f = select_clip([_video("relevant_short", 1), _video("longer_offtopic", 9)],
+                              min_frames=120, fps=30)
+    assert link == "relevant_short"
+    assert dur_f == 30
 
 
 def test_select_clip_falls_back_to_first_when_none_long_enough():

@@ -30,9 +30,11 @@ class Clip:
 @dataclass
 class FootageRequest:
     """A request for one footage clip, emitted by the recipe plan for each
-    `scene`-kind beat. `min_frames` biases selection toward a clip long enough to
-    cover the scene span (dᵢ + transition headroom), so the loop fallback rarely
-    fires."""
+    `scene`-kind beat. `min_frames` is retained for a future duration floor (it no
+    longer gates selection — relevance wins, a short clip loops). `broad_query` is a
+    broader fallback (the video title) tried when `query` returns no portrait clip,
+    so a too-specific query degrades to a looser match instead of crashing."""
     index: int       # beat index (scene position)
     query: str
     min_frames: int = 0
+    broad_query: str | None = None
