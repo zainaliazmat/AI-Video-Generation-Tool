@@ -1,0 +1,31 @@
+{
+  "id": "outro",
+  "name": "Outro — Closing CTA",
+  "version": "1.0.0",
+  "author": "core",
+  "apiVersion": "1",
+  "kind": "outro",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string"
+      },
+      "cta": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title"
+    ],
+    "additionalProperties": false
+  },
+  "sampleProps": {
+    "title": "Follow for more",
+    "cta": "@yourchannel"
+  },
+  "durationFrames": {
+    "min": 30,
+    "max": 120
+  }
+}

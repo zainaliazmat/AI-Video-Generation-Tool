@@ -1,21 +1,10 @@
+"""Step 6.1 — script.py now emits a structured BeatsScript (title + beats[]),
+validated by Pydantic, with a single retry on an invalid LLM reply."""
 import json
 import pytest
-from pipeline.script import parse_script_response, generate_script
 
-
-def test_parse_valid():
-    content = json.dumps({"title": " T ", "lines": [" a ", "b"]})
-    assert parse_script_response(content) == {"title": "T", "lines": ["a", "b"]}
-
-
-def test_parse_missing_lines_raises():
-    with pytest.raises(ValueError):
-        parse_script_response(json.dumps({"title": "T"}))
-
-
-def test_parse_empty_lines_raises():
-    with pytest.raises(ValueError):
-        parse_script_response(json.dumps({"title": "T", "lines": []}))
+from pipeline.content import BeatsScript
+from pipeline.script import generate_script
 
 
 class _FakeMessage:
@@ -24,23 +13,52 @@ class _FakeMessage:
 
 
 class _FakeCompletions:
-    def __init__(self, content):
-        self._content = content
+    """Returns queued contents in order; repeats the last once exhausted."""
+
+    def __init__(self, contents):
+        self._contents = list(contents)
+        self.calls = 0
         self.captured = {}
 
     def create(self, **kwargs):
         self.captured = kwargs
-        return type("R", (), {"choices": [_FakeMessage(self._content)]})
+        self.calls += 1
+        content = self._contents[min(self.calls - 1, len(self._contents) - 1)]
+        return type("R", (), {"choices": [_FakeMessage(content)]})
 
 
 class _FakeClient:
-    def __init__(self, content):
-        self.chat = type("C", (), {"completions": _FakeCompletions(content)})()
+    def __init__(self, *contents):
+        self._completions = _FakeCompletions(contents)
+        self.chat = type("C", (), {"completions": self._completions})()
 
 
-def test_generate_script_deepseek_with_fake_client():
-    fake = _FakeClient(json.dumps({"title": "Deep Sea", "lines": ["one", "two"]}))
+def _valid(title="Deep Sea", beats=None):
+    beats = beats or [{"text": "one"}, {"text": "two", "data": {"value": "5"}}]
+    return json.dumps({"title": title, "beats": beats})
+
+
+def test_generate_script_returns_beats_script():
+    fake = _FakeClient(_valid())
     out = generate_script("deep sea", provider="deepseek", client=fake, model="deepseek-v4-flash")
-    assert out == {"title": "Deep Sea", "lines": ["one", "two"]}
-    assert fake.chat.completions.captured["model"] == "deepseek-v4-flash"
-    assert fake.chat.completions.captured["response_format"] == {"type": "json_object"}
+    assert isinstance(out, BeatsScript)
+    assert out.title == "Deep Sea"
+    assert out.beats[1].data == {"value": "5"}
+    assert fake._completions.captured["model"] == "deepseek-v4-flash"
+    assert fake._completions.captured["response_format"] == {"type": "json_object"}
+    assert fake._completions.calls == 1
+
+
+def test_generate_script_retries_once_then_succeeds():
+    # First reply is invalid (no beats), second is valid.
+    fake = _FakeClient(json.dumps({"title": "T"}), _valid())
+    out = generate_script("topic", provider="deepseek", client=fake, model="m")
+    assert isinstance(out, BeatsScript)
+    assert fake._completions.calls == 2
+
+
+def test_generate_script_fails_loudly_after_retry():
+    fake = _FakeClient(json.dumps({"title": "T"}), json.dumps({"title": "T"}))
+    with pytest.raises(ValueError):
+        generate_script("topic", provider="deepseek", client=fake, model="m")
+    assert fake._completions.calls == 2

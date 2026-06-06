@@ -24,9 +24,14 @@ from pipeline import tts as tts_stage
 from pipeline import timing as timing_stage
 from pipeline import footage as footage_stage
 from pipeline import assemble as assemble_stage
+from pipeline import recipe as recipe_stage
+from pipeline import validate as validate_stage
+from pipeline.contracts import FootageRequest
+from schema import Theme
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ASSETS_DIR = REPO_ROOT / "remotion" / "public" / "assets"
+TEMPLATES_DIR = REPO_ROOT / "templates"
 SPEC_OUT = REPO_ROOT / "spec.json"
 DEFAULT_FPS = 30
 
@@ -45,12 +50,19 @@ def run(topic: str, fps: int = DEFAULT_FPS, on_stage=None):
 
     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
     voiceover = ASSETS_DIR / "voiceover.wav"
+    catalog = validate_stage.load_catalog(TEMPLATES_DIR)
+    theme = Theme()
 
     emit("script", "running")
-    _log("[1/5] script (LLM)...")
-    result = script_stage.generate_script(topic)
-    title, lines = result["title"], result["lines"]
-    _log(f"      title={title!r}  lines={len(lines)}")
+    _log("[1/5] script (LLM) + recipe plan...")
+    script_result = script_stage.generate_script(topic)
+    # The recipe/director (deterministic) decides which template renders each
+    # beat. Fast + local, so it folds into the script stage.
+    plan = recipe_stage.plan(script_result, theme=theme)
+    # Every beat is narrated; tts/captions key off the narration text in order.
+    lines = [b.text for b in script_result.beats]
+    roles = [s.role for s in plan.scenes]
+    _log(f"      title={script_result.title!r}  beats={len(lines)}  plan={roles}")
     emit("script", "done")
 
     emit("voice", "running")
@@ -66,16 +78,30 @@ def run(topic: str, fps: int = DEFAULT_FPS, on_stage=None):
 
     emit("footage", "running")
     _log("[4/5] footage (Pexels)...")
-    clips = footage_stage.fetch_footage(lines, ASSETS_DIR)
+    clips = footage_stage.fetch_footage(_footage_requests(plan, offsets, catalog, fps), ASSETS_DIR, fps=fps)
     emit("footage", "done")
 
     emit("assemble", "running")
-    _log("[5/5] assemble -> spec.json...")
-    spec = assemble_stage.build_spec(title, offsets, words, clips, fps=fps)
+    _log("[5/5] assemble -> validate -> spec.json...")
+    spec = assemble_stage.build_spec(plan, offsets, words, clips, catalog=catalog, fps=fps)
+    validate_stage.validate_spec(spec, catalog)  # fail fast before writing
     assemble_stage.write_spec(spec, SPEC_OUT)
     _log(f"      wrote {SPEC_OUT}  ({spec.meta.durationInFrames} frames @ {fps}fps)")
     emit("assemble", "done")
     return spec
+
+
+def _footage_requests(plan, offsets, catalog, fps):
+    """One FootageRequest per `scene`-kind beat, biased to a clip long enough to
+    cover the scene span plus the widest possible transition (so the loop
+    fallback rarely fires)."""
+    _, durations, _ = assemble_stage.scene_spans(offsets, fps)
+    headroom = max((m.durationFrames.max for m in catalog.values() if m.kind == "transition"), default=0)
+    return [
+        FootageRequest(index=i, query=ps.query, min_frames=durations[i] + headroom)
+        for i, ps in enumerate(plan.scenes)
+        if ps.needs_footage
+    ]
 
 
 if __name__ == "__main__":

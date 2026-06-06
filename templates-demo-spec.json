@@ -1,0 +1,87 @@
+{
+  "meta": {
+    "title": "Template Showcase",
+    "fps": 30,
+    "width": 1080,
+    "height": 1920,
+    "durationInFrames": 450
+  },
+  "audio": {
+    "voiceover": "assets/voiceover.wav",
+    "music": null,
+    "musicVolumeDb": -18
+  },
+  "scenes": [
+    {
+      "id": "scene-hook",
+      "startFrame": 0,
+      "durationInFrames": 90,
+      "template": "hook",
+      "templateProps": { "title": "3 facts that sound fake", "subtitle": "but are completely true" }
+    },
+    {
+      "id": "scene-footage",
+      "startFrame": 90,
+      "durationInFrames": 150,
+      "template": "scene",
+      "templateProps": {
+        "media": {
+          "type": "video",
+          "src": "assets/clip-1.mp4",
+          "fit": "cover",
+          "kenBurns": { "from": 1.0, "to": 1.12, "originX": 0.5, "originY": 0.4 }
+        }
+      }
+    },
+    {
+      "id": "scene-stat",
+      "startFrame": 240,
+      "durationInFrames": 120,
+      "template": "stat",
+      "templateProps": { "value": "90%", "label": "of the ocean is unexplored", "icon": "🌊" }
+    },
+    {
+      "id": "scene-outro",
+      "startFrame": 360,
+      "durationInFrames": 90,
+      "template": "outro",
+      "templateProps": { "title": "Follow for more", "cta": "@deepdive" }
+    }
+  ],
+  "captions": [
+    { "text": "Three", "startFrame": 95, "endFrame": 120 },
+    { "text": "facts", "startFrame": 122, "endFrame": 150 },
+    { "text": "about", "startFrame": 152, "endFrame": 178 },
+    { "text": "the", "startFrame": 180, "endFrame": 198 },
+    { "text": "deep", "startFrame": 200, "endFrame": 230 },
+    { "text": "ninety", "startFrame": 245, "endFrame": 290 },
+    { "text": "percent", "startFrame": 292, "endFrame": 345 }
+  ],
+  "theme": {
+    "palette": {
+      "background": "#0A0E1A",
+      "foreground": "#FFFFFF",
+      "accent": "#5EE6C2",
+      "muted": "#94A3B8"
+    },
+    "fonts": { "heading": "Inter", "body": "Inter" },
+    "transition": "fade",
+    "caption": {
+      "fontFamily": "Inter",
+      "fontWeight": 800,
+      "color": "#FFFFFF",
+      "highlightColor": "#5EE6C2",
+      "strokeColor": "#000000",
+      "positionY": 0.8
+    }
+  },
+  "layers": [
+    {
+      "id": "brand-bug",
+      "template": "overlay",
+      "startFrame": 0,
+      "durationInFrames": 450,
+      "props": { "text": "@deepdive" }
+    }
+  ]
+}
