@@ -8,7 +8,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from pipeline.content import Beat, BeatsScript, Source, parse_beats_response
+from pipeline.content import Beat, BeatsScript, Source, HookCandidate, parse_beats_response
 
 
 def test_beat_minimal_is_text_only():
@@ -110,3 +110,34 @@ def test_beats_script_carries_sources():
 
 def test_beats_script_without_sources_defaults_none():
     assert BeatsScript.model_validate({"title": "T", "beats": [{"text": "x"}]}).sources is None
+
+
+# --- Phase 3.2 (hooks): candidate opening hooks the selector ranks ---
+
+
+def test_hook_candidate_has_text_pattern_source():
+    h = HookCandidate.model_validate(
+        {"text": "Deeper than Everest?", "pattern": "curiosity gap", "source": "https://a"}
+    )
+    assert h.text == "Deeper than Everest?"
+    assert h.pattern == "curiosity gap"
+    assert h.source == "https://a"
+
+
+def test_hook_candidate_minimal_is_text_only():
+    h = HookCandidate.model_validate({"text": "x"})
+    assert h.pattern == ""
+    assert h.source is None
+    assert h.score is None
+    assert h.chosen is False
+
+
+def test_beats_script_carries_hook_candidates():
+    s = BeatsScript.model_validate(
+        {"title": "T", "beats": [{"text": "a"}], "hook_candidates": [{"text": "h1", "pattern": "surprising stat"}]}
+    )
+    assert s.hook_candidates[0].text == "h1"
+
+
+def test_beats_script_without_hook_candidates_defaults_none():
+    assert BeatsScript.model_validate({"title": "T", "beats": [{"text": "x"}]}).hook_candidates is None

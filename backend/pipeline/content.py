@@ -45,10 +45,31 @@ class Source(BaseModel):
     title: Optional[str] = None
 
 
+class HookCandidate(BaseModel):
+    """One candidate opening hook (Phase 3.2): a punchy line grounded in a fact.
+    The model generates several across patterns; a deterministic selector picks the
+    strongest as beat 0 and the rest are retained (with scores) for inspection."""
+
+    text: str
+    pattern: str = ""                 # curiosity gap | surprising stat | bold claim | direct question
+    source: Optional[str] = None      # URL backing the hook's fact (grounding)
+    score: Optional[float] = None     # filled by the selector
+    chosen: bool = False              # True on the selected winner
+
+    @field_validator("text")
+    @classmethod
+    def _hook_text_non_empty(cls, v):
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("hook candidate text must be non-empty")
+        return v
+
+
 class BeatsScript(BaseModel):
     title: str
     beats: List[Beat]
-    sources: Optional[List[Source]] = None   # retrieved evidence set (grounding); set in script.py
+    sources: Optional[List[Source]] = None                 # retrieved evidence set (grounding); set in script.py
+    hook_candidates: Optional[List[HookCandidate]] = None  # ranked opening hooks (3.2); set in script.py
 
     @field_validator("title")
     @classmethod

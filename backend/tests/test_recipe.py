@@ -119,9 +119,11 @@ def test_hook_stat_outro_carry_no_footage():
 
 # ── prop filling (policy — flagged for review) ─────────────────────────────
 
-def test_hook_props_title_from_script_subtitle_from_first_beat():
+def test_hook_props_headline_from_first_beat_kicker_from_title():
+    # 3.2: the SPOKEN hook is the dominant line; the (generic) topic rides as a
+    # small kicker. The hook component sizes `title` for a full sentence.
     p = plan(_script(_beat("the spoken hook"), _beat("m"), _beat("c"), title="Three Facts"), theme=Theme())
-    assert p.scenes[0].props == {"title": "Three Facts", "subtitle": "the spoken hook"}
+    assert p.scenes[0].props == {"title": "the spoken hook", "subtitle": "Three Facts"}
 
 
 def test_stat_props_from_data_including_optional_icon():

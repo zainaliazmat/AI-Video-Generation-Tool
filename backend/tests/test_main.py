@@ -2,7 +2,7 @@
 footage(by plan) → assemble(plan) → validate → write."""
 import json
 import main as m
-from pipeline.content import BeatsScript, Beat, Source
+from pipeline.content import BeatsScript, Beat, Source, HookCandidate
 from pipeline.contracts import LineOffset, WordTiming, Clip, FootageRequest
 
 
@@ -18,17 +18,26 @@ def test_build_sources_sidecar_lists_cited_facts_and_sources():
             Beat(text="Follow for more"),                               # no source
         ],
         sources=[Source(url="https://noaa.gov/x", title="NOAA")],
+        hook_candidates=[
+            HookCandidate(text="90% unmapped — why?", pattern="surprising stat", score=5.0, chosen=True),
+            HookCandidate(text="The ocean is vast.", pattern="bold claim", score=1.0),
+        ],
     )
     out = m.build_sources_sidecar(script)
     assert out["title"] == "Deep Sea"
     assert out["facts"] == [{"text": "90% is unmapped", "source": "https://noaa.gov/x"}]
     assert out["sources"] == [{"url": "https://noaa.gov/x", "title": "NOAA"}]
+    assert out["hooks"] == [
+        {"text": "90% unmapped — why?", "pattern": "surprising stat", "score": 5.0, "chosen": True},
+        {"text": "The ocean is vast.", "pattern": "bold claim", "score": 1.0, "chosen": False},
+    ]
 
 
 def test_build_sources_sidecar_handles_ungrounded_script():
     out = m.build_sources_sidecar(BeatsScript(title="T", beats=[Beat(text="a")]))
     assert out["facts"] == []
     assert out["sources"] == []
+    assert out["hooks"] == []
 
 
 def test_run_builds_multi_template_spec_from_a_plan(monkeypatch, tmp_path):

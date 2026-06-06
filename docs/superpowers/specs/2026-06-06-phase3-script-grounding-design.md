@@ -39,6 +39,21 @@ First live grounded run — topic *"3 surprising facts about the deep ocean"* �
 
 **Folded into 3.3:** the verify pass is **default-on for client output**, and must **flag/demote a `stat` that loses (or lacks valid support for) its citation** — an on-screen number with no supporting source is the worst case for the accuracy goal.
 
+---
+
+## 🎬 3.2 validation (2026-06-06)
+
+Hooks + the prompt nudge, validated on a re-run (same topic; Tavily cached, DeepSeek regenerated):
+
+- **Deliberate hook selection:** 5 grounded candidates scored deterministically; the winner (4.0 — a grounded number + question) became beat 0. Candidates retained in `sources.json` for inspection.
+- **Hook is the hero:** the spoken hook renders large / high-contrast; the topic is a small accent kicker (the buried-grey-subtitle problem is gone). Confirmed on the render.
+- **Nudge closed both gaps:** the unsupported "three people" claim was **omitted from the facts** (it survived only as a non-chosen hook candidate); per-claim source matching produced **2 distinct, correctly-attributed sources** (was 1-for-all).
+
+**Carry-forward (not 3.2 regressions):**
+- **Stat value auto-fit** — a long value ("37,700 gigatonnes") overflows the frame; fix = fit the stat value to width (handles too-long *and* too-short). Same root as the Phase-2 single-digit-scaling item. → near-term polish, stat template only.
+- **De-dup nudge (3.3)** — "stats should cover facts not already in the hook" (mild hook/stat overlap: comparison in the hook, absolute in the stat).
+- **Footage relevance (later phase)** — weak / off-message clips ("deep ocean" → lakeside litter); the footage-relevance lever, out of Phase 3 scope.
+
 This document is the `§0` deliverable from the build prompt: a map of the current
 path, the constraints the code imposes, rulings on the open decisions, and a
 sub-step plan with gates. It is the single read-everything reference for the phase.

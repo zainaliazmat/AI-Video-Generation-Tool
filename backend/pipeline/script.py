@@ -19,15 +19,17 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # backend/
 import json
 
 from pipeline.config import get_env, require_env
-from pipeline.content import BeatsScript, Source, parse_beats_response
+from pipeline.content import BeatsScript, HookCandidate, Source, parse_beats_response
 from pipeline import retrieval
 
 SYSTEM_PROMPT = (
     "You are a scriptwriter for short-form faceless videos (vertical, ~60-90s). "
     "Respond ONLY with a JSON object of the form "
-    '{"title": string, "beats": Beat[]} where a Beat is '
-    '{"text": string, "data"?: object, "keywords"?: string, "source"?: string}. '
+    '{"title": string, "beats": Beat[], "hook_candidates"?: Hook[]} where a Beat is '
+    '{"text": string, "data"?: object, "keywords"?: string, "source"?: string} '
+    'and a Hook is {"text": string, "pattern": string, "source"?: string}. '
     "Each beat's `text` is ONE spoken narration sentence (8-18 words). Produce 5-8 beats. "
+    "Pace for retention: open tight, deliver a clear payoff, no filler or dead air. "
     "The FIRST beat must be a punchy hook that opens the video; the LAST beat must be a "
     "closing call to action (e.g. follow for more). "
     'For any beat whose point is a single striking number or statistic, include '
@@ -46,9 +48,17 @@ def build_user_prompt(topic: str, evidence_block: str | None = None) -> str:
     if evidence_block:
         return (
             f"Topic: {topic}\n\n"
-            "Ground every factual claim in the SOURCES below. State ONLY what they support; "
-            'set each factual beat\'s "source" to the exact URL of the specific source you used; '
-            "if nothing below supports a point, leave it out.\n\n"
+            "Ground every factual claim in the SOURCES below.\n"
+            "- State ONLY a claim that a specific source snippet below supports. If you cannot pin "
+            "a claim to a snippet, OMIT it — a shorter, fully-grounded script beats a padded one.\n"
+            '- Set each factual beat\'s "source" to the exact URL of the ONE source whose snippet '
+            "actually contains that claim; prefer the snippet that states it, and do not reuse one "
+            "source for a claim it does not cover.\n"
+            "- Never invent a URL, a number, or a fact.\n"
+            '- Also return 3-4 "hook_candidates": punchy one-line openers, each grounded in ONE fact '
+            'above (set its "source") and spanning different patterns (curiosity gap, surprising '
+            "stat, bold claim, direct question) — the most striking TRUE fact framed to stop the "
+            "scroll, never invented.\n\n"
             f"SOURCES:\n{evidence_block}\n\n"
             "Return the JSON object now."
         )
@@ -158,6 +168,7 @@ def generate_grounded_script(
     script = generate_script(
         topic, provider=provider, client=client, model=model, evidence_block=ctx.prompt_block()
     )
+    _select_hook(script, ctx)
     return _enforce_grounding(script, ctx)
 
 
@@ -175,6 +186,50 @@ def _enforce_grounding(script: BeatsScript, ctx) -> BeatsScript:
             seen.add(beat.source)
             cited.append(Source(url=beat.source, title=title_by_url.get(beat.source)))
     script.sources = cited or None
+    return script
+
+
+def _score_hook(c: HookCandidate) -> float:
+    """Deterministic strength of an opening hook (3.2). A concrete number hooks
+    hardest; a question opens a curiosity gap; a real grounded source and a punchy
+    length help. Reproducible, like the recipe — and tunable in one place."""
+    text = c.text or ""
+    words = text.split()
+    score = 0.0
+    if any(ch.isdigit() for ch in text):
+        score += 2.0          # a concrete number/stat stops the scroll hardest
+    if text.rstrip().endswith("?"):
+        score += 1.0          # curiosity gap / direct question
+    if c.source:
+        score += 1.0          # grounded in a real retrieved source
+    if 6 <= len(words) <= 14:
+        score += 1.0          # punchy length
+    return score
+
+
+def _select_hook(script: BeatsScript, ctx) -> BeatsScript:
+    """Pick the strongest opening hook and make it beat 0 (Phase 3.2).
+
+    The model's hook candidates AND its own opening beat compete. Bogus citations
+    are dropped first (so only truly-grounded hooks earn the grounding bonus), each
+    is scored, the winner becomes beat 0, and the full scored pool is retained on
+    `hook_candidates` for inspection / later override (auto-pick with override)."""
+    if not script.beats:
+        return script
+    head = script.beats[0]
+    pool = list(script.hook_candidates or [])
+    pool.append(HookCandidate(text=head.text, pattern="default", source=head.source))
+    valid = ctx.urls
+    for c in pool:
+        if c.source and c.source not in valid:
+            c.source = None       # a non-retrieved citation is no citation
+        c.score = _score_hook(c)
+    best = max(pool, key=lambda c: c.score)   # first max wins → a real candidate beats the default on ties
+    for c in pool:
+        c.chosen = c is best
+    head.text = best.text
+    head.source = best.source
+    script.hook_candidates = pool
     return script
 
 

@@ -52,7 +52,11 @@ def build_sources_sidecar(script) -> dict:
     (Phase 3 §5.2 — sidecar over render-contract churn)."""
     facts = [{"text": b.text, "source": b.source} for b in script.beats if b.source]
     sources = [{"url": s.url, "title": s.title} for s in (script.sources or [])]
-    return {"title": script.title, "facts": facts, "sources": sources}
+    hooks = [
+        {"text": h.text, "pattern": h.pattern, "score": h.score, "chosen": h.chosen}
+        for h in (script.hook_candidates or [])
+    ]
+    return {"title": script.title, "hooks": hooks, "facts": facts, "sources": sources}
 
 
 def run(topic: str, fps: int = DEFAULT_FPS, on_stage=None):

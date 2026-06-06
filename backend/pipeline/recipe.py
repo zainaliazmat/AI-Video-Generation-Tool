@@ -113,7 +113,9 @@ def plan(
     for i, beat in enumerate(beats):
         role = _derive_role(i, n, beat)
         if role == "hook":
-            props: Dict = {"title": script.title, "subtitle": beat.text}
+            # The SPOKEN hook is the dominant line; the (generic) topic rides as a
+            # small kicker. The hook component sizes `title` for a full sentence.
+            props: Dict = {"title": beat.text, "subtitle": script.title}
             scenes.append(PlannedScene(role, catalog["hook"], props, needs_footage=False))
         elif role == "outro":
             scenes.append(PlannedScene(role, catalog["outro"], {"title": beat.text}, needs_footage=False))

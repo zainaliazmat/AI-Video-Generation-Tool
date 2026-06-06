@@ -121,3 +121,62 @@ def test_grounded_keeps_valid_source_and_drops_bogus_one():
     assert out.beats[0].source == "https://a"
     assert out.beats[1].source is None
     assert [s.url for s in out.sources] == ["https://a"]
+
+
+# --- Phase 3.2: grounded hook candidate generation + deterministic selection ---
+
+
+def _script_json(beats, hooks=None, title="T"):
+    obj = {"title": title, "beats": beats}
+    if hooks is not None:
+        obj["hook_candidates"] = hooks
+    return json.dumps(obj)
+
+
+def test_grounded_selects_highest_scoring_hook_as_beat0():
+    ctx = _ctx(("https://a", "A", "snippet"))
+    content = _script_json(
+        beats=[{"text": "Let me tell you about the ocean."}, {"text": "body", "source": "https://a"}, {"text": "Follow for more."}],
+        hooks=[{"text": "90% of the ocean is unmapped — why?", "pattern": "surprising stat", "source": "https://a"}],
+    )
+    out = generate_grounded_script("t", provider="deepseek", client=_FakeClient(content), model="m", retrieve_fn=_fake_retrieve(ctx))
+    assert out.beats[0].text == "90% of the ocean is unmapped — why?"   # the stronger candidate becomes beat 0
+    assert out.beats[0].source == "https://a"
+    chosen = [h for h in out.hook_candidates if h.chosen]
+    assert len(chosen) == 1 and chosen[0].text == "90% of the ocean is unmapped — why?"
+
+
+def test_grounded_falls_back_to_model_opener_when_no_candidates():
+    ctx = _ctx(("https://a", "A", "s"))
+    content = _script_json(beats=[{"text": "Original opener."}, {"text": "Follow."}], hooks=None)
+    out = generate_grounded_script("t", provider="deepseek", client=_FakeClient(content), model="m", retrieve_fn=_fake_retrieve(ctx))
+    assert out.beats[0].text == "Original opener."                       # unchanged — its own opener competes and wins by default
+    assert out.hook_candidates is not None and len(out.hook_candidates) == 1
+    assert out.hook_candidates[0].chosen is True
+
+
+def test_grounded_strips_chosen_hook_source_not_retrieved():
+    ctx = _ctx(("https://a", "A", "s"))
+    content = _script_json(
+        beats=[{"text": "Weak."}, {"text": "Follow."}],
+        hooks=[{"text": "An amazing 11 km deep — really?", "pattern": "surprising stat", "source": "https://not-retrieved"}],
+    )
+    out = generate_grounded_script("t", provider="deepseek", client=_FakeClient(content), model="m", retrieve_fn=_fake_retrieve(ctx))
+    assert out.beats[0].text == "An amazing 11 km deep — really?"        # still wins on number+question+brevity
+    assert out.beats[0].source is None                                  # bogus source dropped → no false citation on the hook
+
+
+def test_grounded_retains_all_hook_candidates_scored():
+    ctx = _ctx(("https://a", "A", "s"))
+    content = _script_json(
+        beats=[{"text": "Default opener here now."}, {"text": "Follow."}],
+        hooks=[
+            {"text": "Plain statement about oceans.", "pattern": "bold claim"},
+            {"text": "Did you know 90% is unmapped?", "pattern": "surprising stat", "source": "https://a"},
+        ],
+    )
+    out = generate_grounded_script("t", provider="deepseek", client=_FakeClient(content), model="m", retrieve_fn=_fake_retrieve(ctx))
+    assert len(out.hook_candidates) == 3                                 # 2 model candidates + the model's own opener
+    assert all(h.score is not None for h in out.hook_candidates)
+    assert sum(1 for h in out.hook_candidates if h.chosen) == 1
+    assert out.beats[0].text == "Did you know 90% is unmapped?"          # grounded stat-question wins

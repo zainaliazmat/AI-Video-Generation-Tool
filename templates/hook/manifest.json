@@ -21,8 +21,8 @@
     "additionalProperties": false
   },
   "sampleProps": {
-    "title": "3 facts that sound fake",
-    "subtitle": "but are completely true"
+    "title": "90% of the ocean is unmapped — why?",
+    "subtitle": "Deep ocean facts"
   },
   "durationFrames": {
     "min": 30,
