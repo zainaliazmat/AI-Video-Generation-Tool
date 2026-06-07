@@ -123,7 +123,7 @@ def plan(
             scenes.append(PlannedScene(role, catalog["stat"], _stat_props(beat), needs_footage=False))
         else:  # scene
             scenes.append(
-                PlannedScene(role, catalog["scene"], {}, needs_footage=True, query=(beat.keywords or beat.text))
+                PlannedScene(role, catalog["scene"], {}, needs_footage=True, query=(beat.keywords or script.title))
             )
 
     _assign_transitions(scenes, theme.transition, transition_policy)

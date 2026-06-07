@@ -51,32 +51,37 @@ def _video_duration_frames(video, fps):
     return round(dur * fps) if dur else None
 
 
-def select_clip(videos, *, min_frames, fps):
-    """Choose a (download_link, duration_frames) from Pexels search `videos`.
+def select_clip(videos, *, min_frames=0, fps):
+    """Return (link, duration_frames) for the most relevant usable clip, subject to a
+    SOFT loop floor: walk Pexels relevance order and take the first usable portrait
+    clip whose duration clears `min_frames`; if none clears it, fall back to the first
+    usable clip regardless of length.
 
-    Bias toward the FIRST video (Pexels relevance order) whose duration covers
-    `min_frames` and has a usable portrait mp4; fall back to the first usable
-    video when none are long enough.
+    `min_frames` is the loop FLOOR (half the scene span, set by the caller — K=2), not
+    the full span: relevance still wins among clips long enough to loop ≤ ~2× over the
+    beat. The floor only displaces a *pathologically* short top hit when a longer
+    usable clip exists below it (the diagnostic's 1s radar clip that looped 5× while a
+    relevant 17s clip sat at rank 2). A clip with unknown duration is treated as
+    clearing the floor (we can't measure it, so don't penalize it). When nothing
+    clears the floor the assemble loop seam still covers the short clip over the span.
     """
-    usable = []  # (link, duration_frames)
-    fallback = None
+    first_usable = None
     for v in videos:
         link = pick_video_file(v.get("video_files", []))
         if not link:
             continue
-        dur_f = _video_duration_frames(v, fps)
-        if fallback is None:
-            fallback = (link, dur_f)
-        if dur_f is not None and dur_f >= min_frames:
-            return link, dur_f
-        usable.append((link, dur_f))
-    return fallback if fallback is not None else (None, None)
+        frames = _video_duration_frames(v, fps)
+        if first_usable is None:
+            first_usable = (link, frames)
+        if frames is None or frames >= min_frames:
+            return link, frames
+    return first_usable if first_usable is not None else (None, None)
 
 
 def search_pexels(query: str, key: str) -> dict:
     r = requests.get(
         PEXELS_VIDEO_SEARCH,
-        params={"query": query, "orientation": "portrait", "per_page": 5, "size": "medium"},
+        params={"query": query, "orientation": "portrait", "per_page": 15, "size": "medium"},
         headers={"Authorization": key},
         timeout=30,
     )
@@ -99,6 +104,28 @@ def _read_sidecar(path: Path):
         return None
 
 
+def _fetch_one(req, query, out_dir, *, fps, key, search, downloader):
+    """Cache-or-fetch one clip for `query`. Returns a Clip, or None when the search
+    yields no usable portrait clip (so the caller can broaden). Caches by query
+    slug; a sidecar `.frames` preserves the duration across the download cache."""
+    slug = query_slug(query)
+    dest = out_dir / f"footage_{slug}.mp4"
+    sidecar = out_dir / f"footage_{slug}.frames"
+
+    if dest.exists():
+        duration_frames = _read_sidecar(sidecar)  # may be None if unknown
+    else:
+        data = search(query, key)
+        url, duration_frames = select_clip(data.get("videos", []), min_frames=req.min_frames, fps=fps)
+        if not url:
+            return None
+        downloader(url, dest)
+        if duration_frames is not None:
+            sidecar.write_text(str(duration_frames))
+
+    return Clip(index=req.index, query=query, path=f"assets/{dest.name}", duration_frames=duration_frames)
+
+
 def fetch_footage(requests_, out_dir, *, fps: int = 30, key=None, search=None, downloader=None) -> list[Clip]:
     key = key or require_env("PEXELS_API_KEY")
     search = search or search_pexels
@@ -109,23 +136,16 @@ def fetch_footage(requests_, out_dir, *, fps: int = 30, key=None, search=None, d
     clips: list[Clip] = []
     for req in requests_:
         query = req.query.strip()
-        slug = query_slug(query)
-        dest = out_dir / f"footage_{slug}.mp4"
-        sidecar = out_dir / f"footage_{slug}.frames"
-
-        if dest.exists():
-            duration_frames = _read_sidecar(sidecar)  # may be None if unknown
-        else:
-            data = search(query, key)
-            videos = data.get("videos", [])
-            url, duration_frames = select_clip(videos, min_frames=req.min_frames, fps=fps)
-            if not url:
-                raise RuntimeError(f"No Pexels portrait video for beat {req.index}: {query!r}")
-            downloader(url, dest)
-            if duration_frames is not None:
-                sidecar.write_text(str(duration_frames))
-
-        clips.append(Clip(index=req.index, query=query, path=f"assets/{dest.name}", duration_frames=duration_frames))
+        clip = _fetch_one(req, query, out_dir, fps=fps, key=key, search=search, downloader=downloader)
+        if clip is None and req.broad_query:
+            # The specific query whiffed (zero portrait clips). Broaden to the title
+            # before failing the whole render — a loosely-relevant clip beats a crash.
+            broad = req.broad_query.strip()
+            if broad and broad.lower() != query.lower():
+                clip = _fetch_one(req, broad, out_dir, fps=fps, key=key, search=search, downloader=downloader)
+        if clip is None:
+            raise RuntimeError(f"No Pexels portrait video for beat {req.index}: {req.query!r}")
+        clips.append(clip)
     return clips
 
 
