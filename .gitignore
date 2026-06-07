@@ -45,3 +45,6 @@ remotion/public/assets/*.frames
 
 # remotion bundle output
 remotion/build/
+
+# footage-relevance review scratch (eyes-on bundles for the reviewer; not deliverables)
+/*-review-frames.zip
