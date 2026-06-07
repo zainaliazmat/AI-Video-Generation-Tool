@@ -140,3 +140,17 @@ def test_footage_requests_carry_title_as_broad_query():
     reqs = _footage_requests(p, offsets, {}, 30)
     assert len(reqs) == 1                          # only the middle scene needs footage
     assert reqs[0].broad_query == "Coral Reefs"    # title threaded so fetch_footage can broaden on a whiff
+
+
+def test_footage_request_min_frames_is_half_span_loop_floor():
+    # Phase 4 duration floor (K=2): min_frames is the loop FLOOR, not the full span.
+    # half-span means "skip clips that would loop more than ~2× over the beat" — set
+    # here, applied as a soft floor in select_clip. Full span would resurrect the old
+    # over-aggressive bias that dropped the relevant top hit for a longer worse one.
+    from main import _footage_requests
+    from pipeline import assemble as assemble_stage
+    p = plan(BeatsScript(title="T", beats=[Beat(text="h"), Beat(text="scene"), Beat(text="o")]), theme=Theme())
+    offsets = [LineOffset(0, "h", 0.0, 1.0), LineOffset(1, "scene", 1.0, 3.0), LineOffset(2, "o", 3.0, 4.0)]
+    _, durations, _ = assemble_stage.scene_spans(offsets, 30)
+    reqs = _footage_requests(p, offsets, {}, 30)
+    assert reqs[0].min_frames == durations[1] // 2   # half the span (K=2), not the full span

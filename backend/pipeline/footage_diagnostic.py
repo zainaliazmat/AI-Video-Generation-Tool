@@ -1,8 +1,9 @@
 """Phase 4 — footage relevance DIAGNOSTIC (the gate instrument; not the pipeline).
 
 A measurement tool. For each footage beat it shows the EXACT query sent + the full
-ranked Pexels candidate list (rank, duration, usable?, which one select_clip picks,
-thumbnail URL, page slug), the loop factor of the pick (playthroughs to fill the
+ranked Pexels candidate list (rank, duration, usable?), BOTH the relevance-first pick
+(*) and what the real select_clip renders under the loop floor (K) so K-floor
+displacement-or-dormancy is visible, the loop factor of each (playthroughs to fill the
 span -> the relevance-vs-duration band question), and downloads the top-N thumbnails
 so the RELEVANCE read is eyes-on, not slug-guessed.
 
@@ -26,7 +27,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # backend/
 import math
 from pathlib import Path
 
-from pipeline.footage import pick_video_file, _video_duration_frames, search_pexels
+from pipeline.footage import pick_video_file, _video_duration_frames, search_pexels, select_clip
 
 
 def summarize_candidates(videos, *, fps):
@@ -60,6 +61,21 @@ def loop_playthroughs(span_frames, clip_frames):
     return math.ceil(span_frames / clip_frames)
 
 
+def kfloor_pick(videos, *, min_frames, fps):
+    """(rank, frames) the REAL select_clip renders under the loop floor — computed by
+    CALLING select_clip and locating its link in the ranked list, never a reimpl. This
+    is what the pipeline ACTUALLY picks, distinct from summarize_candidates' relevance-
+    first `selected` marker; comparing the two ranks shows K-floor displacement (the
+    floor bumped a too-short top hit down) vs dormancy (floor changed nothing)."""
+    link, frames = select_clip(videos, min_frames=min_frames, fps=fps)
+    if link is None:
+        return None, None
+    for rank, v in enumerate(videos, 1):
+        if pick_video_file(v.get("video_files", [])) == link:
+            return rank, frames
+    return None, frames
+
+
 # ── instrumentation (I/O; the pure cores above are unit-tested) ─────────────
 
 def _download_thumb(url, dest):
@@ -74,7 +90,7 @@ def _download_thumb(url, dest):
         return False
 
 
-def _report(label, query, videos, *, fps, span_frames=None, broad_query=None,
+def _report(label, query, videos, *, fps, span_frames=None, min_frames=0, broad_query=None,
             thumbs_dir=None, top_n=8, tag="q"):
     rows = summarize_candidates(videos, fps=fps)
     hdr = f"\n=== {label}: query={query!r}"
@@ -84,21 +100,30 @@ def _report(label, query, videos, *, fps, span_frames=None, broad_query=None,
     if not rows:
         print("  (no candidates returned)")
         return rows
-    print("  rank  dur(s)  frames  usable  sel  thumbnail")
+    kf_rank, kf_frames = kfloor_pick(videos, min_frames=min_frames, fps=fps)  # * = relevance-first, K = real select_clip
+    print("  rank  dur(s)  frames  usable  mark  thumbnail")
     for r in rows:
+        mark = ('*' if r['selected'] else '') + ('K' if r['rank'] == kf_rank else '')
         print(f"  {r['rank']:>3}   {str(r['duration_s']):>5}  {str(r['duration_frames']):>6}  "
-              f"{('yes' if r['usable'] else 'no'):>6}  {('*' if r['selected'] else ''):>3}  {r['thumb']}")
+              f"{('yes' if r['usable'] else 'no'):>6}  {mark:>4}  {r['thumb']}")
     sel = next((r for r in rows if r["selected"]), None)
     if sel and span_frames:
         pt = loop_playthroughs(span_frames, sel["duration_frames"])
-        loops = "  (LOOPS)" if pt and pt >= 2 else ""
-        print(f"  -> pick rank {sel['rank']}: {sel['duration_frames']}f vs span ~{span_frames}f"
-              f"  => {pt} playthrough(s){loops}")
+        kpt = loop_playthroughs(span_frames, kf_frames)
+        print(f"  -> relevance-first: rank {sel['rank']} ({sel['duration_frames']}f, {pt} playthrough(s))"
+              f"   vs span ~{span_frames}f, floor {min_frames}f")
+        if kf_rank == sel["rank"]:
+            print(f"  -> K-floor DORMANT: select_clip keeps rank {sel['rank']}"
+                  f"{'   (still LOOPS)' if pt and pt >= 2 else ''}")
+        else:
+            print(f"  -> K-floor DISPLACED: rank {sel['rank']} ({pt} playthrough(s)) -> rank {kf_rank} "
+                  f"({kpt} playthrough(s))   <<< EYES-ON: is rank {kf_rank} more or less relevant than rank {sel['rank']}?")
     if thumbs_dir:
         d = Path(thumbs_dir); d.mkdir(parents=True, exist_ok=True)
         for r in rows[:top_n]:
             if r["thumb"]:
-                dest = d / f"{tag}_rank{r['rank']:02d}{'_SEL' if r['selected'] else ''}.jpg"
+                suffix = ('_SEL' if r['selected'] else '') + ('_KFLOOR' if r['rank'] == kf_rank else '')
+                dest = d / f"{tag}_rank{r['rank']:02d}{suffix}.jpg"
                 _download_thumb(r["thumb"], dest)
         print(f"  thumbnails -> {d}/{tag}_rank*.jpg")
     return rows
@@ -118,15 +143,17 @@ def _run_topic(topic, *, fps, thumbs_dir, top_n, key):
             continue
         words = len(beat.text.split())
         est_span = round(words / 2.5 * fps)  # ~2.5 words/sec; NO TTS here, so ESTIMATE
+        floor = est_span // 2                # half-span loop floor (K=2), mirrors main._footage_requests
         videos = search_pexels(ps.query, key).get("videos", [])
         usable = any(pick_video_file(v.get("video_files", [])) for v in videos)
         _report(f"beat {i} (~{words}w, est span {est_span}f)", ps.query, videos, fps=fps,
-                span_frames=est_span, broad_query=plan.title, thumbs_dir=thumbs_dir, top_n=top_n, tag=f"b{i}")
+                span_frames=est_span, min_frames=floor, broad_query=plan.title,
+                thumbs_dir=thumbs_dir, top_n=top_n, tag=f"b{i}")
         if not usable:
             print("  -> WHIFF: no usable portrait clip; broadening to title")
             bvideos = search_pexels(plan.title, key).get("videos", [])
             _report(f"beat {i} [broadened]", plan.title, bvideos, fps=fps, span_frames=est_span,
-                    thumbs_dir=thumbs_dir, top_n=top_n, tag=f"b{i}_broad")
+                    min_frames=floor, thumbs_dir=thumbs_dir, top_n=top_n, tag=f"b{i}_broad")
 
 
 if __name__ == "__main__":
@@ -147,6 +174,7 @@ if __name__ == "__main__":
     for i, q in enumerate(args.query):
         videos = search_pexels(q, pexels_key).get("videos", [])
         _report(f"query[{i}]", q, videos, fps=args.fps, span_frames=args.span,
+                min_frames=(args.span // 2 if args.span else 0),
                 thumbs_dir=args.thumbs, top_n=args.top_n, tag=f"q{i}")
 
     if args.topic:

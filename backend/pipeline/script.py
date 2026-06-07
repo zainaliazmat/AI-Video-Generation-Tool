@@ -41,6 +41,10 @@ SYSTEM_PROMPT = (
     'For EVERY beat, add "keywords": "<2-4 words>" naming a CONCRETE, FILMABLE subject for '
     'stock-footage search — a visible scene or object (e.g. "melting glacier", "city traffic '
     'at night"), never an abstract concept (avoid "economic growth", "inflation", "freedom"). '
+    'Keywords must be GENERIC stock imagery, not a specific named place, person, event, or '
+    'branded object that a stock library will not have — steer those to the filmable generic '
+    'or mood that evokes them (e.g. "Challenger Deep" -> "dark ocean abyss", "Nobel medal" -> '
+    '"physics laboratory", "the Antikythera mechanism" -> "ancient bronze gears"). '
     "When grounding SOURCES are provided in the user message, state ONLY facts those "
     'sources support and set each factual beat\'s "source" to the exact URL of the '
     "specific source that backs it; never invent a URL or an unsupported fact. "

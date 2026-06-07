@@ -52,19 +52,30 @@ def _video_duration_frames(video, fps):
 
 
 def select_clip(videos, *, min_frames=0, fps):
-    """Return (link, duration_frames) for the MOST RELEVANT usable clip: the first
-    video in Pexels relevance order that has a usable portrait mp4.
+    """Return (link, duration_frames) for the most relevant usable clip, subject to a
+    SOFT loop floor: walk Pexels relevance order and take the first usable portrait
+    clip whose duration clears `min_frames`; if none clears it, fall back to the first
+    usable clip regardless of length.
 
-    Duration no longer gates selection — a short clip loops over its span in
-    `assemble`, so relevance is never traded away for length (the old min_frames
-    bias actively dropped the top hit for a longer, less-relevant one). `min_frames`
-    is kept for a future duration floor, deferred until the gate shows loops read.
+    `min_frames` is the loop FLOOR (half the scene span, set by the caller — K=2), not
+    the full span: relevance still wins among clips long enough to loop ≤ ~2× over the
+    beat. The floor only displaces a *pathologically* short top hit when a longer
+    usable clip exists below it (the diagnostic's 1s radar clip that looped 5× while a
+    relevant 17s clip sat at rank 2). A clip with unknown duration is treated as
+    clearing the floor (we can't measure it, so don't penalize it). When nothing
+    clears the floor the assemble loop seam still covers the short clip over the span.
     """
+    first_usable = None
     for v in videos:
         link = pick_video_file(v.get("video_files", []))
-        if link:
-            return link, _video_duration_frames(v, fps)
-    return None, None
+        if not link:
+            continue
+        frames = _video_duration_frames(v, fps)
+        if first_usable is None:
+            first_usable = (link, frames)
+        if frames is None or frames >= min_frames:
+            return link, frames
+    return first_usable if first_usable is not None else (None, None)
 
 
 def search_pexels(query: str, key: str) -> dict:
