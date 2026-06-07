@@ -38,7 +38,13 @@ SYSTEM_PROMPT = (
     "The title must NOT promise a fixed count (avoid 'N facts ...') — unverifiable facts may be dropped. "
     'For any beat whose point is a single striking number or statistic, include '
     '"data": {"value": "<the number, e.g. 90%>", "label": "<short context, 2-5 words>"}. '
-    'Optionally add "keywords": "<2-4 words>" to a beat to guide stock-footage search. '
+    'For EVERY beat, add "keywords": "<2-4 words>" naming a CONCRETE, FILMABLE subject for '
+    'stock-footage search — a visible scene or object (e.g. "melting glacier", "city traffic '
+    'at night"), never an abstract concept (avoid "economic growth", "inflation", "freedom"). '
+    'Keywords must be GENERIC stock imagery, not a specific named place, person, event, or '
+    'branded object that a stock library will not have — steer those to the filmable generic '
+    'or mood that evokes them (e.g. "Challenger Deep" -> "dark ocean abyss", "Nobel medal" -> '
+    '"physics laboratory", "the Antikythera mechanism" -> "ancient bronze gears"). '
     "When grounding SOURCES are provided in the user message, state ONLY facts those "
     'sources support and set each factual beat\'s "source" to the exact URL of the '
     "specific source that backs it; never invent a URL or an unsupported fact. "

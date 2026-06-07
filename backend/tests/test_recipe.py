@@ -102,9 +102,15 @@ def test_scene_query_prefers_keywords():
     assert p.scenes[1].query == "jellyfish"
 
 
-def test_scene_query_falls_back_to_text():
-    p = plan(_script(_beat("open"), _beat("a jellyfish drifts"), _beat("close")), theme=Theme())
-    assert p.scenes[1].query == "a jellyfish drifts"
+def test_scene_query_falls_back_to_title_not_sentence():
+    # Phase 4 ①: no keywords → use the short TITLE, never the 8-18 word narration
+    # sentence (a poor stock-search query).
+    p = plan(
+        _script(_beat("open"), _beat("a jellyfish drifts through the dark water"), _beat("close"),
+                title="Ocean Life"),
+        theme=Theme(),
+    )
+    assert p.scenes[1].query == "Ocean Life"
 
 
 def test_hook_stat_outro_carry_no_footage():
