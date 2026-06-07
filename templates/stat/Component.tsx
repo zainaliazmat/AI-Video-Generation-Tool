@@ -2,6 +2,7 @@ import React from 'react';
 import {AbsoluteFill, Easing, interpolate, useCurrentFrame} from 'remotion';
 import type {TemplateProps} from '../sdk';
 import type {StatData} from './schema';
+import {heroBackground, HERO_BACKGROUND_DEFAULT} from '../heroBackground';
 
 /**
  * `stat` — a single oversized value (in the theme accent) with a label beneath.
@@ -32,6 +33,7 @@ const Component: React.FC<TemplateProps<StatData>> = ({data, theme}) => {
     <AbsoluteFill
       style={{
         backgroundColor: theme.palette.background,
+        backgroundImage: heroBackground(theme.palette, HERO_BACKGROUND_DEFAULT),
         alignItems: 'center',
         justifyContent: 'center',
         padding: '0 80px',

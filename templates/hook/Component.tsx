@@ -2,6 +2,7 @@ import React from 'react';
 import {AbsoluteFill, interpolate, useCurrentFrame} from 'remotion';
 import type {TemplateProps} from '../sdk';
 import type {HookData} from './schema';
+import {heroBackground, HERO_BACKGROUND_DEFAULT} from '../heroBackground';
 
 /**
  * `hook` — the opening attention-grabber. The spoken hook line (`title`) is the
@@ -34,6 +35,7 @@ const Component: React.FC<TemplateProps<HookData>> = ({data, theme}) => {
     <AbsoluteFill
       style={{
         backgroundColor: theme.palette.background,
+        backgroundImage: heroBackground(theme.palette, HERO_BACKGROUND_DEFAULT),
         alignItems: 'center',
         justifyContent: 'center',
         padding: '0 96px',
