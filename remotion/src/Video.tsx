@@ -4,6 +4,7 @@ import {TransitionSeries, linearTiming} from '@remotion/transitions';
 import type {Spec, Scene as SceneType, Theme} from './schema';
 import {Captions} from './Captions';
 import {deriveCaptionSuppressRanges} from './captions-suppress';
+import {hookWordTimingsForScene} from './word-alignment';
 import {registry} from '../../templates/registry.generated';
 
 /**
@@ -39,22 +40,36 @@ const MissingTemplate: React.FC<{templateId?: string}> = ({templateId}) => (
 );
 
 /** Render a scene's content via its `render`-kind template. The discriminated
- * registry guarantees a transition can't be dispatched here (it narrows out). */
+ * registry guarantees a transition can't be dispatched here (it narrows out).
+ * For the hook, compute the (fail-closed) per-word narration timings from the
+ * captions so the headline can light word-by-word; null/absent → non-synced. */
 function renderScene(
   scene: SceneType,
   theme: Theme,
   fps: number,
   durationInFrames: number,
+  captions: Spec['captions'],
 ): React.ReactNode {
   const entry = scene.template ? registry[scene.template] : undefined;
   if (entry && entry.type === 'render') {
     const Component = entry.component;
+    const title = (scene.templateProps as {title?: unknown} | undefined)?.title;
+    const wordTimings =
+      scene.template === 'hook' && typeof title === 'string'
+        ? hookWordTimingsForScene(
+            title,
+            captions,
+            scene.startFrame,
+            scene.durationInFrames,
+          ) ?? undefined
+        : undefined;
     return (
       <Component
         data={scene.templateProps ?? {}}
         theme={theme}
         timing={{fps, durationInFrames}}
         assets={{}}
+        wordTimings={wordTimings}
       />
     );
   }
@@ -111,7 +126,7 @@ export const Video: React.FC<{spec: Spec}> = ({spec}) => {
         const seqDur = scene.durationInFrames + T;
         const nodes: React.ReactNode[] = [
           <TransitionSeries.Sequence key={scene.id} durationInFrames={seqDur}>
-            {renderScene(scene, theme, fps, seqDur)}
+            {renderScene(scene, theme, fps, seqDur, captions)}
           </TransitionSeries.Sequence>,
         ];
         if (tx) {
@@ -133,7 +148,7 @@ export const Video: React.FC<{spec: Spec}> = ({spec}) => {
         from={scene.startFrame}
         durationInFrames={scene.durationInFrames}
       >
-        {renderScene(scene, theme, fps, scene.durationInFrames)}
+        {renderScene(scene, theme, fps, scene.durationInFrames, captions)}
       </Sequence>
     ))
   );
