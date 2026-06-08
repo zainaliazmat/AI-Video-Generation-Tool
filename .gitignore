@@ -46,5 +46,18 @@ remotion/public/assets/*.frames
 # remotion bundle output
 remotion/build/
 
-# footage-relevance review scratch (eyes-on bundles for the reviewer; not deliverables)
-/*-review-frames.zip
+# review / gate scratch — frame strips, contact-sheet zips, listen renders, and
+# the real TTS wavs the gate harness produces. Pure review artifacts; never pushed.
+*-review-frames.zip
+*-review-frames/
+*-review.zip
+*-review/
+hook-gate-frames/
+hook-wordsync-gate-frames.zip
+hook-wordsync-gate-frames/
+hook-wordsync-listen-*.mp4
+remotion/public/assets/hook-gate-*.wav
+
+# local repro / bakeoff scratch specs (throwaway debugging fixtures)
+bakeoff-*.json
+repro-*.json

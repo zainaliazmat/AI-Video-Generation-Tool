@@ -19,6 +19,7 @@
 import type {ComponentType} from 'react';
 import type {TransitionPresentation} from '@remotion/transitions';
 import type {Theme} from '../remotion/src/schema';
+import type {HookWordTiming} from '../remotion/src/word-alignment';
 
 export type {Theme};
 
@@ -76,6 +77,13 @@ export interface TemplateProps<Data = Record<string, unknown>> {
   timing: {fps: number; durationInFrames: number};
   /** staticFile-resolved paths for any media the template needs */
   assets: ResolvedAssets;
+  /**
+   * RENDER-DERIVED (not from spec): per-display-word narration timings for a
+   * voice-locked reveal, computed by the renderer from spec.captions ∩ the scene
+   * span ∩ the display text. Absent/empty → the template MUST fall back to its
+   * non-synced entrance (FAIL-CLOSED). Only the hook consumes it today.
+   */
+  wordTimings?: readonly HookWordTiming[];
 }
 
 /**
