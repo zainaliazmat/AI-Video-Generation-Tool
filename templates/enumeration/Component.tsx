@@ -5,35 +5,40 @@ import type {EnumerationData} from './schema';
 import {heroBackground, HERO_BREATH_PERIOD} from '../heroBackground';
 import {iconForLabel} from './icons';
 import {itemRevealState} from './reveal';
+import {enumerationSizing} from './sizing';
 
 /**
- * `enumeration` — an enumerable set (e.g. sun/moon/planets/eclipse/phases) revealed
- * one-by-one IN SYNC with the narration. When the renderer supplies per-item
- * narration timings (`itemTimings`), each item enters exactly as its label is
- * spoken; with no timings (alignment failed / absent) it FALLS BACK to a uniform
- * even-staggered entrance (fail-closed, set-level — a clean reveal beats a drifting
- * one). The manifest's rendersOwnText:true suppresses the global karaoke caption
- * over this scene so the spoken labels don't show twice. Background matches the
- * hero cards (breathing spotlight).
+ * `enumeration` — an enumerable set revealed one-by-one IN SYNC with the narration.
+ * Each item enters with a back-ease overshoot exactly as its label is spoken (or,
+ * fail-closed, on an even-staggered cadence); the just-revealed item is briefly
+ * accented and the accent decays as the next item reveals (only the active item
+ * lit). The column is centered and auto-fits the item count to fill the frame.
+ * rendersOwnText:true suppresses the global caption. (Tier 1: emoji icons stay;
+ * Tier 2 swaps them for a designed set.)
  */
 
-// Even-staggered fallback: distribute reveals across the span when not voice-locked.
+// Even-staggered fallback starts when there are no voice-locked timings.
 function fallbackStartFrames(n: number, durationInFrames: number): number[] {
   const lead = 8;
-  const tail = 12;
-  const usable = Math.max(1, durationInFrames - lead - tail);
+  const usable = Math.max(1, durationInFrames - lead - 12);
   const denom = Math.max(1, n - 1);
   return Array.from({length: n}, (_, i) => lead + Math.round((usable * i) / denom));
 }
 
+const LAST_WINDOW = 24; // the last item's accent window (no "next item" to bound it)
+
 const Component: React.FC<TemplateProps<EnumerationData>> = ({data, theme, timing, itemTimings}) => {
   const frame = useCurrentFrame();
   const items = data.items;
-  // Fail-closed: only sync when we have exactly one timing per item.
   const synced = Boolean(itemTimings && itemTimings.length === items.length);
   const starts = synced
     ? (itemTimings as NonNullable<typeof itemTimings>).map((t) => t.startFrame)
     : fallbackStartFrames(items.length, timing.durationInFrames);
+  // active window [start_i, end_i): end = next start, last = start + LAST_WINDOW (capped).
+  const ends = starts.map((s, i) =>
+    i < starts.length - 1 ? starts[i + 1] : Math.min(s + LAST_WINDOW, timing.durationInFrames),
+  );
+  const sz = enumerationSizing(items.length);
 
   return (
     <AbsoluteFill
@@ -42,34 +47,36 @@ const Component: React.FC<TemplateProps<EnumerationData>> = ({data, theme, timin
         backgroundImage: heroBackground(theme.palette, frame / HERO_BREATH_PERIOD),
         alignItems: 'center',
         justifyContent: 'center',
-        padding: '0 120px',
+        padding: '0 96px',
       }}
     >
-      <div style={{display: 'flex', flexDirection: 'column', gap: 40, width: '100%', maxWidth: 840}}>
+      {/* centered block; rows left-aligned so icons line up vertically */}
+      <div style={{display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: sz.rowGap}}>
         {items.map((label, i) => {
-          const st = itemRevealState(frame, starts[i]);
+          const st = itemRevealState(frame, starts[i], ends[i]);
+          // active highlight: label tints foreground → accent while lit, with a small pop.
+          const labelColor = st.accent > 0.5 ? theme.palette.accent : theme.palette.foreground;
+          const accentPop = 1 + 0.06 * st.accent;
           return (
             <div
               key={i}
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: 36,
+                gap: Math.round(sz.iconSize * 0.38),
                 opacity: st.opacity,
-                transform: `translateY(${st.translateY}px) scale(${st.scale})`,
+                transform: `translateY(${st.translateY}px) rotate(${st.rotate}deg) scale(${st.scale * accentPop})`,
                 transformOrigin: 'left center',
               }}
             >
               <span
                 style={{
-                  fontSize: 92,
+                  fontSize: sz.iconSize,
                   lineHeight: 1,
-                  width: 104,
+                  width: Math.round(sz.iconSize * 1.12),
                   textAlign: 'center',
                   flexShrink: 0,
-                  // Color emoji carry their own color; this only tints the monochrome
-                  // FALLBACK_ICON so it stays visible on the dark gradient (else the
-                  // ● renders black-on-dark and disappears — caught at the emoji still).
+                  // emoji keep their own color; this tints the mono fallback mark so it stays visible.
                   color: theme.palette.muted,
                   filter: 'drop-shadow(0 4px 18px rgba(0,0,0,0.5))',
                 }}
@@ -80,9 +87,9 @@ const Component: React.FC<TemplateProps<EnumerationData>> = ({data, theme, timin
                 style={{
                   fontFamily: `${theme.fonts.heading}, system-ui, sans-serif`,
                   fontWeight: 800,
-                  fontSize: 64,
+                  fontSize: sz.labelSize,
                   letterSpacing: '-0.01em',
-                  color: theme.palette.foreground,
+                  color: labelColor,
                   textShadow: '0 4px 24px rgba(0,0,0,0.5)',
                 }}
               >
