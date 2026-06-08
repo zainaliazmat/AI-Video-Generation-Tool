@@ -41,7 +41,7 @@ const Component: React.FC<TemplateProps<HookData>> = ({data, theme, wordTimings}
   const frame = useCurrentFrame();
   const words = splitDisplayWords(data.title);
   // Fail-closed: only sync when we have exactly one timing per display word.
-  const synced = Boolean(wordTimings && wordTimings.length === words.length);
+  const synced = Boolean(wordTimings && words.length > 0 && wordTimings.length === words.length);
 
   // Kicker is identical in both modes (Round-1 stagger).
   const kicker = interpolate(frame, [0, 10], [0, 1], CLAMP);
@@ -193,7 +193,7 @@ const Underline: React.FC<{
         backgroundColor: accent,
         opacity,
         transform: `scaleX(${scaleX})`,
-        transformOrigin: HOOK_UNDERLINE_MODE === 'sweep' ? 'left center' : 'center',
+        transformOrigin: synced && HOOK_UNDERLINE_MODE === 'sweep' ? 'left center' : 'center',
       }}
     />
   );
