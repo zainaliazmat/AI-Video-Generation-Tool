@@ -80,7 +80,7 @@ def run(topic: str, fps: int = DEFAULT_FPS, on_stage=None):
     script_result = script_stage.generate_grounded_script(topic, cache_dir=RETRIEVAL_CACHE)
     # The recipe/director (deterministic) decides which template renders each
     # beat. Fast + local, so it folds into the script stage.
-    plan = recipe_stage.plan(script_result, theme=theme)
+    plan = recipe_stage.plan(script_result, theme=theme, manifests=catalog)
     # Every beat is narrated; tts/captions key off the narration text in order.
     lines = [b.text for b in script_result.beats]
     roles = [s.role for s in plan.scenes]
