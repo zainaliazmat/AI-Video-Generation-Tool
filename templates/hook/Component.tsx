@@ -2,14 +2,14 @@ import React from 'react';
 import {AbsoluteFill, interpolate, useCurrentFrame} from 'remotion';
 import type {TemplateProps} from '../sdk';
 import type {HookData} from './schema';
-import {heroBackground, HERO_BACKGROUND_DEFAULT} from '../heroBackground';
+import {heroBackground} from '../heroBackground';
 
 /**
  * `hook` — the opening attention-grabber. The spoken hook line (`title`) is the
  * HERO: large, high-contrast, and auto-sized so a full sentence fills the frame
  * without overflowing. An optional `subtitle` rides above as a small accent
- * kicker (the video's topic). Rise-and-fade in; fully theme-driven (no hardcoded
- * colors/fonts), so the same template re-themes for free.
+ * kicker (the video's topic). The kicker, headline, and underline rise+fade in
+ * on a short STAGGER (not a hard cut); fully theme-driven, so it re-themes free.
  */
 
 // Auto-size the hero line: short punchy hooks read BIG; a long sentence still
@@ -23,25 +23,27 @@ function heroFontSize(text: string): number {
   return 120;
 }
 
+const CLAMP = {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'} as const;
+
 const Component: React.FC<TemplateProps<HookData>> = ({data, theme}) => {
   const frame = useCurrentFrame();
-  const enter = interpolate(frame, [0, 12], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
-  const y = interpolate(enter, [0, 1], [48, 0]);
+  // Staggered entrance windows (frames): kicker → headline → underline, so the
+  // card builds in rather than appearing all at once on a hard cut.
+  const kicker = interpolate(frame, [0, 10], [0, 1], CLAMP);
+  const headline = interpolate(frame, [5, 18], [0, 1], CLAMP);
+  const underline = interpolate(frame, [13, 24], [0, 1], CLAMP);
 
   return (
     <AbsoluteFill
       style={{
         backgroundColor: theme.palette.background,
-        backgroundImage: heroBackground(theme.palette, HERO_BACKGROUND_DEFAULT),
+        backgroundImage: heroBackground(theme.palette),
         alignItems: 'center',
         justifyContent: 'center',
         padding: '0 96px',
       }}
     >
-      <div style={{transform: `translateY(${y}px)`, opacity: enter, textAlign: 'center', maxWidth: 900}}>
+      <div style={{textAlign: 'center', maxWidth: 900}}>
         {data.subtitle ? (
           <div
             style={{
@@ -52,6 +54,8 @@ const Component: React.FC<TemplateProps<HookData>> = ({data, theme}) => {
               letterSpacing: '0.18em',
               textTransform: 'uppercase',
               color: theme.palette.accent,
+              opacity: kicker,
+              transform: `translateY(${interpolate(kicker, [0, 1], [24, 0])}px)`,
             }}
           >
             {data.subtitle}
@@ -66,6 +70,8 @@ const Component: React.FC<TemplateProps<HookData>> = ({data, theme}) => {
             letterSpacing: '-0.02em',
             color: theme.palette.foreground,
             textShadow: '0 4px 32px rgba(0,0,0,0.55)',
+            opacity: headline,
+            transform: `translateY(${interpolate(headline, [0, 1], [40, 0])}px)`,
           }}
         >
           {data.title}
@@ -77,7 +83,8 @@ const Component: React.FC<TemplateProps<HookData>> = ({data, theme}) => {
             height: 10,
             borderRadius: 999,
             backgroundColor: theme.palette.accent,
-            transform: `scaleX(${enter})`,
+            opacity: underline,
+            transform: `scaleX(${underline})`,
           }}
         />
       </div>
