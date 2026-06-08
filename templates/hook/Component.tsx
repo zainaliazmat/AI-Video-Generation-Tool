@@ -2,7 +2,7 @@ import React from 'react';
 import {AbsoluteFill, interpolate, useCurrentFrame} from 'remotion';
 import type {TemplateProps} from '../sdk';
 import type {HookData} from './schema';
-import {heroBackground} from '../heroBackground';
+import {heroBackground, HERO_BREATH_PERIOD} from '../heroBackground';
 
 /**
  * `hook` — the opening attention-grabber. The spoken hook line (`title`) is the
@@ -37,7 +37,7 @@ const Component: React.FC<TemplateProps<HookData>> = ({data, theme}) => {
     <AbsoluteFill
       style={{
         backgroundColor: theme.palette.background,
-        backgroundImage: heroBackground(theme.palette),
+        backgroundImage: heroBackground(theme.palette, frame / HERO_BREATH_PERIOD),
         alignItems: 'center',
         justifyContent: 'center',
         padding: '0 96px',

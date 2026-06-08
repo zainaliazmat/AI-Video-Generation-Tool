@@ -2,7 +2,7 @@ import React from 'react';
 import {AbsoluteFill, Easing, interpolate, useCurrentFrame} from 'remotion';
 import type {TemplateProps} from '../sdk';
 import type {OutroData} from './schema';
-import {heroBackground} from '../heroBackground';
+import {heroBackground, HERO_BREATH_PERIOD} from '../heroBackground';
 
 /**
  * `outro` — the closing card. The title rises+fades in, then the accent CTA pill
@@ -24,7 +24,7 @@ const Component: React.FC<TemplateProps<OutroData>> = ({data, theme}) => {
     <AbsoluteFill
       style={{
         backgroundColor: theme.palette.background,
-        backgroundImage: heroBackground(theme.palette),
+        backgroundImage: heroBackground(theme.palette, frame / HERO_BREATH_PERIOD),
         alignItems: 'center',
         justifyContent: 'center',
         padding: '0 96px',

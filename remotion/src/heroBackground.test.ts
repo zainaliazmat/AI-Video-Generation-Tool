@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {heroBackground} from '../../templates/heroBackground';
+import {heroBackground, HERO_BREATH_PERIOD} from '../../templates/heroBackground';
 import type {Palette} from './schema';
 
 // A palette with a distinctive (non-black) background + white foreground so the
@@ -27,16 +27,32 @@ describe('heroBackground', () => {
     expect(shifted).not.toBe(bg); // no hardcoded base color
   });
 
-  it('keeps the center dark for text contrast (low lift toward foreground)', () => {
+  it('keeps the center dark for text contrast at every breath phase', () => {
     // The spotlight lifts the center toward the foreground, but only slightly, so
-    // the hero text never loses contrast. (fg = #ffffff in this palette.)
-    const bg = heroBackground(PALETTE);
-    const lifts = [...bg.matchAll(/#ffffff\s+(\d+)%/g)].map((m) => Number(m[1]));
-    expect(lifts.length).toBeGreaterThan(0); // it does lift toward fg
-    expect(Math.max(...lifts)).toBeLessThanOrEqual(20); // but stays subtle
+    // the hero text never loses contrast — at any point in the breath cycle.
+    for (const phase of [0, 0.1, 0.25, 0.5, 0.75, 0.9]) {
+      const bg = heroBackground(PALETTE, phase);
+      const lifts = [...bg.matchAll(/#ffffff\s+([\d.]+)%/g)].map((m) => Number(m[1]));
+      expect(lifts.length).toBeGreaterThan(0); // it does lift toward fg
+      expect(Math.max(...lifts)).toBeLessThanOrEqual(20); // but stays subtle
+    }
   });
 
-  it('is deterministic for the same palette', () => {
-    expect(heroBackground(PALETTE)).toBe(heroBackground(PALETTE));
+  it('breathes: the spotlight shifts continuously with phase (no frozen holds)', () => {
+    const base = heroBackground(PALETTE);
+    expect(heroBackground(PALETTE, 0)).toBe(base); // first frame == the static base
+    const peak = heroBackground(PALETTE, 0.25);
+    const trough = heroBackground(PALETTE, 0.75);
+    expect(peak).not.toBe(base); // mid-breath differs from rest
+    expect(trough).not.toBe(base);
+    expect(peak).not.toBe(trough); // the two extremes differ from each other
+  });
+
+  it('exposes a positive breath period for the components to phase against', () => {
+    expect(HERO_BREATH_PERIOD).toBeGreaterThan(0);
+  });
+
+  it('is deterministic for the same palette + phase', () => {
+    expect(heroBackground(PALETTE, 0.3)).toBe(heroBackground(PALETTE, 0.3));
   });
 });

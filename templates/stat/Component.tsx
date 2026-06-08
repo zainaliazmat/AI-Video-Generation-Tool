@@ -2,7 +2,7 @@ import React from 'react';
 import {AbsoluteFill, Easing, interpolate, useCurrentFrame} from 'remotion';
 import type {TemplateProps} from '../sdk';
 import type {StatData} from './schema';
-import {heroBackground} from '../heroBackground';
+import {heroBackground, HERO_BREATH_PERIOD} from '../heroBackground';
 import {parseCountUp, formatCount} from '../countUp';
 
 /**
@@ -51,7 +51,7 @@ const Component: React.FC<TemplateProps<StatData>> = ({data, theme}) => {
     <AbsoluteFill
       style={{
         backgroundColor: theme.palette.background,
-        backgroundImage: heroBackground(theme.palette),
+        backgroundImage: heroBackground(theme.palette, frame / HERO_BREATH_PERIOD),
         alignItems: 'center',
         justifyContent: 'center',
         padding: '0 80px',
