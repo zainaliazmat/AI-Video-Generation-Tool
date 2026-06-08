@@ -65,6 +65,8 @@ export function alignHookWords(
   const span = captions
     .filter((c) => c.startFrame < sceneEnd && c.endFrame > sceneStart)
     .slice()
+    // sort by start frame; whisper never emits equal startFrames, and Array.sort
+    // is stable, so any (theoretical) tie keeps input order.
     .sort((a, b) => a.startFrame - b.startFrame);
   if (span.length === 0) return null;
 
@@ -82,7 +84,10 @@ export function alignHookWords(
 
   const out: HookWordTiming[] = [];
   let p = 0; // pointer into `caps`
-  let lastEnd = sceneStart; // boundary for zero-width punctuation tokens
+  // Boundary for zero-width punctuation tokens. A leading punctuation-only
+  // token has no prior word, so it anchors at sceneStart (harmless: punctuation
+  // never receives the active accent).
+  let lastEnd = sceneStart;
   for (const word of words) {
     const nw = normalize(word);
     if (nw.length === 0) {

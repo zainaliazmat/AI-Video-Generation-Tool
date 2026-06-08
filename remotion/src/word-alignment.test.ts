@@ -120,6 +120,10 @@ describe('alignHookWords — fail-closed cases', () => {
     const captions = [cap('Why', 0, 6)];
     expect(alignHookWords('Why the ocean', captions, 0, 30)).toBeNull();
   });
+  it('returns null when overlapping captions are all punctuation (empty char stream)', () => {
+    const captions = [cap('...', 0, 6), cap('—', 6, 12)];
+    expect(alignHookWords('Why the ocean', captions, 0, 30)).toBeNull();
+  });
 });
 
 describe('alignHookWords — punctuation-only display token', () => {
