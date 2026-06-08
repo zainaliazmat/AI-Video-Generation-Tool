@@ -46,6 +46,9 @@ DEFAULT_LINE = "The bronze gears traced the sun, the moon, the planets, an eclip
 SYNC_ITEMS = ["Sun", "Moon", "Planets", "Eclipse", "Phases"]
 # Out-of-order vs the narration (planets before moon) → realistic fail-closed.
 FAILCLOSED_ITEMS = ["Sun", "Planets", "Moon", "Eclipse", "Phases"]
+# Six items, named in order — proves the auto-fit layout shrinks (not wraps) at 6.
+SIXITEM_LINE = "The orrery traced the sun, the moon, the planets, an eclipse, a comet, and lunar phases."
+SIXITEM_ITEMS = ["Sun", "Moon", "Planets", "Eclipse", "Comet", "Phases"]
 
 
 # ── Python mirror of remotion/src/item-timing.ts (for the ground-truth table) ──
@@ -88,6 +91,25 @@ def item_onsets(labels, words):
         out.append((label, caps[at][1]))
         ci = at + len(toks)
     return out
+
+
+# ── entrance amplitude (Python mirror of reveal.ts itemRevealState scale) ──────
+# The amplitude readout reports the DESIGNED overshoot the component renders (both
+# derive from scale = 0.8 + 0.2*easeOutBack(t)); the MP4 is the ground truth for
+# feel. Per the cycle-amplitude principle: report peak-to-settle swing, not a
+# per-frame delta.
+def _ease_out_back(t: float) -> float:
+    c = min(1.0, max(0.0, t))
+    s = 1.70158
+    p = c - 1
+    return 1 + (s + 1) * p ** 3 + s * p ** 2
+
+
+def entrance_amplitude(enter: int = 10) -> dict:
+    scales = [0.8 + 0.2 * _ease_out_back(i / enter) for i in range(0, enter + 6)]
+    peak = max(scales)
+    return {"peak": peak, "settle": 0.8 + 0.2 * _ease_out_back(1.0),
+            "peak_at": scales.index(peak)}
 
 
 def base_theme() -> dict:
@@ -140,9 +162,17 @@ def extract_strip(mp4: Path, name: str, frames: list[int]) -> list[Path]:
     return pngs
 
 
-def write_table(name: str, mode: str, words, items, onsets) -> None:
-    lines = [f"# Enumeration motion gate — {name} ({mode})", "",
-             "## Item → reveal alignment", "",
+def write_table(name: str, mode: str, words, items, onsets, amp=None) -> None:
+    lines = [f"# Enumeration motion gate — {name} ({mode})", ""]
+    if amp is not None:
+        lines += [
+            "## Entrance amplitude (designed overshoot; peak-to-settle swing)", "",
+            f"- scale: settle `{amp['settle']:.3f}` → peak `{amp['peak']:.3f}` "
+            f"(**+{amp['peak'] - amp['settle']:.3f}** at f+{amp['peak_at']}), translateY 28→0px, rotate -2→0°",
+            "- the MP4 is the ground truth for feel; this is the magnitude the component renders.",
+            "",
+        ]
+    lines += ["## Item → reveal alignment", "",
              "| # | item | spoken-word onset frame | onset t(s) | resolver |",
              "|---|------|------------------------|------------|----------|"]
     if onsets is None:
@@ -163,18 +193,24 @@ def write_table(name: str, mode: str, words, items, onsets) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices=["sync", "failclosed"], default="sync")
-    ap.add_argument("--line", default=DEFAULT_LINE)
+    ap.add_argument("--mode", choices=["sync", "failclosed", "sixitem"], default="sync")
+    ap.add_argument("--line", default="")  # empty → the per-mode default line
     args = ap.parse_args()
     name = args.mode
-    items = SYNC_ITEMS if args.mode == "sync" else FAILCLOSED_ITEMS
+    lines = {"sync": DEFAULT_LINE, "failclosed": DEFAULT_LINE, "sixitem": SIXITEM_LINE}
+    items_by_mode = {"sync": SYNC_ITEMS, "failclosed": FAILCLOSED_ITEMS, "sixitem": SIXITEM_ITEMS}
+    line = args.line or lines[args.mode]
+    items = items_by_mode[args.mode]
 
-    built = build(args.line, name, items)
+    built = build(line, name, items)
     words, total = built["words"], built["total"]
     onsets = item_onsets(items, words)
+    amp = entrance_amplitude()
     print(f"[gate] items={items}")
     print(f"[gate] caption words ({len(words)}): {[w.text for w in words]}")
     print(f"[gate] resolved onsets: {onsets}")
+    print(f"[gate] entrance scale: settle {amp['settle']:.3f} → peak {amp['peak']:.3f} "
+          f"(+{amp['peak'] - amp['settle']:.3f} at f+{amp['peak_at']}), translateY 28→0px")
 
     mp4 = render_mp4(name)
     print(f"[gate] rendered {mp4.relative_to(ROOT)} ({total} frames)")
@@ -186,7 +222,7 @@ def main() -> None:
     extract_strip(mp4, name, frames)
     print(f"[gate] extracted {len(frames)} strip frames -> {GATE_OUT.relative_to(ROOT)}")
 
-    write_table(name, args.mode, words, items, onsets)
+    write_table(name, args.mode, words, items, onsets, amp)
 
 
 if __name__ == "__main__":
