@@ -5,6 +5,7 @@ import type {Spec, Scene as SceneType, Theme} from './schema';
 import {Captions} from './Captions';
 import {deriveCaptionSuppressRanges} from './captions-suppress';
 import {hookWordTimingsForScene} from './word-alignment';
+import {itemTimingsForScene} from './item-timing';
 import {registry} from '../../templates/registry.generated';
 
 /**
@@ -63,6 +64,19 @@ function renderScene(
             scene.durationInFrames,
           ) ?? undefined
         : undefined;
+    // Enumeration: per-item reveal frames, render-derived from captions ∩ span ∩
+    // labels — GATED BY THE DECLARED CAPABILITY (manifest.consumes), not a hardcoded
+    // id, so any template consuming "enumeration" gets synced reveals. Fail-closed.
+    const items = (scene.templateProps as {items?: unknown} | undefined)?.items;
+    const itemTimings =
+      entry.manifest.consumes === 'enumeration' && Array.isArray(items)
+        ? itemTimingsForScene(
+            items as string[],
+            captions,
+            scene.startFrame,
+            scene.durationInFrames,
+          ) ?? undefined
+        : undefined;
     return (
       <Component
         data={scene.templateProps ?? {}}
@@ -70,6 +84,7 @@ function renderScene(
         timing={{fps, durationInFrames}}
         assets={{}}
         wordTimings={wordTimings}
+        itemTimings={itemTimings}
       />
     );
   }

@@ -38,6 +38,12 @@ SYSTEM_PROMPT = (
     "The title must NOT promise a fixed count (avoid 'N facts ...') — unverifiable facts may be dropped. "
     'For any beat whose point is a single striking number or statistic, include '
     '"data": {"value": "<the number, e.g. 90%>", "label": "<short context, 2-5 words>"}. '
+    'For any beat that NAMES a small enumerable SET of things (2-6 items, e.g. '
+    '"the sun, the moon, the planets"), instead include '
+    '"data": {"items": ["<item1>", "<item2>", ...]} with the bare item nouns in the SAME '
+    "ORDER the narration speaks them, and make the beat `text` actually name each item in "
+    "that order. Use `items` for an enumerable set, NOT for a single statistic (that is "
+    "`value`/`label`); never put both on one beat. "
     'For EVERY beat, add "keywords": "<2-4 words>" for stock-footage search. GUIDING PRINCIPLE: '
     'pick words whose DOMINANT stock-footage meaning IS your subject — a stock library returns '
     'the COMMON sense of a phrase, not the one you intended. Apply it: '

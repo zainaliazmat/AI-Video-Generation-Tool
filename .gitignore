@@ -57,6 +57,8 @@ hook-wordsync-gate-frames.zip
 hook-wordsync-gate-frames/
 hook-wordsync-listen-*.mp4
 remotion/public/assets/hook-gate-*.wav
+enumeration-gate-frames/
+remotion/public/assets/enum-gate-*.wav
 
 # local repro / bakeoff scratch specs (throwaway debugging fixtures)
 bakeoff-*.json

@@ -13,6 +13,7 @@ These truth-tests are the contract for deterministic composition:
 """
 import pytest
 
+from manifest import Manifest
 from pipeline.content import BeatsScript
 from pipeline.recipe import plan, PlannedScene, ScenePlan
 from schema import Theme
@@ -242,3 +243,111 @@ def test_custom_template_catalog_maps_slots():
     assert _templates(p) == ["hook-v2", "scene", "outro-fancy"]
     # role stays the slot; template is the resolved id
     assert _roles(p) == ["hook", "scene", "outro"]
+
+
+# ── enumeration routing: the capability cash-in (manifest.consumes) ─────────
+# A middle, non-stat beat carrying data.items routes to whichever template
+# DECLARES consumes:"enumeration" — read generically from the injected catalog,
+# NOT a hardcoded id. This is the first brick of the capability standard.
+
+def _man(id, kind="scene", consumes=None):
+    return Manifest(
+        id=id, name=id, version="1", author="t", apiVersion="1", kind=kind,
+        inputSchema={}, sampleProps={}, consumes=consumes,
+        durationFrames={"min": 1, "max": 9999},
+    )
+
+
+def _cat(*mans):
+    return {m.id: m for m in mans}
+
+
+_ENUM_CAT = _cat(
+    _man("enumeration", consumes="enumeration"),
+    _man("scene"), _man("hook", kind="hook"), _man("outro", kind="outro"), _man("stat", kind="stat"),
+)
+
+
+def test_enumeration_beat_routes_to_capability_template():
+    p = plan(
+        _script(
+            _beat("hook"),
+            _beat("The sun, the moon, the planets.", data={"items": ["sun", "moon", "planets"]}),
+            _beat("outro"),
+        ),
+        theme=Theme(), manifests=_ENUM_CAT,
+    )
+    mid = p.scenes[1]
+    assert mid.template == "enumeration"
+    assert mid.role == "enumeration"
+    assert mid.needs_footage is False
+    assert mid.props["items"] == ["sun", "moon", "planets"]
+
+
+def test_non_enumeration_middle_beat_still_routes_to_scene():
+    p = plan(
+        _script(_beat("hook"), _beat("plain middle", keywords="ocean"), _beat("outro")),
+        theme=Theme(), manifests=_ENUM_CAT,
+    )
+    assert p.scenes[1].template == "scene"
+    assert p.scenes[1].needs_footage is True
+
+
+def test_stat_wins_over_enumeration_when_both_fields_present():
+    # A both-fields beat is stat-shaped → routes stat (mutual exclusion, design flag #1).
+    p = plan(
+        _script(
+            _beat("hook"),
+            _beat("m", data={"value": "90%", "label": "x", "items": ["a", "b"]}),
+            _beat("outro"),
+        ),
+        theme=Theme(), manifests=_ENUM_CAT,
+    )
+    assert p.scenes[1].template == "stat"
+
+
+def test_enumeration_position_still_wins_on_first_and_last():
+    p = plan(
+        _script(
+            _beat("hook", data={"items": ["a", "b"]}),
+            _beat("m", keywords="k"),
+            _beat("end", data={"items": ["a", "b"]}),
+        ),
+        theme=Theme(), manifests=_ENUM_CAT,
+    )
+    assert p.scenes[0].template == "hook"
+    assert p.scenes[-1].template == "outro"
+
+
+def test_capability_is_read_generically_not_by_id():
+    # The cash-in proof: a DIFFERENTLY-NAMED template declaring the same capability
+    # still wins — routing reads the declared property, not a hardcoded id.
+    cat = _cat(
+        _man("fancyList", consumes="enumeration"),
+        _man("scene"), _man("hook", kind="hook"), _man("outro", kind="outro"), _man("stat", kind="stat"),
+    )
+    p = plan(
+        _script(_beat("hook"), _beat("m", data={"items": ["a", "b"]}), _beat("outro")),
+        theme=Theme(), manifests=cat,
+    )
+    assert p.scenes[1].template == "fancyList"
+
+
+def test_enumeration_shape_without_capability_template_falls_back_to_scene():
+    # No template declares the capability → graceful fallback to footage scene.
+    cat = _cat(_man("scene"), _man("hook", kind="hook"), _man("outro", kind="outro"), _man("stat", kind="stat"))
+    p = plan(
+        _script(_beat("hook"), _beat("m", data={"items": ["a", "b"]}, keywords="k"), _beat("outro")),
+        theme=Theme(), manifests=cat,
+    )
+    assert p.scenes[1].template == "scene"
+    assert p.scenes[1].needs_footage is True
+
+
+def test_plan_without_manifests_keeps_legacy_behavior():
+    # Back-compat: no manifests injected → no capability routing, scene fallback.
+    p = plan(
+        _script(_beat("hook"), _beat("m", data={"items": ["a", "b"]}, keywords="k"), _beat("outro")),
+        theme=Theme(),
+    )
+    assert p.scenes[1].template == "scene"
