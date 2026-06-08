@@ -1,0 +1,10 @@
+{
+  "_note": "Per-asset provenance. The gate checks COMPLETENESS (every field filled for every bundled image), not correctness. The truth of each rights/source line is operator-owned, confirmed against NASA media-usage guidance per asset.",
+  "assets": [
+    {"label": "sun", "file": "enumeration/sun.jpg", "source_url": "", "rights": "", "date": ""},
+    {"label": "moon", "file": "enumeration/moon.jpg", "source_url": "", "rights": "", "date": ""},
+    {"label": "planet", "file": "enumeration/planets.jpg", "source_url": "", "rights": "", "date": ""},
+    {"label": "eclipse", "file": "enumeration/eclipse.jpg", "source_url": "", "rights": "", "date": ""},
+    {"label": "phase", "file": "enumeration/phases.jpg", "source_url": "", "rights": "", "date": ""}
+  ]
+}
