@@ -16,7 +16,7 @@ Keep the `TemplateKind` slot set identical to the TS side
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
@@ -54,3 +54,9 @@ class Manifest(BaseModel):
     # renderer (else the same words show twice). Footage/overlay templates leave it
     # False and keep captions. Renderer-side policy; the backend just carries it.
     rendersOwnText: bool = False
+    # Content capability this template CONSUMES — the routing signal the recipe
+    # reads generically (the generalization of rendersOwnText). A beat whose content
+    # shape matches is routed to whichever template DECLARES the capability, with no
+    # hardcoded id. None on position/data-routed templates. Today: "enumeration".
+    # MUST stay in lockstep with templates/sdk.ts.
+    consumes: Optional[str] = None

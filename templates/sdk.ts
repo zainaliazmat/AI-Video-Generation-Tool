@@ -61,6 +61,14 @@ export interface Manifest {
    * MUST stay in lockstep with backend/manifest.py.
    */
   rendersOwnText?: boolean;
+  /**
+   * Content capability this template CONSUMES — the routing signal the recipe
+   * reads generically (the generalization of rendersOwnText). A beat whose content
+   * shape matches the capability is routed to whichever template DECLARES it, with
+   * no hardcoded template id. Today: "enumeration". Absent on position/data-routed
+   * templates. MUST stay in lockstep with backend/manifest.py.
+   */
+  consumes?: string;
 }
 
 /** staticFile-resolved absolute paths for any media a template references. */
