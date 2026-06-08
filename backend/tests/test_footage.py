@@ -26,11 +26,27 @@ def test_select_clip_returns_link_and_duration_frames():
     assert dur_f == 180  # 6s * 30fps
 
 
-def test_select_clip_biases_toward_long_enough_clip():
-    # second video is long enough for min_frames=120 (4s@30), first is not
-    link, dur_f = select_clip([_video("short", 2), _video("long", 5)], min_frames=120, fps=30)
-    assert link == "long"
-    assert dur_f == 150
+def test_select_clip_relevance_wins_when_top_clip_clears_the_floor():
+    # Phase 4 ③: relevance (Pexels order) wins among clips that clear the loop floor.
+    # The top clip is 4s — well over the 60f (2s) floor — so it is kept even though a
+    # much longer clip follows. Length never displaces a relevant-enough top hit.
+    link, dur_f = select_clip([_video("relevant_ok", 4), _video("longer_offtopic", 20)],
+                              min_frames=60, fps=30)
+    assert link == "relevant_ok"
+    assert dur_f == 120
+
+
+def test_select_clip_skips_pathologically_short_top_clip_for_a_longer_usable_one():
+    # Phase 4 duration floor — the diagnostic's K-floor case, reproducible in place via
+    # `--query "storm clouds radar"`: a 1s clip ranked #1 looped 5× over a beat while a
+    # relevant 17s clip sat at rank 2 (a fat pool — the trigger is "Pexels ranks a
+    # pathologically short clip #1", not pool sparsity). When the top clip is below the
+    # floor AND a later usable clip clears it, take the longer one — a tight loop reads
+    # worse than dropping one rank.
+    link, dur_f = select_clip([_video("one_second", 1), _video("seventeen_second", 17)],
+                              min_frames=60, fps=30)
+    assert link == "seventeen_second"
+    assert dur_f == 510
 
 
 def test_select_clip_falls_back_to_first_when_none_long_enough():

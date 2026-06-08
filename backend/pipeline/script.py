@@ -38,7 +38,21 @@ SYSTEM_PROMPT = (
     "The title must NOT promise a fixed count (avoid 'N facts ...') — unverifiable facts may be dropped. "
     'For any beat whose point is a single striking number or statistic, include '
     '"data": {"value": "<the number, e.g. 90%>", "label": "<short context, 2-5 words>"}. '
-    'Optionally add "keywords": "<2-4 words>" to a beat to guide stock-footage search. '
+    'For EVERY beat, add "keywords": "<2-4 words>" for stock-footage search. GUIDING PRINCIPLE: '
+    'pick words whose DOMINANT stock-footage meaning IS your subject — a stock library returns '
+    'the COMMON sense of a phrase, not the one you intended. Apply it: '
+    '(a) name a CONCRETE, FILMABLE thing on screen, never an abstract concept ("melting glacier", '
+    'not "economic growth" or "freedom"); '
+    '(b) LEAD WITH THE CONCRETE NOUN, never a process word — a process-led phrase drifts to the '
+    'wrong scene ("ocean evaporation steam" returns a geothermal vent; use "sea spray over waves"); '
+    '(c) never use a compound whose everyday meaning is a DIFFERENT object than you mean — it '
+    'returns that other object ("hand crank" returns a coffee grinder; name the visible part: '
+    '"brass clockwork gears"); '
+    '(d) for a subject too specific for stock — a named place, person, event, branded object, or '
+    'niche instrument — use an ANONYMOUS filmable category or mood that evokes it, NEVER a named '
+    'landmark a viewer would recognize ("celestial globe" or "the Antikythera mechanism" -> '
+    '"antique astronomical instrument", not a famous astronomical clock; "Challenger Deep" -> '
+    '"dark ocean abyss"; "Nobel medal" -> "physics laboratory"). '
     "When grounding SOURCES are provided in the user message, state ONLY facts those "
     'sources support and set each factual beat\'s "source" to the exact URL of the '
     "specific source that backs it; never invent a URL or an unsupported fact. "
