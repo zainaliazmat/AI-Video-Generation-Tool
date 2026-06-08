@@ -20,6 +20,7 @@ import type {ComponentType} from 'react';
 import type {TransitionPresentation} from '@remotion/transitions';
 import type {Theme} from '../remotion/src/schema';
 import type {HookWordTiming} from '../remotion/src/word-alignment';
+import type {ItemTiming} from '../remotion/src/item-timing';
 
 export type {Theme};
 
@@ -92,6 +93,14 @@ export interface TemplateProps<Data = Record<string, unknown>> {
    * non-synced entrance (FAIL-CLOSED). Only the hook consumes it today.
    */
   wordTimings?: readonly HookWordTiming[];
+  /**
+   * RENDER-DERIVED (not from spec): per-item reveal frames for the enumeration
+   * layout's voice-locked one-by-one reveal, computed by the renderer from
+   * spec.captions ∩ the scene span ∩ the item labels. Absent/empty → the template
+   * MUST fall back to its even-staggered entrance (FAIL-CLOSED). Only a template
+   * declaring `consumes:"enumeration"` receives it today.
+   */
+  itemTimings?: readonly ItemTiming[];
 }
 
 /**
