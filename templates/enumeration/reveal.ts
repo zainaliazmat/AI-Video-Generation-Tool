@@ -26,10 +26,12 @@ function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - c, 3);
 }
 
-// Back-ease overshoot: 0 at 0, peaks ~1.09 near 0.63, settles to exactly 1 at >=1.
+// Back-ease overshoot: 0 at 0, peaks ~1.20 near 0.62, settles to exactly 1 at >=1.
+// s is dialled past the default 1.70158 so the entrance reads as a real pop (not a
+// soft fade) — see scale below, where the 1.20 pop peak yields a ~1.07 scale peak.
 function easeOutBack(t: number): number {
   const c = clamp01(t);
-  const s = 1.70158;
+  const s = 2.6;
   const p = c - 1;
   return 1 + (s + 1) * p * p * p + s * p * p;
 }
@@ -65,8 +67,8 @@ export function itemRevealState(
   );
   return {
     opacity: enter,
-    scale: 0.8 + 0.2 * pop, // 0.8 → peak >1 → settles to 1
-    translateY: (1 - enter) * 28,
+    scale: 0.65 + 0.35 * pop, // 0.65 → peak ~1.07 → settles to 1
+    translateY: (1 - enter) * 40,
     rotate: (1 - enter) * -2,
     accent: Math.max(0, accent),
   };
