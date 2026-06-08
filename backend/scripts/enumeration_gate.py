@@ -95,20 +95,20 @@ def item_onsets(labels, words):
 
 # ── entrance amplitude (Python mirror of reveal.ts itemRevealState scale) ──────
 # The amplitude readout reports the DESIGNED overshoot the component renders (both
-# derive from scale = 0.8 + 0.2*easeOutBack(t)); the MP4 is the ground truth for
+# derive from scale = 0.65 + 0.35*easeOutBack(t)); the MP4 is the ground truth for
 # feel. Per the cycle-amplitude principle: report peak-to-settle swing, not a
 # per-frame delta.
 def _ease_out_back(t: float) -> float:
     c = min(1.0, max(0.0, t))
-    s = 1.70158
+    s = 2.6  # matches reveal.ts easeOutBack (punch-up f3c7ae0): peak pop ~1.20
     p = c - 1
     return 1 + (s + 1) * p ** 3 + s * p ** 2
 
 
 def entrance_amplitude(enter: int = 10) -> dict:
-    scales = [0.8 + 0.2 * _ease_out_back(i / enter) for i in range(0, enter + 6)]
+    scales = [0.65 + 0.35 * _ease_out_back(i / enter) for i in range(0, enter + 6)]
     peak = max(scales)
-    return {"peak": peak, "settle": 0.8 + 0.2 * _ease_out_back(1.0),
+    return {"peak": peak, "settle": 0.65 + 0.35 * _ease_out_back(1.0),
             "peak_at": scales.index(peak)}
 
 
@@ -168,7 +168,7 @@ def write_table(name: str, mode: str, words, items, onsets, amp=None) -> None:
         lines += [
             "## Entrance amplitude (designed overshoot; peak-to-settle swing)", "",
             f"- scale: settle `{amp['settle']:.3f}` → peak `{amp['peak']:.3f}` "
-            f"(**+{amp['peak'] - amp['settle']:.3f}** at f+{amp['peak_at']}), translateY 28→0px, rotate -2→0°",
+            f"(**+{amp['peak'] - amp['settle']:.3f}** at f+{amp['peak_at']}), translateY 40→0px, rotate -2→0°",
             "- the MP4 is the ground truth for feel; this is the magnitude the component renders.",
             "",
         ]
