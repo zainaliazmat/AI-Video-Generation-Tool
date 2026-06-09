@@ -82,31 +82,42 @@ def run(topic: str, fps: int = DEFAULT_FPS, on_stage=None):
         spec_out=SPEC_OUT, sources_out=SOURCES_OUT,
     )
     conn = store.connect(SESSIONS_DB)
-    sid = topic  # one session per topic in autopilot; A.6 will mint real ids
-    if store.get_session(conn, sid) is None:
-        store.create_session(conn, id=sid, topic=topic, now="autopilot")
-    eng = engine.Engine(conn, ctx, session_id=sid)
+    try:
+        sid = topic  # one session per topic in autopilot; A.6 will mint real ids
+        if store.get_session(conn, sid) is None:
+            store.create_session(conn, id=sid, topic=topic, now="autopilot")
+        eng = engine.Engine(conn, ctx, session_id=sid)
 
-    for key in PIPELINE_STAGES:
-        emit(key, "running")
-        _log(f"[{PIPELINE_STAGES.index(key) + 1}/{len(PIPELINE_STAGES)}] {key}...")
-        eng.advance(key)
-        emit(key, "done")
-    eng.materialize_spec()
+        # on_stage is a UI progress signal, not a file-readiness one: emit(key,"done")
+        # marks in-memory stage completion. spec.json is written by materialize_spec()
+        # AFTER the loop and flushed before run() returns (the API reads it post-exit).
+        for i, key in enumerate(PIPELINE_STAGES, start=1):
+            emit(key, "running")
+            _log(f"[{i}/{len(PIPELINE_STAGES)}] {key}...")
+            eng.advance(key)
+            emit(key, "done")
+        eng.materialize_spec()
 
-    # sources sidecar from the script stage output (unchanged Phase-3 behavior)
-    script_bundle = eng._load_output("script")
-    SOURCES_OUT.write_text(json.dumps(build_sources_sidecar(script_bundle["script"]), indent=2),
-                           encoding="utf-8")
-    spec = eng._load_output("assemble")
-    _log(f"      wrote {SPEC_OUT}  ({spec.meta.durationInFrames} frames @ {fps}fps)")
-    _log(f"      wrote {SOURCES_OUT}  ({len(script_bundle['script'].sources or [])} sources cited)")
-    conn.close()
-    return spec
+        # sources sidecar from the script stage output (unchanged Phase-3 behavior)
+        script_bundle = eng._load_output("script")
+        SOURCES_OUT.write_text(json.dumps(build_sources_sidecar(script_bundle["script"]), indent=2),
+                               encoding="utf-8")
+        spec = eng._load_output("assemble")   # codec round-tripped; value-equal to build_spec output
+        _log(f"      wrote {SPEC_OUT}  ({spec.meta.durationInFrames} frames @ {fps}fps)")
+        _log(f"      wrote {SOURCES_OUT}  ({len(script_bundle['script'].sources or [])} sources cited)")
+        return spec
+    finally:
+        conn.close()
 
 
 def _footage_requests(plan, offsets, catalog, fps):
-    """One FootageRequest per `scene`-kind beat. `min_frames` is the loop FLOOR — HALF
+    """One FootageRequest per `scene`-kind beat.
+
+    NOTE (HITL A.1): run() no longer calls this — the engine builds requests via
+    session.executors._footage_requests (verified identical). Kept here because
+    test_footage_relevance.py imports it directly; unify on a future cleanup branch.
+
+    `min_frames` is the loop FLOOR — HALF
     the on-screen span (scene span + widest transition), i.e. K=2: skip clips that
     would loop more than ~2× over the beat. select_clip applies it softly (relevance
     wins among clips that clear it; a too-short top hit only yields to a longer usable

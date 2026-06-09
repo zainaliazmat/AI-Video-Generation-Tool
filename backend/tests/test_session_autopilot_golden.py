@@ -1,7 +1,7 @@
 """HITL A.1 — invariant #7: the engine's autopilot run_all() produces a valid,
-correctly-shaped spec.json from faked providers. Task 10 adds the byte-identical
-cross-check against the refactored main.run(); the pre-existing E2E suite is the
-end-to-end parity guard."""
+correctly-shaped spec.json from faked providers, and the refactored main.run()
+produces the SAME spec content as the direct engine (the content-identity
+cross-check). The pre-existing E2E suite is the end-to-end parity guard."""
 import json
 from pathlib import Path
 
@@ -60,16 +60,47 @@ def test_engine_autopilot_produces_valid_spec(tmp_path, monkeypatch):
     validate_stage.validate_spec(Spec.model_validate(engine_spec), catalog)  # fail-closed parity
 
 
-def test_refactored_main_run_matches_engine_spec(tmp_path, monkeypatch):
-    _install_fakes(monkeypatch)
+def _run_main(tmp_path, monkeypatch):
+    """Drive the refactored main.run() hermetically (outputs + sessions DB in tmp)."""
     import main
-    # point main's outputs at tmp so the test is hermetic
     monkeypatch.setattr(main, "SPEC_OUT", tmp_path / "spec.json")
     monkeypatch.setattr(main, "SOURCES_OUT", tmp_path / "sources.json")
     monkeypatch.setattr(main, "ASSETS_DIR", tmp_path / "assets")
     monkeypatch.setattr(main, "SESSIONS_DB", tmp_path / "s.db")
     main.run("Coral Reefs")
-    spec = json.loads((tmp_path / "spec.json").read_text())
+    return json.loads((tmp_path / "spec.json").read_text())
+
+
+def test_refactored_main_run_produces_valid_spec(tmp_path, monkeypatch):
+    _install_fakes(monkeypatch)
+    spec = _run_main(tmp_path, monkeypatch)
     assert spec["meta"]["title"] == "Coral Reefs"
     assert len(spec["scenes"]) == 3
     assert spec["scenes"][1]["template"] == "scene"
+
+
+def test_refactored_main_run_content_identical_to_direct_engine(tmp_path, monkeypatch):
+    """The strongest parity proof: main.run() and the direct engine, on identical
+    faked inputs, must emit byte-equal spec.json content. If the refactor ever drifts
+    (a codec drop, a different call), this is the test that catches it."""
+    _install_fakes(monkeypatch)
+
+    # (a) direct engine -> engine/spec.json
+    from session import store, engine, executors
+    edir = tmp_path / "engine"
+    catalog = validate_stage.load_catalog(_TEMPLATES)
+    ctx = executors.EngineContext(
+        topic="Coral Reefs", fps=30, theme=Theme(), catalog=catalog,
+        assets_dir=edir / "assets", cache_dir=edir / "c",
+        voiceover_path=edir / "assets" / "voiceover.wav",
+        spec_out=edir / "spec.json", sources_out=edir / "sources.json")
+    conn = store.connect(edir / "s.db")
+    store.create_session(conn, id="s1", topic="Coral Reefs", now="t0")
+    engine.Engine(conn, ctx, session_id="s1").run_all()
+    conn.close()
+    engine_spec = json.loads((edir / "spec.json").read_text())
+
+    # (b) refactored main.run() -> main/spec.json
+    main_spec = _run_main(tmp_path / "main", monkeypatch)
+
+    assert main_spec == engine_spec   # content parity: same spec from both code paths
