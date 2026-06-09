@@ -21,6 +21,7 @@ import pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # backend/
 
 import hashlib
+import os
 from pathlib import Path
 
 import requests
@@ -119,9 +120,17 @@ def _fetch_one(req, query, out_dir, *, fps, key, search, downloader):
         url, duration_frames = select_clip(data.get("videos", []), min_frames=req.min_frames, fps=fps)
         if not url:
             return None
-        downloader(url, dest)
+        # Atomic write: stream into a sibling .part, then os.replace onto dest only
+        # on success. A truncated .part is unlinked and never becomes a cached dest.
+        tmp = dest.parent / (dest.name + ".part")
+        try:
+            downloader(url, tmp)
+            os.replace(tmp, dest)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
         if duration_frames is not None:
-            sidecar.write_text(str(duration_frames))
+            sidecar.write_text(str(duration_frames))  # only AFTER the rename
 
     return Clip(index=req.index, query=query, path=f"assets/{dest.name}", duration_frames=duration_frames)
 
