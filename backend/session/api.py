@@ -3,15 +3,18 @@ resume / close. A thin handle over (sqlite connection + engine). The frontend
 harness (A.6) and the preview API will call these; A.1 exercises them in tests."""
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 
-from session import store, engine, stages
+# alias the engine module so it doesn't clash with the Session.engine field below
+from session import store, stages
+from session import engine as _engine
 
 
 @dataclass
 class Session:
-    conn: object
-    engine: object
+    conn: sqlite3.Connection
+    engine: _engine.Engine
     id: str
 
 
@@ -19,14 +22,14 @@ def create(db_path, ctx, *, session_id, topic) -> Session:
     conn = store.connect(db_path)
     if store.get_session(conn, session_id) is None:
         store.create_session(conn, id=session_id, topic=topic, now="created")
-    return Session(conn=conn, engine=engine.Engine(conn, ctx, session_id=session_id), id=session_id)
+    return Session(conn=conn, engine=_engine.Engine(conn, ctx, session_id=session_id), id=session_id)
 
 
 def resume(db_path, ctx, *, session_id) -> Session:
     conn = store.connect(db_path)
     if store.get_session(conn, session_id) is None:
         raise KeyError(f"no session {session_id!r} to resume")
-    return Session(conn=conn, engine=engine.Engine(conn, ctx, session_id=session_id), id=session_id)
+    return Session(conn=conn, engine=_engine.Engine(conn, ctx, session_id=session_id), id=session_id)
 
 
 def get(sess: Session):
@@ -46,11 +49,15 @@ def edit(sess: Session, stage, op):
 
 
 def regenerate(sess: Session, stage):
-    """Force a fresh run of a stage (ignore the input-hash cache) + re-derive down."""
+    """Force a fresh run of a stage (ignore the input-hash cache) + re-derive down.
+    Requires this stage's upstream deps to be `done` (advance fails loud otherwise)."""
     existing_row = store.get_stage(sess.conn, sess.id, stage)
     existing_output = existing_row["output_json"] if existing_row else None
     store.upsert_stage(sess.conn, sess.id, stage, status="stale", input_hash=None,
                        output_json=existing_output, now="regen")
+    # mark downstream stale first (mirrors engine.edit) so an interrupted re-derive
+    # leaves a recoverable state rather than a half-done/half-fresh mix.
+    sess.engine.invalidate(stage)
     sess.engine.advance(stage)
     for st in stages.downstream(stage):
         if st != "render":
