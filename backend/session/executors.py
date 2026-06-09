@@ -16,13 +16,16 @@ from pipeline import assemble as assemble_stage
 from pipeline import recipe as recipe_stage
 from pipeline.contracts import FootageRequest
 from pipeline.footage_query import harden
+from schema import Theme
 
 
-@dataclass
+@dataclass(frozen=True)
 class EngineContext:
+    """Immutable per-job configuration threaded into every stage executor. Frozen so
+    an executor can never accidentally stomp a field that a downstream stage reads."""
     topic: str
     fps: int
-    theme: Any
+    theme: Theme
     catalog: dict
     assets_dir: Path
     cache_dir: Path
@@ -35,6 +38,7 @@ def run_script(ctx: EngineContext, inputs: dict) -> dict:
     """Mirrors main.run() lines 81-84:
         script_result = script_stage.generate_grounded_script(topic, cache_dir=RETRIEVAL_CACHE)
         plan = recipe_stage.plan(script_result, theme=theme, manifests=catalog)
+    `inputs` is unused — script is the source stage with no upstream deps.
     """
     script = script_stage.generate_grounded_script(ctx.topic, cache_dir=ctx.cache_dir)
     plan = recipe_stage.plan(script, theme=ctx.theme, manifests=ctx.catalog)
