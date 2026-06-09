@@ -52,9 +52,9 @@ def harden(query: str, *, title: str) -> str:
     # Layer A — frozen lexicon: exact phrase, then substring containment.
     if norm in COLLISION_LEXICON:
         return COLLISION_LEXICON[norm]
-        # First-match-wins: a more-specific phrase MUST be inserted before its
-        # substring in COLLISION_LEXICON (e.g. "antikythera mechanism" before
-        # "antikythera") so the specific entry isn't shadowed.
+    # First-match-wins: a more-specific phrase MUST be inserted before its substring
+    # in COLLISION_LEXICON (e.g. "antikythera mechanism" before "antikythera") so the
+    # specific entry isn't shadowed.
     for phrase, repl in COLLISION_LEXICON.items():
         if phrase in norm:
             return repl

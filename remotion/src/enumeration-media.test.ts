@@ -56,6 +56,7 @@ describe('monogram (the designed floor grapheme rule — never a blank badge)', 
   it('skips a leading symbol/space to the first letter-or-digit', () => {
     expect(monogram('  #hashtag')).toBe('H');
     expect(monogram('  3-body problem')).toBe('3');   // a leading digit is representable
+    expect(monogram('🌍World')).toBe('W');   // multi-byte emoji skipped (code-point iteration)
   });
   it('uses the first representable char of a non-Latin script', () => {
     expect(monogram('日本')).toBe('日');               // CJK: no case, returned as-is

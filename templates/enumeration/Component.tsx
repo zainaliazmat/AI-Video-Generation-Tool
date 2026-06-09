@@ -65,6 +65,7 @@ const Component: React.FC<TemplateProps<EnumerationData>> = ({data, theme, timin
           if (present <= 0) return null;
           const st = itemRevealState(frame, starts[i], i + 1 < starts.length ? starts[i + 1] : starts[i] + 24);
           const media = resolveMedia(label);
+          const mg = monogram(label);
           const ring = `0 0 0 6px ${theme.palette.accent}55, 0 30px 80px rgba(0,0,0,0.6)`;
           return (
             <div
@@ -100,7 +101,7 @@ const Component: React.FC<TemplateProps<EnumerationData>> = ({data, theme, timin
                   <div style={{width: HERO_IMG, height: HERO_IMG, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
                     <LucideGlyph name={media.name} size={HERO_ICON} color={theme.palette.foreground} />
                   </div>
-                ) : monogram(label) ? (
+                ) : mg ? (
                   <div
                     style={{
                       width: HERO_IMG,
@@ -117,7 +118,7 @@ const Component: React.FC<TemplateProps<EnumerationData>> = ({data, theme, timin
                       color: theme.palette.accent,
                     }}
                   >
-                    {monogram(label)}
+                    {mg}
                   </div>
                 ) : (
                   <div style={{width: HERO_IMG, height: HERO_IMG, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
