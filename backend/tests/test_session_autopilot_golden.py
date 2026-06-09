@@ -58,3 +58,18 @@ def test_engine_autopilot_produces_valid_spec(tmp_path, monkeypatch):
     assert engine_spec["scenes"][1]["template"] == "scene"   # middle beat -> footage scene
     assert engine_spec["audio"]["voiceover"] == "assets/voiceover.wav"
     validate_stage.validate_spec(Spec.model_validate(engine_spec), catalog)  # fail-closed parity
+
+
+def test_refactored_main_run_matches_engine_spec(tmp_path, monkeypatch):
+    _install_fakes(monkeypatch)
+    import main
+    # point main's outputs at tmp so the test is hermetic
+    monkeypatch.setattr(main, "SPEC_OUT", tmp_path / "spec.json")
+    monkeypatch.setattr(main, "SOURCES_OUT", tmp_path / "sources.json")
+    monkeypatch.setattr(main, "ASSETS_DIR", tmp_path / "assets")
+    monkeypatch.setattr(main, "SESSIONS_DB", tmp_path / "s.db")
+    main.run("Coral Reefs")
+    spec = json.loads((tmp_path / "spec.json").read_text())
+    assert spec["meta"]["title"] == "Coral Reefs"
+    assert len(spec["scenes"]) == 3
+    assert spec["scenes"][1]["template"] == "scene"

@@ -19,12 +19,11 @@ import argparse
 import json
 from pathlib import Path
 
-from pipeline import script as script_stage
-from pipeline import tts as tts_stage
-from pipeline import timing as timing_stage
-from pipeline import footage as footage_stage
+from pipeline import script as script_stage       # noqa: F401 — test patches via m.script_stage
+from pipeline import tts as tts_stage             # noqa: F401 — test patches via m.tts_stage
+from pipeline import timing as timing_stage       # noqa: F401 — test patches via m.timing_stage
+from pipeline import footage as footage_stage     # noqa: F401 — test patches via m.footage_stage
 from pipeline import assemble as assemble_stage
-from pipeline import recipe as recipe_stage
 from pipeline import validate as validate_stage
 from pipeline.contracts import FootageRequest
 from pipeline.footage_query import harden
@@ -36,6 +35,7 @@ TEMPLATES_DIR = REPO_ROOT / "templates"
 SPEC_OUT = REPO_ROOT / "spec.json"
 SOURCES_OUT = REPO_ROOT / "sources.json"   # grounding citation sidecar (Phase 3 §5.2)
 RETRIEVAL_CACHE = REPO_ROOT / ".cache" / "retrieval"   # Tavily results cached by query (cost bound)
+SESSIONS_DB = REPO_ROOT / "backend" / ".sessions" / "sessions.db"
 DEFAULT_FPS = 30
 
 # Stage keys match the preview's PipelineStepper (script -> voice -> ... -> assemble).
@@ -67,52 +67,41 @@ def build_sources_sidecar(script) -> dict:
 
 
 def run(topic: str, fps: int = DEFAULT_FPS, on_stage=None):
+    from session import store, engine, executors
+
     def emit(key: str, state: str) -> None:
         if on_stage:
             on_stage(key, state)
 
     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
-    voiceover = ASSETS_DIR / "voiceover.wav"
     catalog = validate_stage.load_catalog(TEMPLATES_DIR)
-    theme = Theme()
+    ctx = executors.EngineContext(
+        topic=topic, fps=fps, theme=Theme(), catalog=catalog,
+        assets_dir=ASSETS_DIR, cache_dir=RETRIEVAL_CACHE,
+        voiceover_path=ASSETS_DIR / "voiceover.wav",
+        spec_out=SPEC_OUT, sources_out=SOURCES_OUT,
+    )
+    conn = store.connect(SESSIONS_DB)
+    sid = topic  # one session per topic in autopilot; A.6 will mint real ids
+    if store.get_session(conn, sid) is None:
+        store.create_session(conn, id=sid, topic=topic, now="autopilot")
+    eng = engine.Engine(conn, ctx, session_id=sid)
 
-    emit("script", "running")
-    _log("[1/5] script (grounded LLM) + recipe plan...")
-    script_result = script_stage.generate_grounded_script(topic, cache_dir=RETRIEVAL_CACHE)
-    # The recipe/director (deterministic) decides which template renders each
-    # beat. Fast + local, so it folds into the script stage.
-    plan = recipe_stage.plan(script_result, theme=theme, manifests=catalog)
-    # Every beat is narrated; tts/captions key off the narration text in order.
-    lines = [b.text for b in script_result.beats]
-    roles = [s.role for s in plan.scenes]
-    _log(f"      title={script_result.title!r}  beats={len(lines)}  plan={roles}")
-    emit("script", "done")
+    for key in PIPELINE_STAGES:
+        emit(key, "running")
+        _log(f"[{PIPELINE_STAGES.index(key) + 1}/{len(PIPELINE_STAGES)}] {key}...")
+        eng.advance(key)
+        emit(key, "done")
+    eng.materialize_spec()
 
-    emit("voice", "running")
-    _log("[2/5] tts (Kokoro)...")
-    offsets = tts_stage.synthesize(lines, voiceover)
-    emit("voice", "done")
-
-    emit("timing", "running")
-    _log("[3/5] timing (faster-whisper)...")
-    words = timing_stage.transcribe_words(str(voiceover), fps)
-    _log(f"      {len(words)} words timed")
-    emit("timing", "done")
-
-    emit("footage", "running")
-    _log("[4/5] footage (Pexels)...")
-    clips = footage_stage.fetch_footage(_footage_requests(plan, offsets, catalog, fps), ASSETS_DIR, fps=fps)
-    emit("footage", "done")
-
-    emit("assemble", "running")
-    _log("[5/5] assemble -> validate -> spec.json...")
-    spec = assemble_stage.build_spec(plan, offsets, words, clips, catalog=catalog, fps=fps)
-    validate_stage.validate_spec(spec, catalog)  # fail fast before writing
-    assemble_stage.write_spec(spec, SPEC_OUT)
-    SOURCES_OUT.write_text(json.dumps(build_sources_sidecar(script_result), indent=2), encoding="utf-8")
+    # sources sidecar from the script stage output (unchanged Phase-3 behavior)
+    script_bundle = eng._load_output("script")
+    SOURCES_OUT.write_text(json.dumps(build_sources_sidecar(script_bundle["script"]), indent=2),
+                           encoding="utf-8")
+    spec = eng._load_output("assemble")
     _log(f"      wrote {SPEC_OUT}  ({spec.meta.durationInFrames} frames @ {fps}fps)")
-    _log(f"      wrote {SOURCES_OUT}  ({len(script_result.sources or [])} sources cited)")
-    emit("assemble", "done")
+    _log(f"      wrote {SOURCES_OUT}  ({len(script_bundle['script'].sources or [])} sources cited)")
+    conn.close()
     return spec
 
 
