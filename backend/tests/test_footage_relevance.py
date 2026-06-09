@@ -113,6 +113,47 @@ def test_fetch_raises_when_specific_and_broad_both_empty(tmp_path):
         fetch_footage(reqs, tmp_path, fps=30, key="K", search=fake_search, downloader=fake_download)
 
 
+def test_fetch_broadens_when_specific_query_ERRORS_not_just_empty(tmp_path):
+    """A specific query that raises a Pexels/network error (HTTP 400 on an odd query,
+    a 429 burst, a 5xx, a timeout) must fall through to the broader title query — the
+    SAME safety net as an empty result. One beat's transient hiccup must not abort the
+    whole multi-minute render when the title query would have succeeded."""
+    import requests
+
+    searched = []
+
+    def fake_search(query, key):
+        searched.append(query)
+        if query == "odd::query":
+            raise requests.HTTPError("400 Bad Request")
+        return {"videos": [_video("hit", 6)]}
+
+    def fake_download(url, dest):
+        dest.write_bytes(b"v")
+
+    reqs = [FootageRequest(index=0, query="odd::query", min_frames=0, broad_query="Title")]
+    clips = fetch_footage(reqs, tmp_path, fps=30, key="K", search=fake_search, downloader=fake_download)
+
+    assert searched == ["odd::query", "Title"]   # broadened after the error, not crashed
+    assert clips[0].duration_frames == 180
+
+
+def test_fetch_raises_runtimeerror_when_both_queries_error(tmp_path):
+    """When BOTH the specific and broad queries error, surface a clear RuntimeError
+    (with the underlying cause) — never let a raw requests exception escape the stage."""
+    import requests
+
+    def fake_search(query, key):
+        raise requests.ConnectionError("network down")
+
+    def fake_download(url, dest):
+        dest.write_bytes(b"v")
+
+    reqs = [FootageRequest(index=0, query="x", min_frames=0, broad_query="Title")]
+    with pytest.raises(RuntimeError):
+        fetch_footage(reqs, tmp_path, fps=30, key="K", search=fake_search, downloader=fake_download)
+
+
 # ── invariant: selection never feeds span/timing (regression guard) ────────
 
 def test_clip_duration_only_toggles_loop_never_timing():
@@ -154,3 +195,27 @@ def test_footage_request_min_frames_is_half_span_loop_floor():
     _, durations, _ = assemble_stage.scene_spans(offsets, 30)
     reqs = _footage_requests(p, offsets, {}, 30)
     assert reqs[0].min_frames == durations[1] // 2   # half the span (K=2), not the full span
+
+
+# ── Item 1: harden() is wired into the query seam (recipe + broad_query) ──
+
+def test_recipe_hardens_a_colliding_keyword_into_a_filmable_query():
+    from pipeline.recipe import plan
+    script = BeatsScript(title="Antique Clocks", beats=[
+        Beat(text="hook"),
+        Beat(text="a hand crank drives the gears", keywords="hand crank"),
+        Beat(text="outro"),
+    ])
+    p = plan(script, theme=Theme())
+    assert p.scenes[1].query == "antique brass gears turning"   # collision remapped, not "hand crank"
+
+
+def test_footage_requests_harden_the_broad_query_too():
+    from main import _footage_requests
+    from pipeline.recipe import plan
+    p = plan(BeatsScript(title="The Antikythera Mechanism",
+                         beats=[Beat(text="h"), Beat(text="scene"), Beat(text="o")]),
+             theme=Theme())
+    offsets = [LineOffset(0, "h", 0.0, 1.0), LineOffset(1, "scene", 1.0, 3.0), LineOffset(2, "o", 3.0, 4.0)]
+    reqs = _footage_requests(p, offsets, {}, 30)
+    assert reqs[0].broad_query == "antique astronomical instrument"   # hardened, not the colliding title

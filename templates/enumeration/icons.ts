@@ -26,7 +26,7 @@ export const FALLBACK_ICON = '●';
 /** Singular candidates to try, in order. English plural→singular is ambiguous
  * ("phases"→"phase" strips only -s; "boxes"→"box" strips -es), so we try the
  * narrower strip first and return the first that hits the curated table. */
-function candidates(k: string): string[] {
+export function candidates(k: string): string[] {
   const out = [k];
   if (k.endsWith('ies') && k.length > 4) out.push(k.slice(0, -3) + 'y'); // berries→berry
   if (k.endsWith('s') && k.length > 3) out.push(k.slice(0, -1)); // phases→phase, planets→planet

@@ -21,6 +21,8 @@ import pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # backend/
 
 import hashlib
+import os
+import time
 from pathlib import Path
 
 import requests
@@ -78,15 +80,33 @@ def select_clip(videos, *, min_frames=0, fps):
     return first_usable if first_usable is not None else (None, None)
 
 
-def search_pexels(query: str, key: str) -> dict:
-    r = requests.get(
-        PEXELS_VIDEO_SEARCH,
-        params={"query": query, "orientation": "portrait", "per_page": 15, "size": "medium"},
-        headers={"Authorization": key},
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json()
+def search_pexels(query: str, key: str, *, _get=None, _sleep=None, max_retries: int = 3) -> dict:
+    """Search Pexels for portrait clips. Bounded retry with exponential backoff on
+    429/5xx (honoring a Retry-After header on 429 when present), then raise — the
+    caller (fetch_footage) broadens to the title on the raised error. The retry cap
+    is small and fixed (Phase-3 cost discipline); _get/_sleep are injectable for tests."""
+    _get = _get or requests.get
+    _sleep = _sleep or time.sleep
+    for attempt in range(max_retries + 1):
+        r = _get(
+            PEXELS_VIDEO_SEARCH,
+            params={"query": query, "orientation": "portrait", "per_page": 15, "size": "medium"},
+            headers={"Authorization": key},
+            timeout=30,
+        )
+        retryable = r.status_code == 429 or 500 <= r.status_code < 600
+        if retryable and attempt < max_retries:
+            retry_after = r.headers.get("Retry-After")
+            try:
+                delay = float(retry_after)
+                if delay <= 0:
+                    raise ValueError("non-positive Retry-After")
+            except (TypeError, ValueError):
+                delay = 2.0 ** attempt
+            _sleep(delay)
+            continue
+        r.raise_for_status()
+        return r.json()
 
 
 def _download(url: str, dest: Path) -> None:
@@ -119,9 +139,17 @@ def _fetch_one(req, query, out_dir, *, fps, key, search, downloader):
         url, duration_frames = select_clip(data.get("videos", []), min_frames=req.min_frames, fps=fps)
         if not url:
             return None
-        downloader(url, dest)
+        # Atomic write: stream into a sibling .part, then os.replace onto dest only
+        # on success. A truncated .part is unlinked and never becomes a cached dest.
+        tmp = dest.parent / (dest.name + ".part")
+        try:
+            downloader(url, tmp)
+            os.replace(tmp, dest)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
         if duration_frames is not None:
-            sidecar.write_text(str(duration_frames))
+            sidecar.write_text(str(duration_frames))  # only AFTER the rename
 
     return Clip(index=req.index, query=query, path=f"assets/{dest.name}", duration_frames=duration_frames)
 
@@ -133,18 +161,34 @@ def fetch_footage(requests_, out_dir, *, fps: int = 30, key=None, search=None, d
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    def attempt(req, query):
+        """Fetch one clip, treating a Pexels/network ERROR the same as an empty result:
+        return (clip_or_None, error_or_None) so the caller can broaden instead of letting
+        a raw requests exception abort the whole render. An empty query is skipped (Pexels
+        400s on it) so it falls straight through to the broaden fallback."""
+        if not query:
+            return None, None
+        try:
+            return _fetch_one(req, query, out_dir, fps=fps, key=key, search=search, downloader=downloader), None
+        except requests.RequestException as e:
+            return None, e
+
     clips: list[Clip] = []
     for req in requests_:
         query = req.query.strip()
-        clip = _fetch_one(req, query, out_dir, fps=fps, key=key, search=search, downloader=downloader)
+        clip, err = attempt(req, query)
         if clip is None and req.broad_query:
-            # The specific query whiffed (zero portrait clips). Broaden to the title
-            # before failing the whole render — a loosely-relevant clip beats a crash.
+            # The specific query whiffed (zero portrait clips) OR errored (a 400 on an odd
+            # query, a 429 burst, a 5xx, a timeout). Broaden to the title before failing the
+            # whole render — a loosely-relevant clip beats a crash, and the simpler title
+            # query usually succeeds where a too-specific one trips a Pexels error.
             broad = req.broad_query.strip()
             if broad and broad.lower() != query.lower():
-                clip = _fetch_one(req, broad, out_dir, fps=fps, key=key, search=search, downloader=downloader)
+                clip, broad_err = attempt(req, broad)
+                err = broad_err or err
         if clip is None:
-            raise RuntimeError(f"No Pexels portrait video for beat {req.index}: {req.query!r}")
+            detail = f" ({err})" if err else ""
+            raise RuntimeError(f"No Pexels portrait video for beat {req.index}: {req.query!r}{detail}")
         clips.append(clip)
     return clips
 

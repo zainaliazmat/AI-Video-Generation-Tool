@@ -25,6 +25,7 @@ from typing import Dict, List, Optional
 
 from manifest import Manifest
 from pipeline.content import Beat, BeatsScript
+from pipeline.footage_query import harden
 from schema import Theme
 
 # The content capability the enumeration layout consumes. ONE constant shared by
@@ -173,7 +174,7 @@ def plan(
                 )
             else:
                 scenes.append(
-                    PlannedScene(role, catalog["scene"], {}, needs_footage=True, query=(beat.keywords or script.title))
+                    PlannedScene(role, catalog["scene"], {}, needs_footage=True, query=harden(beat.keywords or script.title, title=script.title))
                 )
 
     _assign_transitions(scenes, theme.transition, transition_policy)
