@@ -51,3 +51,46 @@ def connect(db_path) -> sqlite3.Connection:
     conn.executescript(_SCHEMA)
     conn.commit()
     return conn
+
+
+def create_session(conn, *, id, topic, now, spec_path=None, current_stage=None) -> None:
+    conn.execute(
+        "INSERT INTO sessions (id, topic, created_at, updated_at, current_stage, spec_path)"
+        " VALUES (?,?,?,?,?,?)",
+        (id, topic, now, now, current_stage, spec_path),
+    )
+    conn.commit()
+
+
+def get_session(conn, session_id):
+    return conn.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
+
+
+def update_session(conn, session_id, *, now, **fields) -> None:
+    cols = ", ".join(f"{k}=?" for k in fields) + ", updated_at=?"
+    conn.execute(f"UPDATE sessions SET {cols} WHERE id=?",
+                 (*fields.values(), now, session_id))
+    conn.commit()
+
+
+def upsert_stage(conn, session_id, stage, *, status, now, input_hash=None, output_json=None) -> None:
+    conn.execute(
+        "INSERT INTO stages (session_id, stage, status, input_hash, output_json, updated_at)"
+        " VALUES (?,?,?,?,?,?)"
+        " ON CONFLICT(session_id, stage) DO UPDATE SET"
+        " status=excluded.status, input_hash=excluded.input_hash,"
+        " output_json=excluded.output_json, updated_at=excluded.updated_at",
+        (session_id, stage, status, input_hash, output_json, now),
+    )
+    conn.commit()
+
+
+def get_stage(conn, session_id, stage):
+    return conn.execute("SELECT * FROM stages WHERE session_id=? AND stage=?",
+                        (session_id, stage)).fetchone()
+
+
+def set_stage_status(conn, session_id, stage, status, *, now) -> None:
+    conn.execute("UPDATE stages SET status=?, updated_at=? WHERE session_id=? AND stage=?",
+                 (status, now, session_id, stage))
+    conn.commit()
