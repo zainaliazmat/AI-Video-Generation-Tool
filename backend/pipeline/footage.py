@@ -22,6 +22,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # backend/
 
 import hashlib
 import os
+import time
 from pathlib import Path
 
 import requests
@@ -79,15 +80,28 @@ def select_clip(videos, *, min_frames=0, fps):
     return first_usable if first_usable is not None else (None, None)
 
 
-def search_pexels(query: str, key: str) -> dict:
-    r = requests.get(
-        PEXELS_VIDEO_SEARCH,
-        params={"query": query, "orientation": "portrait", "per_page": 15, "size": "medium"},
-        headers={"Authorization": key},
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json()
+def search_pexels(query: str, key: str, *, _get=None, _sleep=None, max_retries: int = 3) -> dict:
+    """Search Pexels for portrait clips. Bounded retry with exponential backoff on
+    429/5xx (honoring a Retry-After header on 429 when present), then raise — the
+    caller (fetch_footage) broadens to the title on the raised error. The retry cap
+    is small and fixed (Phase-3 cost discipline); _get/_sleep are injectable for tests."""
+    _get = _get or requests.get
+    _sleep = _sleep or time.sleep
+    for attempt in range(max_retries + 1):
+        r = _get(
+            PEXELS_VIDEO_SEARCH,
+            params={"query": query, "orientation": "portrait", "per_page": 15, "size": "medium"},
+            headers={"Authorization": key},
+            timeout=30,
+        )
+        retryable = r.status_code == 429 or 500 <= r.status_code < 600
+        if retryable and attempt < max_retries:
+            retry_after = r.headers.get("Retry-After")
+            delay = float(retry_after) if (retry_after and retry_after.isdigit()) else float(2 ** attempt)
+            _sleep(delay)
+            continue
+        r.raise_for_status()
+        return r.json()
 
 
 def _download(url: str, dest: Path) -> None:

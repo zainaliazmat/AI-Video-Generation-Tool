@@ -63,3 +63,48 @@ def test_clean_download_then_cache_hit_does_not_redownload(tmp_path):
     assert c1.path == c2.path
     assert c1.duration_frames == c2.duration_frames == 180   # 6s * 30fps, from the sidecar
     assert len(list(tmp_path.glob("*.mp4"))) == 1    # exactly one cached clip
+
+
+class _FakeResp:
+    def __init__(self, status, *, json_body=None, headers=None):
+        self.status_code = status
+        self._json = json_body or {}
+        self.headers = headers or {}
+    def json(self):
+        return self._json
+    def raise_for_status(self):
+        import requests
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"{self.status_code}")
+
+
+def test_search_pexels_retries_on_429_then_succeeds_honoring_retry_after():
+    slept = []
+    responses = iter([
+        _FakeResp(429, headers={"Retry-After": "5"}),       # rate-limited, told to wait 5s
+        _FakeResp(200, json_body={"videos": [{"id": 1}]}),  # then OK
+    ])
+
+    def fake_get(url, **kw):
+        return next(responses)
+
+    out = footage_stage.search_pexels(
+        "ocean waves", "K", _get=fake_get, _sleep=slept.append, max_retries=3,
+    )
+
+    assert out == {"videos": [{"id": 1}]}
+    assert slept == [5.0]            # honored the Retry-After header, retried once
+
+
+def test_search_pexels_exhausts_retries_then_raises():
+    slept = []
+
+    def always_429(url, **kw):
+        return _FakeResp(429, headers={})        # no Retry-After → exponential backoff
+
+    import requests
+    with pytest.raises(requests.HTTPError):
+        footage_stage.search_pexels(
+            "ocean waves", "K", _get=always_429, _sleep=slept.append, max_retries=2,
+        )
+    assert slept == [1.0, 2.0]       # 2^0, 2^1 backoff between the 3 attempts, then raised
