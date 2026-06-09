@@ -40,6 +40,8 @@ export const ICON_MAP: Record<string, LucideName> = {
   cloud: 'cloud', rain: 'droplet', water: 'droplet', ocean: 'waves',
   mountain: 'mountain', tree: 'trees', leaf: 'leaf', clock: 'clock',
   gear: 'cog', light: 'lightbulb', book: 'book-open', brain: 'brain', heart: 'heart',
+  mercury: 'circle', venus: 'circle', jupiter: 'circle', saturn: 'orbit',
+  neptune: 'circle', uranus: 'circle', pluto: 'circle',
 };
 
 export function resolveMedia(label: string): MediaResolution {

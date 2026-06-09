@@ -39,3 +39,11 @@ describe('iconNameFor (icon-layer-only resolve, for list rows of image items)', 
     expect(iconNameFor('Xyzzy')).toBeNull();
   });
 });
+
+describe('ICON_MAP planet/common-term coverage (no bare dot for the obvious set)', () => {
+  it('resolves the inner/outer planets to an icon, not a mark', () => {
+    for (const p of ['Mercury', 'Venus', 'Jupiter', 'Saturn', 'Neptune', 'Uranus']) {
+      expect(resolveMedia(p).kind).toBe('icon');
+    }
+  });
+});
