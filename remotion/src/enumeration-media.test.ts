@@ -1,5 +1,5 @@
 import {describe, it, expect} from 'vitest';
-import {resolveMedia, iconNameFor, IMAGE_MANIFEST, ICON_MAP} from '../../templates/enumeration/media';
+import {resolveMedia, iconNameFor, IMAGE_MANIFEST, ICON_MAP, monogram} from '../../templates/enumeration/media';
 
 describe('resolveMedia cascade', () => {
   it('resolves a curated image label to an image (with alt = original label)', () => {
@@ -45,5 +45,24 @@ describe('ICON_MAP planet/common-term coverage (no bare dot for the obvious set)
     for (const p of ['Mercury', 'Venus', 'Jupiter', 'Saturn', 'Neptune', 'Uranus']) {
       expect(resolveMedia(p).kind).toBe('icon');
     }
+  });
+});
+
+describe('monogram (the designed floor grapheme rule — never a blank badge)', () => {
+  it('uppercases the first letter of a normal label', () => {
+    expect(monogram('Mercury')).toBe('M');
+    expect(monogram('venus')).toBe('V');
+  });
+  it('skips a leading symbol/space to the first letter-or-digit', () => {
+    expect(monogram('  #hashtag')).toBe('H');
+    expect(monogram('  3-body problem')).toBe('3');   // a leading digit is representable
+  });
+  it('uses the first representable char of a non-Latin script', () => {
+    expect(monogram('日本')).toBe('日');               // CJK: no case, returned as-is
+  });
+  it('returns null when there is no representable character (→ circle fallback)', () => {
+    expect(monogram('')).toBeNull();
+    expect(monogram('   ')).toBeNull();
+    expect(monogram('!!!')).toBeNull();
   });
 });

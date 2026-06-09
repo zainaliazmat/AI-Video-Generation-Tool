@@ -66,6 +66,18 @@ export function iconNameFor(label: string): LucideName | null {
   return null;
 }
 
+/** The designed FLOOR grapheme for an item with no image and no icon: the first
+ *  letter-or-digit, uppercased, iterating by code point so a leading symbol/space is
+ *  skipped and non-Latin scripts return their first char. Returns null when no
+ *  character is representable (empty/whitespace/punctuation-only) → the caller falls
+ *  back to a clean glyph. Pure; never throws, never yields a blank badge. */
+export function monogram(label: string): string | null {
+  for (const ch of label.trim()) {            // for..of iterates Unicode code points
+    if (/[\p{L}\p{N}]/u.test(ch)) return ch.toLocaleUpperCase();
+  }
+  return null;
+}
+
 /** kebab LucideName -> PascalCase key in lucide-react's `icons` registry. Lives here
  *  (pure) so both LucideGlyph and the lucide-registry test use the SAME mapping. */
 export function toPascal(name: string): string {
