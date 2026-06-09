@@ -69,3 +69,6 @@ remotion/public/assets/voiceover.wav
 # local repro / bakeoff scratch specs (throwaway debugging fixtures)
 bakeoff-*.json
 repro-*.json
+
+# HITL session store (runtime state)
+backend/.sessions/

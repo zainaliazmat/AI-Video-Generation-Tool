@@ -53,6 +53,23 @@ def _video_duration_frames(video, fps):
     return round(dur * fps) if dur else None
 
 
+def candidate_rows(videos, *, query, fps):
+    """Ranked candidate metadata for the HITL footage pool: rank (Pexels order),
+    query, duration_frames, thumb_url. Usable portrait clips only (same filter as
+    select_clip's pick_video_file)."""
+    rows = []
+    for v in videos:
+        link = pick_video_file(v.get("video_files", []))
+        if not link:
+            continue   # rank counts usable clips only (len(rows)+1), not Pexels position
+        pics = v.get("video_pictures") or []
+        thumb = pics[0].get("picture") if pics else None
+        rows.append({"rank": len(rows) + 1, "query": query,
+                     "duration_frames": _video_duration_frames(v, fps),
+                     "thumb_url": thumb, "link": link})
+    return rows
+
+
 def select_clip(videos, *, min_frames=0, fps):
     """Return (link, duration_frames) for the most relevant usable clip, subject to a
     SOFT loop floor: walk Pexels relevance order and take the first usable portrait

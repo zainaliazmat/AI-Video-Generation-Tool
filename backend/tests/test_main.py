@@ -78,6 +78,7 @@ def test_run_builds_multi_template_spec_from_a_plan(monkeypatch, tmp_path):
     monkeypatch.setattr(m, "ASSETS_DIR", tmp_path / "assets")
     monkeypatch.setattr(m, "SPEC_OUT", tmp_path / "spec.json")
     monkeypatch.setattr(m, "SOURCES_OUT", tmp_path / "sources.json")
+    monkeypatch.setattr(m, "SESSIONS_DB", tmp_path / "s.db")
 
     events = []
     spec = m.run("anything", on_stage=lambda key, state: events.append((key, state)))
