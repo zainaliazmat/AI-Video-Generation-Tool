@@ -152,8 +152,14 @@ class Engine:
         # download the chosen clip into the assets dir and bind it to the scene's Clip
         dest = self.ctx.assets_dir / f"footage_{footage_stage.query_slug(chosen['query'])}_{chosen['rank']}.mp4"
         if not dest.exists():
-            if chosen.get("link"):
-                footage_stage._download(chosen["link"], dest)
+            link = chosen.get("link")
+            if not link:
+                # pick-link recovery failed (the re-search no longer has this rank). Fail
+                # loud — binding a Clip to a missing file would write a silently broken spec.
+                raise RuntimeError(
+                    f"footage gate: no download link for scene {scene} rank {chosen['rank']} "
+                    f"({op['op']}) — pool row carries no link and re-search recovery found none")
+            footage_stage._download(link, dest)
         new_clip = Clip(index=scene, query=chosen["query"],
                         path=f"assets/{dest.name}", duration_frames=chosen.get("duration_frames"))
         out["clips"] = [new_clip if c.index == scene else c for c in out["clips"]]

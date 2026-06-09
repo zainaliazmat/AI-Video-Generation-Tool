@@ -18,7 +18,7 @@ from pathlib import Path
 
 from schema import Theme
 from pipeline.content import Beat, BeatsScript
-from pipeline.contracts import LineOffset, WordTiming, Clip
+from pipeline.contracts import LineOffset, WordTiming
 from pipeline import validate as validate_stage
 from session import store, engine, executors
 
@@ -105,12 +105,30 @@ def test_requery_changes_pool_and_clip(tmp_path, monkeypatch):
     assert pool and pool[0]["query"] == "reef shark"
 
     # Invariant 2: spec scene-1 src changed to a reef-shark clip.
-    # _edit_footage names it footage_{query_slug("reef shark")}_1.mp4 = footage_813e9c81_1.mp4
+    # _edit_footage names it footage_{query_slug("reef shark")}_1.mp4 — compute the slug
+    # rather than hardcoding the hash so this survives a query_slug algorithm change.
+    from pipeline.footage import query_slug
     spec = json.loads((tmp_path / "spec.json").read_text())
     media1_src = spec["scenes"][1]["templateProps"]["media"]["src"]
     assert media1_src != media0_src, (
         f"expected scene-1 src to change after re_query; got {media1_src!r} == {media0_src!r}")
-    assert "813e9c81" in media1_src, (
-        f"expected reef-shark slug '813e9c81' in scene-1 src; got {media1_src!r}")
+    assert query_slug("reef shark") in media1_src, (
+        f"expected reef-shark slug {query_slug('reef shark')!r} in scene-1 src; got {media1_src!r}")
 
+    conn.close()
+
+
+def test_pick_fails_loud_when_link_recovery_fails(tmp_path, monkeypatch):
+    # The persisted pool stores no download link, so pick re-searches to recover it.
+    # If the re-search no longer has that rank, binding a clip to a missing file would
+    # write a silently broken spec — the gate must raise instead.
+    import pytest
+    conn, eng = _seed(tmp_path, monkeypatch)
+    # recovery search for "coral reef" now returns only ONE video -> no rank-2 match
+    monkeypatch.setattr("pipeline.footage.search_pexels", lambda q, key: {"videos": [
+        {"duration": 6, "video_files": [{"link": "only.mp4", "width": 1080, "height": 1920,
+                                         "file_type": "video/mp4"}], "video_pictures": [{"picture": "t1"}]},
+    ]})
+    with pytest.raises(RuntimeError, match="no download link"):
+        eng.edit("footage", {"op": "pick", "scene_index": 1, "rank": 2})
     conn.close()

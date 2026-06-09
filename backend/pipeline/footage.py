@@ -58,10 +58,10 @@ def candidate_rows(videos, *, query, fps):
     query, duration_frames, thumb_url. Usable portrait clips only (same filter as
     select_clip's pick_video_file)."""
     rows = []
-    for i, v in enumerate(videos):
+    for v in videos:
         link = pick_video_file(v.get("video_files", []))
         if not link:
-            continue
+            continue   # rank counts usable clips only (len(rows)+1), not Pexels position
         pics = v.get("video_pictures") or []
         thumb = pics[0].get("picture") if pics else None
         rows.append({"rank": len(rows) + 1, "query": query,

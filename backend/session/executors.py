@@ -108,9 +108,7 @@ def run_footage(ctx: EngineContext, inputs: dict) -> dict:
     selected_query = {c.index: c.query for c in clips}
     candidates = {}
     for r in reqs:
-        # The candidate pool is auxiliary (for the HITL gate). Record it best-effort:
-        # a missing PEXELS_API_KEY or a search failure yields an empty pool for the
-        # scene WITHOUT failing the footage stage (clips already came from fetch_footage).
+        # Best-effort (see docstring): a missing key / search failure -> empty pool.
         try:
             key = footage_stage.require_env("PEXELS_API_KEY")
             data = footage_stage.search_pexels(r.query, key)
@@ -118,6 +116,11 @@ def run_footage(ctx: EngineContext, inputs: dict) -> dict:
         except Exception:
             rows = []
         for row in rows:
+            # APPROXIMATE initial selection: mark rank-1 of the matching query. If
+            # fetch_footage's K-floor picked rank>1 (rank-1 too short to clear the loop
+            # floor), no row is marked here — the Clip doesn't expose which candidate it
+            # chose. Exact tracking is deferred to A.6; the gate's pick/re_query ops set
+            # `selected` precisely on edit.
             row["selected"] = 1 if (row["query"] == selected_query.get(r.index)
                                     and row["rank"] == 1) else 0
             row["clip_path"] = None
