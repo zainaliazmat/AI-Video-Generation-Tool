@@ -27,6 +27,7 @@ from pipeline import assemble as assemble_stage
 from pipeline import recipe as recipe_stage
 from pipeline import validate as validate_stage
 from pipeline.contracts import FootageRequest
+from pipeline.footage_query import harden
 from schema import Theme
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -126,7 +127,7 @@ def _footage_requests(plan, offsets, catalog, fps):
     _, durations, _ = assemble_stage.scene_spans(offsets, fps)
     headroom = max((m.durationFrames.max for m in catalog.values() if m.kind == "transition"), default=0)
     return [
-        FootageRequest(index=i, query=ps.query, min_frames=(durations[i] + headroom) // 2, broad_query=plan.title)
+        FootageRequest(index=i, query=ps.query, min_frames=(durations[i] + headroom) // 2, broad_query=harden(plan.title, title=plan.title))
         for i, ps in enumerate(plan.scenes)
         if ps.needs_footage
     ]
