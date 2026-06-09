@@ -54,12 +54,25 @@ class Engine:
         return from_json(json.loads(row["output_json"]))
 
     def _inputs_for(self, stage):
-        return {d: self._load_output(d) for d in stages.deps(stage)}
+        inputs = {}
+        for d in stages.deps(stage):
+            out = self._load_output(d)
+            if out is None:
+                # out-of-order advance (e.g. advance("voice") before script ran) —
+                # fail with a clear message rather than a cryptic codec TypeError on None.
+                raise RuntimeError(
+                    f"cannot advance {stage!r}: upstream stage {d!r} has not completed")
+            inputs[d] = out
+        return inputs
 
     def _input_hash(self, stage, inputs):
         payload = {"stage": stage, "topic": self.ctx.topic, "fps": self.ctx.fps,
                    "inputs": {d: CODECS[d][0](v) for d, v in inputs.items()}}
-        blob = json.dumps(payload, sort_keys=True, default=str)
+        # No default=str: codec outputs are JSON-native by contract, so json.dumps
+        # raises loudly if a codec ever returns a non-serializable object. That guard
+        # is deliberate — a str()-of-object fallback could embed a memory address and
+        # silently destabilize the hash (the cache would then never hit across runs).
+        blob = json.dumps(payload, sort_keys=True)
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
     # ---- transitions ----
@@ -93,8 +106,10 @@ class Engine:
         return out
 
     def materialize_spec(self):
-        """Write the current assemble output to spec.json (the render contract) +
-        the sources sidecar from the script output. Idempotent."""
+        """Write the current assemble output to spec.json (the render contract).
+        Idempotent. NOTE: the sources.json sidecar is NOT written here — the caller
+        (main.run) writes it from the script output; spec.json is the only render
+        contract the engine owns."""
         from pipeline import validate as validate_stage
         from pipeline import assemble as assemble_stage
         spec = self._load_output("assemble")
