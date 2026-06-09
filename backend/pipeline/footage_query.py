@@ -34,8 +34,9 @@ def _normalize(q: str) -> str:
 
 
 def _propers(text: str) -> set[str]:
-    """Lowercased set of CAPITALIZED, length>=4, non-stopword tokens in `text`
-    (original case). A conservative proper-noun signal: a lowercase token never
+    """Return the lowercased set of uppercase-initial, length>=4, non-stopword tokens
+    found in `text`. `text` must be the ORIGINAL (non-normalized) string so that
+    capitalization signals proper-noun status. A lowercase-initial token never
     qualifies, so a clean lowercase keyword cannot trip the guard."""
     out: set[str] = set()
     for tok in _WORD.findall(text):
@@ -51,6 +52,9 @@ def harden(query: str, *, title: str) -> str:
     # Layer A — frozen lexicon: exact phrase, then substring containment.
     if norm in COLLISION_LEXICON:
         return COLLISION_LEXICON[norm]
+        # First-match-wins: a more-specific phrase MUST be inserted before its
+        # substring in COLLISION_LEXICON (e.g. "antikythera mechanism" before
+        # "antikythera") so the specific entry isn't shadowed.
     for phrase, repl in COLLISION_LEXICON.items():
         if phrase in norm:
             return repl

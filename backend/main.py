@@ -127,6 +127,8 @@ def _footage_requests(plan, offsets, catalog, fps):
     _, durations, _ = assemble_stage.scene_spans(offsets, fps)
     headroom = max((m.durationFrames.max for m in catalog.values() if m.kind == "transition"), default=0)
     return [
+        # broad_query hardening: only the Layer-A lexicon matters here (Layer B is
+        # identity when query == title); a colliding title is remapped before broaden.
         FootageRequest(index=i, query=ps.query, min_frames=(durations[i] + headroom) // 2, broad_query=harden(plan.title, title=plan.title))
         for i, ps in enumerate(plan.scenes)
         if ps.needs_footage
