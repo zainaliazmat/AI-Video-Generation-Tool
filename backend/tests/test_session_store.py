@@ -54,3 +54,19 @@ def test_footage_candidates_replace_and_select(tmp_path):
     store.replace_footage_candidates(conn, "sess1", scene_index=2, candidates=pool)
     assert len(store.get_footage_candidates(conn, "sess1", scene_index=2)) == 2
     conn.close()
+
+
+def test_update_session_sets_fields_and_bumps_updated_at(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="sess1", topic="T", now="t0")
+
+    store.update_session(conn, "sess1", now="t1", current_stage="script",
+                         spec_path="/tmp/spec.json")
+    s = store.get_session(conn, "sess1")
+    assert s["current_stage"] == "script" and s["spec_path"] == "/tmp/spec.json"
+    assert s["updated_at"] == "t1"
+
+    # no fields -> still a valid UPDATE that only bumps updated_at (no SQL syntax error)
+    store.update_session(conn, "sess1", now="t2")
+    assert store.get_session(conn, "sess1")["updated_at"] == "t2"
+    conn.close()

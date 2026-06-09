@@ -67,6 +67,10 @@ def get_session(conn, session_id):
 
 
 def update_session(conn, session_id, *, now, **fields) -> None:
+    if not fields:
+        conn.execute("UPDATE sessions SET updated_at=? WHERE id=?", (now, session_id))
+        conn.commit()
+        return
     cols = ", ".join(f"{k}=?" for k in fields) + ", updated_at=?"
     conn.execute(f"UPDATE sessions SET {cols} WHERE id=?",
                  (*fields.values(), now, session_id))
@@ -97,18 +101,21 @@ def set_stage_status(conn, session_id, stage, status, *, now) -> None:
 
 
 def replace_footage_candidates(conn, session_id, *, scene_index, candidates) -> None:
-    """Overwrite the candidate pool for one scene (re-query is destructive-by-scene)."""
-    conn.execute("DELETE FROM footage_candidates WHERE session_id=? AND scene_index=?",
-                 (session_id, scene_index))
-    conn.executemany(
-        "INSERT INTO footage_candidates"
-        " (session_id, scene_index, rank, query, clip_path, duration_frames, thumb_url, selected)"
-        " VALUES (?,?,?,?,?,?,?,?)",
-        [(session_id, scene_index, c["rank"], c["query"], c.get("clip_path"),
-          c.get("duration_frames"), c.get("thumb_url"), int(c.get("selected", 0)))
-         for c in candidates],
-    )
-    conn.commit()
+    """Overwrite the candidate pool for one scene (re-query is destructive-by-scene).
+
+    DELETE + INSERT run in one transaction (``with conn``) so a partial insert can
+    never be committed — a half-written pool is worse than no pool for resume."""
+    with conn:
+        conn.execute("DELETE FROM footage_candidates WHERE session_id=? AND scene_index=?",
+                     (session_id, scene_index))
+        conn.executemany(
+            "INSERT INTO footage_candidates"
+            " (session_id, scene_index, rank, query, clip_path, duration_frames, thumb_url, selected)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            [(session_id, scene_index, c["rank"], c["query"], c.get("clip_path"),
+              c.get("duration_frames"), c.get("thumb_url"), int(c.get("selected", 0)))
+             for c in candidates],
+        )
 
 
 def get_footage_candidates(conn, session_id, *, scene_index):
@@ -118,13 +125,14 @@ def get_footage_candidates(conn, session_id, *, scene_index):
 
 
 def set_selected_candidate(conn, session_id, *, scene_index, rank) -> None:
-    """Mark exactly one candidate selected for the scene."""
-    conn.execute("UPDATE footage_candidates SET selected=0 WHERE session_id=? AND scene_index=?",
-                 (session_id, scene_index))
-    conn.execute("UPDATE footage_candidates SET selected=1"
-                 " WHERE session_id=? AND scene_index=? AND rank=?",
-                 (session_id, scene_index, rank))
-    conn.commit()
+    """Mark exactly one candidate selected for the scene (clear-all + set-one in one
+    transaction so the scene can never end up with zero selections committed)."""
+    with conn:
+        conn.execute("UPDATE footage_candidates SET selected=0 WHERE session_id=? AND scene_index=?",
+                     (session_id, scene_index))
+        conn.execute("UPDATE footage_candidates SET selected=1"
+                     " WHERE session_id=? AND scene_index=? AND rank=?",
+                     (session_id, scene_index, rank))
 
 
 def set_candidate_clip_path(conn, session_id, *, scene_index, rank, clip_path) -> None:
