@@ -17,6 +17,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # backend/
 
 import argparse
 import json
+import uuid
 from pathlib import Path
 
 from pipeline import script as script_stage       # noqa: F401 — test patches via m.script_stage
@@ -83,9 +84,12 @@ def run(topic: str, fps: int = DEFAULT_FPS, on_stage=None):
     )
     conn = store.connect(SESSIONS_DB)
     try:
-        sid = topic  # one session per topic in autopilot; A.6 will mint real ids
-        if store.get_session(conn, sid) is None:
-            store.create_session(conn, id=sid, topic=topic, now="autopilot")
+        # Mint a FRESH session per autopilot run so re-generating a topic is always a
+        # real cold run (never a cache no-op that would re-stage a stale spec pointing
+        # at possibly-deleted clips). Persistent/resumable sessions come via the Session
+        # API (A.6) with caller-supplied ids; autopilot stays stateless-per-invocation.
+        sid = f"auto-{uuid.uuid4().hex}"
+        store.create_session(conn, id=sid, topic=topic, now="autopilot")
         eng = engine.Engine(conn, ctx, session_id=sid)
 
         # on_stage is a UI progress signal, not a file-readiness one: emit(key,"done")

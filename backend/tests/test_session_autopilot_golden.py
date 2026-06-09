@@ -14,13 +14,18 @@ _TEMPLATES = Path(__file__).resolve().parents[2] / "templates"
 
 
 def _install_fakes(monkeypatch):
+    """Install pipeline fakes; returns a call-counter (script invocations)."""
+    calls = {"script": 0}
     script = BeatsScript(title="Coral Reefs", beats=[
         Beat(text="Coral reefs cover under one percent of the ocean floor."),
         Beat(text="Yet they shelter a quarter of all marine species.", keywords="coral reef fish"),
         Beat(text="Protect them — follow for more."),
     ])
-    monkeypatch.setattr("pipeline.script.generate_grounded_script",
-                        lambda topic, cache_dir=None: script)
+
+    def fake_script(topic, cache_dir=None):
+        calls["script"] += 1
+        return script
+    monkeypatch.setattr("pipeline.script.generate_grounded_script", fake_script)
 
     def fake_synth(lines, path):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -35,6 +40,7 @@ def _install_fakes(monkeypatch):
         return [Clip(index=r.index, query=r.query, path=f"assets/f{r.index}.mp4",
                      duration_frames=300) for r in reqs]
     monkeypatch.setattr("pipeline.footage.fetch_footage", fake_fetch)
+    return calls
 
 
 def test_engine_autopilot_produces_valid_spec(tmp_path, monkeypatch):
@@ -77,6 +83,22 @@ def test_refactored_main_run_produces_valid_spec(tmp_path, monkeypatch):
     assert spec["meta"]["title"] == "Coral Reefs"
     assert len(spec["scenes"]) == 3
     assert spec["scenes"][1]["template"] == "scene"
+
+
+def test_autopilot_regenerates_fresh_each_run(tmp_path, monkeypatch):
+    """Issue-1 fix: autopilot mints a fresh session id per run, so re-generating the
+    SAME topic is a real cold run (not a cache no-op that would re-stage a stale spec
+    pointing at possibly-deleted clips). The script executor must run on every call."""
+    import main
+    calls = _install_fakes(monkeypatch)
+    monkeypatch.setattr(main, "SPEC_OUT", tmp_path / "spec.json")
+    monkeypatch.setattr(main, "SOURCES_OUT", tmp_path / "sources.json")
+    monkeypatch.setattr(main, "ASSETS_DIR", tmp_path / "assets")
+    monkeypatch.setattr(main, "SESSIONS_DB", tmp_path / "s.db")
+
+    main.run("Coral Reefs")
+    main.run("Coral Reefs")          # same topic again
+    assert calls["script"] == 2      # fresh generation each run, NOT a cache hit
 
 
 def test_refactored_main_run_content_identical_to_direct_engine(tmp_path, monkeypatch):
