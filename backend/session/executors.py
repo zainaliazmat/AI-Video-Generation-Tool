@@ -96,12 +96,33 @@ def run_footage(ctx: EngineContext, inputs: dict) -> dict:
         clips = footage_stage.fetch_footage(
             _footage_requests(plan, offsets, catalog, fps), ASSETS_DIR, fps=fps)
     ASSETS_DIR maps to ctx.assets_dir (Path); fps= keyword matches.
+
+    The candidate pool is auxiliary (for the HITL gate). Record it best-effort:
+    a missing PEXELS_API_KEY or a search failure yields an empty pool for the
+    scene WITHOUT failing the footage stage (clips already came from fetch_footage).
     """
     plan = inputs["script"]["plan"]
     offsets = inputs["voice"]
     reqs = _footage_requests(ctx, plan, offsets)
     clips = footage_stage.fetch_footage(reqs, ctx.assets_dir, fps=ctx.fps)
-    return {"clips": clips, "candidates": {}}   # candidate pools added in Task 11
+    selected_query = {c.index: c.query for c in clips}
+    candidates = {}
+    for r in reqs:
+        # The candidate pool is auxiliary (for the HITL gate). Record it best-effort:
+        # a missing PEXELS_API_KEY or a search failure yields an empty pool for the
+        # scene WITHOUT failing the footage stage (clips already came from fetch_footage).
+        try:
+            key = footage_stage.require_env("PEXELS_API_KEY")
+            data = footage_stage.search_pexels(r.query, key)
+            rows = footage_stage.candidate_rows(data.get("videos", []), query=r.query, fps=ctx.fps)
+        except Exception:
+            rows = []
+        for row in rows:
+            row["selected"] = 1 if (row["query"] == selected_query.get(r.index)
+                                    and row["rank"] == 1) else 0
+            row["clip_path"] = None
+        candidates[r.index] = rows
+    return {"clips": clips, "candidates": candidates}
 
 
 def run_assemble(ctx: EngineContext, inputs: dict) -> Any:
