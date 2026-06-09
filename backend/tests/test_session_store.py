@@ -29,3 +29,28 @@ def test_session_and_stage_roundtrip(tmp_path):
     assert store.get_stage(conn, "sess1", "script")["status"] == "stale"
     assert store.get_stage(conn, "sess1", "missing") is None
     conn.close()
+
+
+def test_footage_candidates_replace_and_select(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    pool = [
+        {"rank": 1, "query": "ocean", "clip_path": None, "duration_frames": 180,
+         "thumb_url": "u1", "selected": 1},
+        {"rank": 2, "query": "ocean", "clip_path": None, "duration_frames": 300,
+         "thumb_url": "u2", "selected": 0},
+    ]
+    store.replace_footage_candidates(conn, "sess1", scene_index=2, candidates=pool)
+    got = store.get_footage_candidates(conn, "sess1", scene_index=2)
+    assert [c["rank"] for c in got] == [1, 2]
+    assert got[0]["selected"] == 1
+
+    # selecting rank 2 clears rank 1's selected flag (exactly one selected)
+    store.set_selected_candidate(conn, "sess1", scene_index=2, rank=2)
+    got = store.get_footage_candidates(conn, "sess1", scene_index=2)
+    sel = [c["rank"] for c in got if c["selected"]]
+    assert sel == [2]
+
+    # replace is idempotent (re-querying the scene overwrites the pool, no dup PK error)
+    store.replace_footage_candidates(conn, "sess1", scene_index=2, candidates=pool)
+    assert len(store.get_footage_candidates(conn, "sess1", scene_index=2)) == 2
+    conn.close()

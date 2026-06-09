@@ -94,3 +94,41 @@ def set_stage_status(conn, session_id, stage, status, *, now) -> None:
     conn.execute("UPDATE stages SET status=?, updated_at=? WHERE session_id=? AND stage=?",
                  (status, now, session_id, stage))
     conn.commit()
+
+
+def replace_footage_candidates(conn, session_id, *, scene_index, candidates) -> None:
+    """Overwrite the candidate pool for one scene (re-query is destructive-by-scene)."""
+    conn.execute("DELETE FROM footage_candidates WHERE session_id=? AND scene_index=?",
+                 (session_id, scene_index))
+    conn.executemany(
+        "INSERT INTO footage_candidates"
+        " (session_id, scene_index, rank, query, clip_path, duration_frames, thumb_url, selected)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        [(session_id, scene_index, c["rank"], c["query"], c.get("clip_path"),
+          c.get("duration_frames"), c.get("thumb_url"), int(c.get("selected", 0)))
+         for c in candidates],
+    )
+    conn.commit()
+
+
+def get_footage_candidates(conn, session_id, *, scene_index):
+    return conn.execute(
+        "SELECT * FROM footage_candidates WHERE session_id=? AND scene_index=? ORDER BY rank",
+        (session_id, scene_index)).fetchall()
+
+
+def set_selected_candidate(conn, session_id, *, scene_index, rank) -> None:
+    """Mark exactly one candidate selected for the scene."""
+    conn.execute("UPDATE footage_candidates SET selected=0 WHERE session_id=? AND scene_index=?",
+                 (session_id, scene_index))
+    conn.execute("UPDATE footage_candidates SET selected=1"
+                 " WHERE session_id=? AND scene_index=? AND rank=?",
+                 (session_id, scene_index, rank))
+    conn.commit()
+
+
+def set_candidate_clip_path(conn, session_id, *, scene_index, rank, clip_path) -> None:
+    conn.execute("UPDATE footage_candidates SET clip_path=?"
+                 " WHERE session_id=? AND scene_index=? AND rank=?",
+                 (clip_path, session_id, scene_index, rank))
+    conn.commit()
