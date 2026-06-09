@@ -32,3 +32,17 @@ def test_advance_is_a_noop_on_identical_inputs(tmp_path, monkeypatch):
     assert calls["n"] == 1
     assert store.get_stage(conn, "s1", "script")["status"] == "done"
     conn.close()
+
+
+def test_invalidate_marks_downstream_stale(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="T", now="t0")
+    for st in ["script", "voice", "timing", "footage", "assemble"]:
+        store.upsert_stage(conn, "s1", st, status="done", input_hash="h", output_json="null", now="t0")
+    eng = engine.Engine(conn, _ctx(tmp_path), session_id="s1")
+
+    eng.invalidate("footage")     # footage edit -> assemble + render stale, NOT timing
+    assert store.get_stage(conn, "s1", "assemble")["status"] == "stale"
+    assert store.get_stage(conn, "s1", "timing")["status"] == "done"   # upstream untouched
+    assert store.get_stage(conn, "s1", "voice")["status"] == "done"
+    conn.close()
