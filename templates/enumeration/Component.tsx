@@ -3,7 +3,7 @@ import {AbsoluteFill, Img, staticFile, useCurrentFrame} from 'remotion';
 import type {TemplateProps} from '../sdk';
 import type {EnumerationData} from './schema';
 import {heroBackground, HERO_BREATH_PERIOD} from '../heroBackground';
-import {resolveMedia, iconNameFor} from './media';
+import {resolveMedia, iconNameFor, monogram} from './media';
 import {LucideGlyph} from './LucideGlyph';
 import {itemRevealState} from './reveal';
 import {activeIndex, heroPresence, heroLabelOpacity} from './heroState';
@@ -100,8 +100,29 @@ const Component: React.FC<TemplateProps<EnumerationData>> = ({data, theme, timin
                   <div style={{width: HERO_IMG, height: HERO_IMG, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
                     <LucideGlyph name={media.name} size={HERO_ICON} color={theme.palette.foreground} />
                   </div>
+                ) : monogram(label) ? (
+                  <div
+                    style={{
+                      width: HERO_IMG,
+                      height: HERO_IMG,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderRadius: 40,
+                      boxShadow: ring,
+                      background: '#000',
+                      fontFamily: `${theme.fonts.heading}, system-ui, sans-serif`,
+                      fontWeight: 800,
+                      fontSize: HERO_ICON,
+                      color: theme.palette.accent,
+                    }}
+                  >
+                    {monogram(label)}
+                  </div>
                 ) : (
-                  <div style={{width: HERO_IMG, height: HERO_IMG, display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.palette.muted, fontSize: HERO_ICON}}>●</div>
+                  <div style={{width: HERO_IMG, height: HERO_IMG, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+                    <LucideGlyph name="circle" size={HERO_ICON} color={theme.palette.foreground} />
+                  </div>
                 )}
               </div>
               <div
@@ -160,11 +181,9 @@ const Component: React.FC<TemplateProps<EnumerationData>> = ({data, theme, timin
             >
               <span style={{width: sz.iconSize, height: sz.iconSize, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0}}>
                 {media.kind === 'mark' ? (
-                  <span style={{fontSize: sz.iconSize * 0.6, color: iconColor}}>●</span>
+                  <LucideGlyph name="circle" size={Math.round(sz.iconSize * 0.82)} color={iconColor} />
                 ) : (
-                  // image item -> its icon (iconNameFor); icon item -> that name. The
-                  // imageManifest ⊆ iconMap invariant guarantees a non-null icon here, so
-                  // the `?? 'circle'` is belt-and-suspenders, never the live path.
+                  // image item -> its icon (iconNameFor); icon item -> that name.
                   <LucideGlyph
                     name={media.kind === 'icon' ? media.name : iconNameFor(label) ?? 'circle'}
                     size={Math.round(sz.iconSize * 0.82)}
