@@ -113,6 +113,47 @@ def test_fetch_raises_when_specific_and_broad_both_empty(tmp_path):
         fetch_footage(reqs, tmp_path, fps=30, key="K", search=fake_search, downloader=fake_download)
 
 
+def test_fetch_broadens_when_specific_query_ERRORS_not_just_empty(tmp_path):
+    """A specific query that raises a Pexels/network error (HTTP 400 on an odd query,
+    a 429 burst, a 5xx, a timeout) must fall through to the broader title query — the
+    SAME safety net as an empty result. One beat's transient hiccup must not abort the
+    whole multi-minute render when the title query would have succeeded."""
+    import requests
+
+    searched = []
+
+    def fake_search(query, key):
+        searched.append(query)
+        if query == "odd::query":
+            raise requests.HTTPError("400 Bad Request")
+        return {"videos": [_video("hit", 6)]}
+
+    def fake_download(url, dest):
+        dest.write_bytes(b"v")
+
+    reqs = [FootageRequest(index=0, query="odd::query", min_frames=0, broad_query="Title")]
+    clips = fetch_footage(reqs, tmp_path, fps=30, key="K", search=fake_search, downloader=fake_download)
+
+    assert searched == ["odd::query", "Title"]   # broadened after the error, not crashed
+    assert clips[0].duration_frames == 180
+
+
+def test_fetch_raises_runtimeerror_when_both_queries_error(tmp_path):
+    """When BOTH the specific and broad queries error, surface a clear RuntimeError
+    (with the underlying cause) — never let a raw requests exception escape the stage."""
+    import requests
+
+    def fake_search(query, key):
+        raise requests.ConnectionError("network down")
+
+    def fake_download(url, dest):
+        dest.write_bytes(b"v")
+
+    reqs = [FootageRequest(index=0, query="x", min_frames=0, broad_query="Title")]
+    with pytest.raises(RuntimeError):
+        fetch_footage(reqs, tmp_path, fps=30, key="K", search=fake_search, downloader=fake_download)
+
+
 # ── invariant: selection never feeds span/timing (regression guard) ────────
 
 def test_clip_duration_only_toggles_loop_never_timing():

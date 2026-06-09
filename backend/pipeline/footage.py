@@ -133,18 +133,34 @@ def fetch_footage(requests_, out_dir, *, fps: int = 30, key=None, search=None, d
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    def attempt(req, query):
+        """Fetch one clip, treating a Pexels/network ERROR the same as an empty result:
+        return (clip_or_None, error_or_None) so the caller can broaden instead of letting
+        a raw requests exception abort the whole render. An empty query is skipped (Pexels
+        400s on it) so it falls straight through to the broaden fallback."""
+        if not query:
+            return None, None
+        try:
+            return _fetch_one(req, query, out_dir, fps=fps, key=key, search=search, downloader=downloader), None
+        except requests.RequestException as e:
+            return None, e
+
     clips: list[Clip] = []
     for req in requests_:
         query = req.query.strip()
-        clip = _fetch_one(req, query, out_dir, fps=fps, key=key, search=search, downloader=downloader)
+        clip, err = attempt(req, query)
         if clip is None and req.broad_query:
-            # The specific query whiffed (zero portrait clips). Broaden to the title
-            # before failing the whole render — a loosely-relevant clip beats a crash.
+            # The specific query whiffed (zero portrait clips) OR errored (a 400 on an odd
+            # query, a 429 burst, a 5xx, a timeout). Broaden to the title before failing the
+            # whole render — a loosely-relevant clip beats a crash, and the simpler title
+            # query usually succeeds where a too-specific one trips a Pexels error.
             broad = req.broad_query.strip()
             if broad and broad.lower() != query.lower():
-                clip = _fetch_one(req, broad, out_dir, fps=fps, key=key, search=search, downloader=downloader)
+                clip, broad_err = attempt(req, broad)
+                err = broad_err or err
         if clip is None:
-            raise RuntimeError(f"No Pexels portrait video for beat {req.index}: {req.query!r}")
+            detail = f" ({err})" if err else ""
+            raise RuntimeError(f"No Pexels portrait video for beat {req.index}: {req.query!r}{detail}")
         clips.append(clip)
     return clips
 

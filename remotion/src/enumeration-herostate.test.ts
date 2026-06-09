@@ -1,5 +1,5 @@
 import {describe, it, expect} from 'vitest';
-import {activeIndex, heroPresence} from '../../templates/enumeration/heroState';
+import {activeIndex, heroPresence, heroLabelOpacity} from '../../templates/enumeration/heroState';
 
 const STARTS = [30, 50, 70, 90, 110]; // 20-frame gaps (~0.67s at 30fps), the tight beat
 
@@ -28,5 +28,30 @@ describe('heroPresence', () => {
   });
   it('the last item stays present to the end (no next item to fade it out)', () => {
     expect(heroPresence(300, 4, STARTS)).toBeCloseTo(1, 5);
+  });
+});
+
+describe('heroLabelOpacity', () => {
+  // The hero IMAGE cross-dissolves (heroPresence overlaps two heroes mid-transition,
+  // which reads fine for centered imagery). The LABEL must NOT: two names at the same
+  // baseline overprint into garbled doubled text. So labels fade THROUGH NOTHING —
+  // the outgoing name reaches 0 before the incoming one begins.
+  it('is 0 before the item reveals', () => {
+    expect(heroLabelOpacity(20, 1, STARTS)).toBe(0);
+  });
+  it('is fully opaque mid-window (its name settled, before it fades out into the next reveal)', () => {
+    expect(heroLabelOpacity(60, 1, STARTS)).toBeCloseTo(1, 5);
+  });
+  it('NEVER shows two labels visible at once — no overprint at the shared baseline', () => {
+    for (let f = 0; f <= 200; f++) {
+      const visible = STARTS.map((_, i) => heroLabelOpacity(f, i, STARTS)).filter((o) => o > 0.001);
+      expect(visible.length).toBeLessThanOrEqual(1);
+    }
+  });
+  it('the outgoing label is fully gone by the next reveal frame', () => {
+    expect(heroLabelOpacity(STARTS[1], 0, STARTS)).toBe(0); // Sun label gone exactly when Moon reveals
+  });
+  it('the last item label stays to the end (no next item to fade it out)', () => {
+    expect(heroLabelOpacity(300, 4, STARTS)).toBeCloseTo(1, 5);
   });
 });

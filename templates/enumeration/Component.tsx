@@ -6,7 +6,7 @@ import {heroBackground, HERO_BREATH_PERIOD} from '../heroBackground';
 import {resolveMedia, iconNameFor} from './media';
 import {LucideGlyph} from './LucideGlyph';
 import {itemRevealState} from './reveal';
-import {activeIndex, heroPresence} from './heroState';
+import {activeIndex, heroPresence, heroLabelOpacity} from './heroState';
 import {enumerationSizing, listBandHeight, HERO_BAND_FRACTION} from './sizing';
 
 /**
@@ -61,6 +61,7 @@ const Component: React.FC<TemplateProps<EnumerationData>> = ({data, theme, timin
       >
         {items.map((label, i) => {
           const present = heroPresence(frame, i, starts);
+          const labelOpacity = heroLabelOpacity(frame, i, starts);
           if (present <= 0) return null;
           const st = itemRevealState(frame, starts[i], i + 1 < starts.length ? starts[i + 1] : starts[i] + 24);
           const media = resolveMedia(label);
@@ -70,9 +71,9 @@ const Component: React.FC<TemplateProps<EnumerationData>> = ({data, theme, timin
               key={i}
               style={{
                 position: 'absolute',
-                // single fade = heroPresence (already ramps over min(ENTER,gap)); st drives
-                // the pop+rise only. Multiplying by st.opacity too would double-fade (sluggish).
-                opacity: present,
+                // The outer div carries only the shared pop+rise transform. Opacity is split:
+                // the IMAGE cross-dissolves (heroPresence), but the LABEL fades through nothing
+                // (heroLabelOpacity) so two names never overprint at the shared baseline.
                 transform: `translateY(${st.translateY}px) scale(${st.scale})`,
                 display: 'flex',
                 flexDirection: 'column',
@@ -80,28 +81,33 @@ const Component: React.FC<TemplateProps<EnumerationData>> = ({data, theme, timin
                 gap: 36,
               }}
             >
-              {media.kind === 'image' ? (
-                <Img
-                  src={staticFile(media.src)}
-                  alt={media.alt}
-                  style={{
-                    width: HERO_IMG,
-                    height: HERO_IMG,
-                    objectFit: 'cover',
-                    borderRadius: 40,
-                    boxShadow: ring,
-                    background: '#000',
-                  }}
-                />
-              ) : media.kind === 'icon' ? (
-                <div style={{width: HERO_IMG, height: HERO_IMG, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
-                  <LucideGlyph name={media.name} size={HERO_ICON} color={theme.palette.foreground} />
-                </div>
-              ) : (
-                <div style={{width: HERO_IMG, height: HERO_IMG, display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.palette.muted, fontSize: HERO_ICON}}>●</div>
-              )}
+              {/* image dissolve: heroPresence (already ramps over min(ENTER,gap)) */}
+              <div style={{opacity: present, display: 'flex'}}>
+                {media.kind === 'image' ? (
+                  <Img
+                    src={staticFile(media.src)}
+                    alt={media.alt}
+                    style={{
+                      width: HERO_IMG,
+                      height: HERO_IMG,
+                      objectFit: 'cover',
+                      borderRadius: 40,
+                      boxShadow: ring,
+                      background: '#000',
+                    }}
+                  />
+                ) : media.kind === 'icon' ? (
+                  <div style={{width: HERO_IMG, height: HERO_IMG, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+                    <LucideGlyph name={media.name} size={HERO_ICON} color={theme.palette.foreground} />
+                  </div>
+                ) : (
+                  <div style={{width: HERO_IMG, height: HERO_IMG, display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.palette.muted, fontSize: HERO_ICON}}>●</div>
+                )}
+              </div>
               <div
                 style={{
+                  // fade-through-nothing: outgoing name reaches 0 before incoming begins
+                  opacity: labelOpacity,
                   fontFamily: `${theme.fonts.heading}, system-ui, sans-serif`,
                   fontWeight: 800,
                   fontSize: 92,
