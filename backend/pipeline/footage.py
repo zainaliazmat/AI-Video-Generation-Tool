@@ -97,7 +97,12 @@ def search_pexels(query: str, key: str, *, _get=None, _sleep=None, max_retries: 
         retryable = r.status_code == 429 or 500 <= r.status_code < 600
         if retryable and attempt < max_retries:
             retry_after = r.headers.get("Retry-After")
-            delay = float(retry_after) if (retry_after and retry_after.isdigit()) else float(2 ** attempt)
+            try:
+                delay = float(retry_after)
+                if delay <= 0:
+                    raise ValueError("non-positive Retry-After")
+            except (TypeError, ValueError):
+                delay = 2.0 ** attempt
             _sleep(delay)
             continue
         r.raise_for_status()

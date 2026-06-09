@@ -108,3 +108,17 @@ def test_search_pexels_exhausts_retries_then_raises():
             "ocean waves", "K", _get=always_429, _sleep=slept.append, max_retries=2,
         )
     assert slept == [1.0, 2.0]       # 2^0, 2^1 backoff between the 3 attempts, then raised
+
+
+def test_search_pexels_retries_on_5xx_then_succeeds():
+    slept = []
+    responses = iter([
+        _FakeResp(503),
+        _FakeResp(200, json_body={"videos": []}),
+    ])
+    out = footage_stage.search_pexels(
+        "ocean waves", "K", _get=lambda url, **kw: next(responses),
+        _sleep=slept.append, max_retries=3,
+    )
+    assert out == {"videos": []}
+    assert len(slept) == 1   # one sleep between the two attempts
