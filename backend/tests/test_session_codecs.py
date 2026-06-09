@@ -32,3 +32,40 @@ def test_script_bundle_roundtrip():
     assert [s.role for s in back["plan"].scenes] == [s.role for s in p.scenes]
     assert back["plan"].scenes[1].needs_footage == p.scenes[1].needs_footage
     assert back["plan"].scenes[1].query == p.scenes[1].query
+    # template + props route the renderer; transition is load-bearing too — lock them
+    assert [s.template for s in back["plan"].scenes] == [s.template for s in p.scenes]
+    assert [s.props for s in back["plan"].scenes] == [s.props for s in p.scenes]
+    assert [(s.transition.template, s.transition.props) if s.transition else None
+            for s in back["plan"].scenes] == \
+           [(s.transition.template, s.transition.props) if s.transition else None
+            for s in p.scenes]
+
+
+def test_footage_bundle_roundtrip():
+    bundle = {"clips": [Clip(index=0, query="q", path="assets/a.mp4", duration_frames=120),
+                        Clip(index=2, query="q2", path="assets/b.mp4", duration_frames=None)],
+              "candidates": {2: [{"rank": 1, "query": "q2", "thumb_url": "t", "selected": 1}]}}
+    back = codecs.footage_from_json(codecs.footage_to_json(bundle))
+    assert back["clips"] == bundle["clips"]
+    assert 2 in back["candidates"]                      # int scene-index key restored
+    assert back["candidates"][2] == bundle["candidates"][2]
+
+
+def test_spec_roundtrip_preserves_from_alias():
+    from schema import Spec
+    d = {
+        "meta": {"title": "T", "fps": 30, "width": 1080, "height": 1920, "durationInFrames": 90},
+        "audio": {"voiceover": "assets/voiceover.wav", "music": None, "musicVolumeDb": -18.0},
+        "scenes": [{
+            "id": "s1", "startFrame": 0, "durationInFrames": 90,
+            "media": {"type": "video", "src": "assets/clip.mp4", "fit": "cover",
+                      "kenBurns": {"from": 1.0, "to": 1.1, "originX": 0.5, "originY": 0.5}},
+        }],
+        "captions": [{"text": "hi", "startFrame": 0, "endFrame": 30}],
+        "theme": {"caption": {"fontFamily": "Inter", "fontWeight": 800, "color": "#FFFFFF",
+                              "highlightColor": "#FFE600", "strokeColor": "#000000", "positionY": 0.78}},
+    }
+    j = codecs.spec_to_json(Spec.model_validate(d))
+    assert j["scenes"][0]["media"]["kenBurns"]["from"] == 1.0   # alias emitted as `from`, not `from_`
+    # round-trip is stable: from_json -> to_json reproduces the same dict
+    assert codecs.spec_to_json(codecs.spec_from_json(j)) == j

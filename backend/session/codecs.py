@@ -38,6 +38,11 @@ def clips_from_json(data):
 
 
 def _plan_to_json(plan: ScenePlan):
+    # Field-completeness contract: serialize ALL PlannedScene fields
+    # (role, template, props, needs_footage, query, transition) and the
+    # TransitionIntent two-field struct (template, props). A dropped field would
+    # round-trip to a default and silently corrupt the re-derived spec — if
+    # recipe.py grows a PlannedScene/TransitionIntent field, add it here + below.
     return {
         "title": plan.title,
         "scenes": [

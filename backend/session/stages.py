@@ -29,6 +29,8 @@ def downstream(stage: str) -> list[str]:
     (directly or indirectly) are invalidated. Crucially, `timing` does NOT invalidate
     `footage` because footage does not depend on timing — they are parallel branches
     that both feed into assemble."""
+    if stage not in _DEPS:  # fail loud on a misspelled/unknown stage, like deps()
+        raise KeyError(stage)
     invalidated = set()
     worklist = [stage]
     while worklist:
