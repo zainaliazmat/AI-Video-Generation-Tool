@@ -195,12 +195,24 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["sync", "failclosed", "sixitem"], default="sync")
     ap.add_argument("--line", default="")  # empty → the per-mode default line
+    ap.add_argument("--items", default="",
+                    help="comma-separated labels; OVERRIDES the mode set. Give a --line that "
+                         "names them in order. Use for the designed-floor gate (unmanifested "
+                         "labels → monogram hero + circle list).")
+    ap.add_argument("--name", default="", help="output basename (defaults to the mode)")
     args = ap.parse_args()
-    name = args.mode
     lines = {"sync": DEFAULT_LINE, "failclosed": DEFAULT_LINE, "sixitem": SIXITEM_LINE}
     items_by_mode = {"sync": SYNC_ITEMS, "failclosed": FAILCLOSED_ITEMS, "sixitem": SIXITEM_ITEMS}
-    line = args.line or lines[args.mode]
-    items = items_by_mode[args.mode]
+    if args.items:
+        items = [s.strip() for s in args.items.split(",") if s.strip()]
+        if not args.line:
+            ap.error("--items requires --line that names each item in spoken order")
+        line = args.line
+        name = args.name or "custom"
+    else:
+        line = args.line or lines[args.mode]
+        items = items_by_mode[args.mode]
+        name = args.name or args.mode
 
     built = build(line, name, items)
     words, total = built["words"], built["total"]
