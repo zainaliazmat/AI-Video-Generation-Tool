@@ -133,16 +133,11 @@ class Engine:
             rows = footage_stage.candidate_rows(data.get("videos", []), query=q, fps=self.ctx.fps)
             chosen = rows[0] if rows else None
         elif op["op"] == "pick":
-            pool = [dict(r) for r in store.get_footage_candidates(self.conn, self.sid, scene_index=scene)]
-            chosen = next((r for r in pool if r["rank"] == op["rank"]), None)
-            if chosen is not None and not chosen.get("link"):
-                key = footage_stage.require_env("PEXELS_API_KEY")
-                data = footage_stage.search_pexels(chosen["query"], key)
-                fresh = footage_stage.candidate_rows(data.get("videos", []), query=chosen["query"], fps=self.ctx.fps)
-                match = next((f for f in fresh if f["rank"] == op["rank"]), None)
-                if match:
-                    chosen["link"] = match.get("link")
-            rows = pool
+            # Read the pool the user was actually shown — the footage OUTPUT retains each
+            # row's link, so pick binds EXACTLY that clip: offline + deterministic, with no
+            # re-search that could return a different video at that rank (Pexels order drifts).
+            rows = [dict(r) for r in out["candidates"].get(scene, [])]
+            chosen = next((r for r in rows if r["rank"] == op["rank"]), None)
         else:
             raise ValueError(f"unknown footage op {op['op']!r}")
 
@@ -163,11 +158,12 @@ class Engine:
         new_clip = Clip(index=scene, query=chosen["query"],
                         path=f"assets/{dest.name}", duration_frames=chosen.get("duration_frames"))
         out["clips"] = [new_clip if c.index == scene else c for c in out["clips"]]
-        # mark candidates for the scene (re-query replaces the pool; pick re-selects)
+        # re-mark selection; KEEP `link` in the output pool so a later pick stays offline
+        # and deterministic. The footage_candidates TABLE is the display surface (no link
+        # column) — replace_footage_candidates ignores link, so the two stay consistent.
         for r in rows:
             r["selected"] = 1 if r.get("rank") == chosen["rank"] else 0
             r.setdefault("clip_path", None)
-            r.pop("link", None)
         out["candidates"][scene] = rows
         store.replace_footage_candidates(self.conn, self.sid, scene_index=scene, candidates=rows)
 

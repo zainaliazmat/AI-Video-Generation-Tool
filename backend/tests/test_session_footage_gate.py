@@ -118,17 +118,30 @@ def test_requery_changes_pool_and_clip(tmp_path, monkeypatch):
     conn.close()
 
 
-def test_pick_fails_loud_when_link_recovery_fails(tmp_path, monkeypatch):
-    # The persisted pool stores no download link, so pick re-searches to recover it.
-    # If the re-search no longer has that rank, binding a clip to a missing file would
-    # write a silently broken spec — the gate must raise instead.
+def test_pick_unknown_rank_fails_loud(tmp_path, monkeypatch):
+    # pick reads the shown pool from the footage output (which retains each row's link),
+    # so it is offline + deterministic. Picking a rank that isn't in the pool must raise
+    # rather than silently bind nothing / write a broken spec.
     import pytest
     conn, eng = _seed(tmp_path, monkeypatch)
-    # recovery search for "coral reef" now returns only ONE video -> no rank-2 match
-    monkeypatch.setattr("pipeline.footage.search_pexels", lambda q, key: {"videos": [
-        {"duration": 6, "video_files": [{"link": "only.mp4", "width": 1080, "height": 1920,
-                                         "file_type": "video/mp4"}], "video_pictures": [{"picture": "t1"}]},
-    ]})
-    with pytest.raises(RuntimeError, match="no download link"):
-        eng.edit("footage", {"op": "pick", "scene_index": 1, "rank": 2})
+    with pytest.raises(RuntimeError, match="no candidate for scene"):
+        eng.edit("footage", {"op": "pick", "scene_index": 1, "rank": 99})
+    conn.close()
+
+
+def test_pick_is_offline_no_research(tmp_path, monkeypatch):
+    # Proves Issue-2 fix: pick does NOT re-search Pexels — it binds the exact clip from
+    # the pool the user was shown. Break search_pexels after seeding; pick must still work.
+    conn, eng = _seed(tmp_path, monkeypatch)
+
+    def _boom(q, key):
+        raise AssertionError("pick must not call search_pexels — it reads link from the pool")
+    monkeypatch.setattr("pipeline.footage.search_pexels", _boom)
+
+    spec0 = json.loads((tmp_path / "spec.json").read_text())
+    media0 = spec0["scenes"][1]["templateProps"]["media"]["src"]
+    eng.edit("footage", {"op": "pick", "scene_index": 1, "rank": 2})   # no search call
+    spec1 = json.loads((tmp_path / "spec.json").read_text())
+    media1 = spec1["scenes"][1]["templateProps"]["media"]["src"]
+    assert media1 != media0 and "_2." in media1
     conn.close()

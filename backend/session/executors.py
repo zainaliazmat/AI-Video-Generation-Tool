@@ -116,10 +116,11 @@ def run_footage(ctx: EngineContext, inputs: dict) -> dict:
         except Exception:
             rows = []
         for row in rows:
-            # APPROXIMATE initial selection: mark rank-1 of the matching query. If
-            # fetch_footage's K-floor picked rank>1 (rank-1 too short to clear the loop
-            # floor), no row is marked here — the Clip doesn't expose which candidate it
-            # chose. Exact tracking is deferred to A.6; the gate's pick/re_query ops set
+            # APPROXIMATE initial selection: mark rank-1 of the matching query. No row is
+            # marked when fetch_footage's K-floor picked rank>1 (rank-1 too short) OR when
+            # it broadened a whiffing query to the title (the pool is the specific query,
+            # the clip came from the broadened one). The Clip doesn't expose which candidate
+            # it chose. Exact tracking is deferred to A.6; the gate's pick/re_query ops set
             # `selected` precisely on edit.
             row["selected"] = 1 if (row["query"] == selected_query.get(r.index)
                                     and row["rank"] == 1) else 0
