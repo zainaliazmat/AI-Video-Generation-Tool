@@ -38,3 +38,28 @@ def test_failed_download_leaves_no_dest_and_no_sidecar(tmp_path):
     assert list(tmp_path.glob("*.mp4")) == []        # no dest serving a truncate
     assert list(tmp_path.glob("*.frames")) == []     # no sidecar pointing at nothing
     assert list(tmp_path.glob("*.part")) == []       # the temp was cleaned up too
+
+
+def test_clean_download_then_cache_hit_does_not_redownload(tmp_path):
+    """First call downloads (and writes dest + sidecar); the second call with the
+    SAME query is a cache hit — the downloader is never invoked again."""
+    calls = {"download": 0, "search": 0}
+
+    def good_search(query, key):
+        calls["search"] += 1
+        return {"videos": [_video("http://x/clip.mp4", 6)]}
+
+    def good_download(url, dest):
+        calls["download"] += 1
+        dest.write_bytes(b"full clip bytes")
+
+    req = FootageRequest(index=0, query="ocean waves", min_frames=0)
+    c1 = footage_stage._fetch_one(req, "ocean waves", tmp_path,
+                                  fps=30, key="K", search=good_search, downloader=good_download)
+    c2 = footage_stage._fetch_one(req, "ocean waves", tmp_path,
+                                  fps=30, key="K", search=good_search, downloader=good_download)
+
+    assert calls == {"download": 1, "search": 1}     # second call hit the cache
+    assert c1.path == c2.path
+    assert c1.duration_frames == c2.duration_frames == 180   # 6s * 30fps, from the sidecar
+    assert len(list(tmp_path.glob("*.mp4"))) == 1    # exactly one cached clip
