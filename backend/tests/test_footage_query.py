@@ -28,3 +28,28 @@ def test_named_subjects_from_layer_a_are_all_seeded():
     for key in ["hand crank", "celestial globe", "ocean evaporation steam",
                 "wooden box", "antikythera mechanism", "challenger deep", "nobel medal"]:
         assert key in COLLISION_LEXICON, f"missing lexicon seed: {key!r}"
+
+
+def test_guard_degrades_unknown_capitalized_proper_noun_to_title():
+    assert harden("Voynich script", title="The Voynich Manuscript") == "The Voynich Manuscript"
+
+
+def test_guard_does_not_fire_on_lowercase_keyword_false_negative_bias():
+    assert harden("voynich script", title="The Voynich Manuscript") == "voynich script"
+
+
+def test_guard_does_not_fire_when_no_title_overlap():
+    assert harden("Sahara dunes", title="Deep Ocean Trenches") == "Sahara dunes"
+
+
+def test_clean_lowercase_keyword_with_titlecased_common_title_is_untouched():
+    assert harden("ocean trench", title="Deep Ocean") == "ocean trench"
+
+
+def test_harden_is_idempotent():
+    t = "The Antikythera Mechanism"
+    once = harden("antikythera mechanism", title=t)
+    assert harden(once, title=t) == once
+    t2 = "The Voynich Manuscript"
+    once2 = harden("Voynich script", title=t2)
+    assert harden(once2, title=t2) == once2
