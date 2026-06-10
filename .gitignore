@@ -27,6 +27,8 @@ out/
 templates/registry.generated.ts
 # stock footage downloaded by the Phase 4 pipeline (regenerated per run)
 remotion/public/assets/footage_*.mp4
+# A.2b user-uploaded media staged by the upload op (video OR image, content-hashed)
+remotion/public/assets/footage_upload_*
 # spec copied into remotion/public/ by the copy-spec script (source of truth is root)
 remotion/public/sample-spec.json
 remotion/public/spec.json
