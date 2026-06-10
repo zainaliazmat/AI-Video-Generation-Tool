@@ -127,6 +127,16 @@ def test_theme_and_layers_defaults_and_roundtrip(tmp_path):
     Spec.model_validate(json.loads(out.read_text()))   # must not raise
 
 
+def test_build_spec_uses_custom_voiceover_path():
+    spec = _build(_plan(), voiceover_rel="assets/voiceover_auto-abc.wav")
+    assert spec.audio.voiceover == "assets/voiceover_auto-abc.wav"
+
+
+def test_build_spec_default_voiceover_path():
+    spec = _build(_plan())
+    assert spec.audio.voiceover == "assets/voiceover.wav"
+
+
 def test_scene_media_emits_kind_and_gates_loop():
     from pipeline.assemble import _scene_media
     from pipeline.contracts import Clip

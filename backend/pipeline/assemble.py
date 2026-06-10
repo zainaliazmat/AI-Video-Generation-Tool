@@ -86,6 +86,7 @@ def build_spec(
     catalog: Dict[str, Manifest],
     fps: int = 30,
     music: str | None = None,
+    voiceover_rel: str = "assets/voiceover.wav",
 ) -> Spec:
     scenes_plan = plan.scenes
     n = len(scenes_plan)
@@ -130,7 +131,7 @@ def build_spec(
 
     return Spec(
         meta=Meta(title=plan.title, fps=fps, width=1080, height=1920, durationInFrames=total),
-        audio=Audio(voiceover="assets/voiceover.wav", music=music, musicVolumeDb=-18.0),
+        audio=Audio(voiceover=voiceover_rel, music=music, musicVolumeDb=-18.0),
         scenes=scenes,
         captions=captions,
         theme=Theme(),
