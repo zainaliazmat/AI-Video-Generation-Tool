@@ -182,6 +182,23 @@ def test_fetch_one_missing_prov_sidecar_degrades_to_none(tmp_path):
     assert c.rank is None and c.pexels_id is None and c.pexels_url is None
 
 
+def test_fetch_one_corrupt_prov_sidecar_degrades_to_none(tmp_path):
+    # A truncated/corrupt .prov.json (e.g. an interrupted write_text) must degrade to
+    # None via the ValueError branch of _read_prov_sidecar — not raise — so a cached
+    # clip stays usable. Complements the missing-file (OSError) case above.
+    slug = query_slug("legacy")
+    (tmp_path / f"footage_{slug}.mp4").write_bytes(b"v")
+    (tmp_path / f"footage_{slug}.prov.json").write_text("{bad json")  # corrupt
+
+    def boom(q, key):
+        raise AssertionError("must not search when the clip is already cached")
+
+    req = FootageRequest(index=0, query="legacy", min_frames=0)
+    c = fetch_footage([req], tmp_path, fps=30, key="K", search=boom,
+                      downloader=lambda u, d: None)[0]
+    assert c.rank is None and c.pexels_id is None and c.pexels_url is None
+
+
 def test_fetch_footage_broaden_surfaces_broadened_provenance(tmp_path):
     # §5.1: a specific query with zero usable portrait clips broadens to the title;
     # provenance must come from the BROADENED clip (query=title, rank/origin from it).

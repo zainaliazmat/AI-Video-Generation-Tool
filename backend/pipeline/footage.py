@@ -143,11 +143,11 @@ def _read_sidecar(path: Path):
         return None
 
 
-def _write_prov_sidecar(path, rank, pexels_id, pexels_url) -> None:
+def _write_prov_sidecar(path: Path, rank, pexels_id, pexels_url) -> None:
     path.write_text(json.dumps({"rank": rank, "pexels_id": pexels_id, "pexels_url": pexels_url}))
 
 
-def _read_prov_sidecar(path):
+def _read_prov_sidecar(path: Path):
     """(rank, pexels_id, pexels_url) from the sidecar, or (None, None, None) when it is
     absent/corrupt — mirrors _read_sidecar's tolerant posture for legacy cached clips."""
     try:
