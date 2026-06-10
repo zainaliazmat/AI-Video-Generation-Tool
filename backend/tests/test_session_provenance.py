@@ -90,6 +90,23 @@ def test_advance_stamps_unknown_origin_for_legacy_cached_clip(tmp_path, monkeypa
     conn.close()
 
 
+def test_regenerate_footage_preserves_rank_via_sidecar(tmp_path, monkeypatch):
+    # The motivating §2/§4.1 scenario: regenerate("footage") forces a non-cache-hit
+    # re-derive whose _fetch_one hits the disk cache (clip already downloaded). The
+    # real .prov.json sidecar (written during run_all) must restore rank/origin so
+    # advance re-stamps auto WITHOUT nulling a known rank.
+    from session import api
+    conn, eng = _seed(tmp_path, monkeypatch)
+    assert store.get_media_provenance(conn, "s1")[1]["rank"] == 1  # auto, rank known
+
+    api.regenerate(api.Session(conn=conn, engine=eng, id="s1"), "footage")
+
+    assert store.get_media_provenance(conn, "s1")[1] == {
+        "source": "auto", "query": "coral reef", "rank": 1,
+        "pexels_id": 101, "pexels_url": "https://pexels.com/v/101"}
+    conn.close()
+
+
 def test_pick_stamps_pick_provenance(tmp_path, monkeypatch):
     conn, eng = _seed(tmp_path, monkeypatch)
     eng.edit("footage", {"op": "pick", "scene_index": 1, "rank": 2})
