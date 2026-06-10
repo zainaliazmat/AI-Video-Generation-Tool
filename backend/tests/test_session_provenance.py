@@ -87,3 +87,12 @@ def test_requery_stamps_requery_provenance(tmp_path, monkeypatch):
     assert prov[1] == {"source": "re_query", "query": "reef shark", "rank": 1,
                        "pexels_id": 201, "pexels_url": "https://pexels.com/v/201"}
     conn.close()
+
+
+def test_api_media_provenance_getter(tmp_path, monkeypatch):
+    conn, eng = _seed(tmp_path, monkeypatch)
+    from session import api
+    sess = api.Session(conn=conn, engine=eng, id="s1")
+    prov = api.media_provenance(sess)
+    assert prov[1]["source"] == "auto" and prov[1]["rank"] == 1 and prov[1]["pexels_id"] == 101
+    conn.close()

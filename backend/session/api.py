@@ -65,5 +65,11 @@ def regenerate(sess: Session, stage):
     sess.engine.materialize_spec()
 
 
+def media_provenance(sess: Session):
+    """Per-scene media provenance for the A.6 badge UI:
+    {scene_index: {source, query, rank, pexels_id, pexels_url}}."""
+    return store.get_media_provenance(sess.conn, sess.id)
+
+
 def close(sess: Session):
     sess.conn.close()
