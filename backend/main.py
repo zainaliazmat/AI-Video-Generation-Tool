@@ -17,17 +17,16 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # backend/
 
 import argparse
 import json
-import uuid
 from pathlib import Path
 
-from pipeline import script as script_stage       # noqa: F401 — test patches via m.script_stage
-from pipeline import tts as tts_stage             # noqa: F401 — test patches via m.tts_stage
-from pipeline import timing as timing_stage       # noqa: F401 — test patches via m.timing_stage
-from pipeline import footage as footage_stage     # noqa: F401 — test patches via m.footage_stage
+from pipeline import script as script_stage
+from pipeline import tts as tts_stage
+from pipeline import timing as timing_stage
+from pipeline import footage as footage_stage
 from pipeline import assemble as assemble_stage
+from pipeline import recipe as recipe_stage
 from pipeline import validate as validate_stage
 from pipeline.contracts import FootageRequest
-from pipeline.footage_query import harden
 from schema import Theme
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -36,7 +35,6 @@ TEMPLATES_DIR = REPO_ROOT / "templates"
 SPEC_OUT = REPO_ROOT / "spec.json"
 SOURCES_OUT = REPO_ROOT / "sources.json"   # grounding citation sidecar (Phase 3 §5.2)
 RETRIEVAL_CACHE = REPO_ROOT / ".cache" / "retrieval"   # Tavily results cached by query (cost bound)
-SESSIONS_DB = REPO_ROOT / "backend" / ".sessions" / "sessions.db"
 DEFAULT_FPS = 30
 
 # Stage keys match the preview's PipelineStepper (script -> voice -> ... -> assemble).
@@ -68,73 +66,63 @@ def build_sources_sidecar(script) -> dict:
 
 
 def run(topic: str, fps: int = DEFAULT_FPS, on_stage=None):
-    from session import store, engine, executors
-
     def emit(key: str, state: str) -> None:
         if on_stage:
             on_stage(key, state)
 
     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+    voiceover = ASSETS_DIR / "voiceover.wav"
     catalog = validate_stage.load_catalog(TEMPLATES_DIR)
-    ctx = executors.EngineContext(
-        topic=topic, fps=fps, theme=Theme(), catalog=catalog,
-        assets_dir=ASSETS_DIR, cache_dir=RETRIEVAL_CACHE,
-        voiceover_path=ASSETS_DIR / "voiceover.wav",
-        spec_out=SPEC_OUT, sources_out=SOURCES_OUT,
-    )
-    conn = store.connect(SESSIONS_DB)
-    try:
-        # Mint a FRESH session per autopilot run so re-generating a topic is always a
-        # real cold run (never a cache no-op that would re-stage a stale spec pointing
-        # at possibly-deleted clips). Persistent/resumable sessions come via the Session
-        # API (A.6) with caller-supplied ids; autopilot stays stateless-per-invocation.
-        sid = f"auto-{uuid.uuid4().hex}"
-        store.create_session(conn, id=sid, topic=topic, now="autopilot")
-        eng = engine.Engine(conn, ctx, session_id=sid)
-        emit("session", sid)   # A.6: surface the session id so the preview can resume + edit it
+    theme = Theme()
 
-        # on_stage is a UI progress signal, not a file-readiness one: emit(key,"done")
-        # marks in-memory stage completion. spec.json is written by materialize_spec()
-        # AFTER the loop and flushed before run() returns (the API reads it post-exit).
-        for i, key in enumerate(PIPELINE_STAGES, start=1):
-            emit(key, "running")
-            _log(f"[{i}/{len(PIPELINE_STAGES)}] {key}...")
-            eng.advance(key)
-            emit(key, "done")
-        eng.materialize_spec()
+    emit("script", "running")
+    _log("[1/5] script (grounded LLM) + recipe plan...")
+    script_result = script_stage.generate_grounded_script(topic, cache_dir=RETRIEVAL_CACHE)
+    # The recipe/director (deterministic) decides which template renders each
+    # beat. Fast + local, so it folds into the script stage.
+    plan = recipe_stage.plan(script_result, theme=theme)
+    # Every beat is narrated; tts/captions key off the narration text in order.
+    lines = [b.text for b in script_result.beats]
+    roles = [s.role for s in plan.scenes]
+    _log(f"      title={script_result.title!r}  beats={len(lines)}  plan={roles}")
+    emit("script", "done")
 
-        # sources sidecar from the script stage output (unchanged Phase-3 behavior)
-        script_bundle = eng._load_output("script")
-        SOURCES_OUT.write_text(json.dumps(build_sources_sidecar(script_bundle["script"]), indent=2),
-                               encoding="utf-8")
-        spec = eng._load_output("assemble")   # codec round-tripped; value-equal to build_spec output
-        _log(f"      wrote {SPEC_OUT}  ({spec.meta.durationInFrames} frames @ {fps}fps)")
-        _log(f"      wrote {SOURCES_OUT}  ({len(script_bundle['script'].sources or [])} sources cited)")
-        return spec
-    finally:
-        conn.close()
+    emit("voice", "running")
+    _log("[2/5] tts (Kokoro)...")
+    offsets = tts_stage.synthesize(lines, voiceover)
+    emit("voice", "done")
+
+    emit("timing", "running")
+    _log("[3/5] timing (faster-whisper)...")
+    words = timing_stage.transcribe_words(str(voiceover), fps)
+    _log(f"      {len(words)} words timed")
+    emit("timing", "done")
+
+    emit("footage", "running")
+    _log("[4/5] footage (Pexels)...")
+    clips = footage_stage.fetch_footage(_footage_requests(plan, offsets, catalog, fps), ASSETS_DIR, fps=fps)
+    emit("footage", "done")
+
+    emit("assemble", "running")
+    _log("[5/5] assemble -> validate -> spec.json...")
+    spec = assemble_stage.build_spec(plan, offsets, words, clips, catalog=catalog, fps=fps)
+    validate_stage.validate_spec(spec, catalog)  # fail fast before writing
+    assemble_stage.write_spec(spec, SPEC_OUT)
+    SOURCES_OUT.write_text(json.dumps(build_sources_sidecar(script_result), indent=2), encoding="utf-8")
+    _log(f"      wrote {SPEC_OUT}  ({spec.meta.durationInFrames} frames @ {fps}fps)")
+    _log(f"      wrote {SOURCES_OUT}  ({len(script_result.sources or [])} sources cited)")
+    emit("assemble", "done")
+    return spec
 
 
 def _footage_requests(plan, offsets, catalog, fps):
-    """One FootageRequest per `scene`-kind beat.
-
-    NOTE (HITL A.1): run() no longer calls this — the engine builds requests via
-    session.executors._footage_requests (verified identical). Kept here because
-    test_footage_relevance.py imports it directly; unify on a future cleanup branch.
-
-    `min_frames` is the loop FLOOR — HALF
-    the on-screen span (scene span + widest transition), i.e. K=2: skip clips that
-    would loop more than ~2× over the beat. select_clip applies it softly (relevance
-    wins among clips that clear it; a too-short top hit only yields to a longer usable
-    clip below). Half-span, not full span, so we don't resurrect the old bias that
-    dropped the relevant top hit for a longer worse one. `broad_query` carries the
-    title so fetch_footage can broaden a too-specific query that returns no clip."""
+    """One FootageRequest per `scene`-kind beat, biased to a clip long enough to
+    cover the scene span plus the widest possible transition (so the loop
+    fallback rarely fires)."""
     _, durations, _ = assemble_stage.scene_spans(offsets, fps)
     headroom = max((m.durationFrames.max for m in catalog.values() if m.kind == "transition"), default=0)
     return [
-        # broad_query hardening: only the Layer-A lexicon matters here (Layer B is
-        # identity when query == title); a colliding title is remapped before broaden.
-        FootageRequest(index=i, query=ps.query, min_frames=(durations[i] + headroom) // 2, broad_query=harden(plan.title, title=plan.title))
+        FootageRequest(index=i, query=ps.query, min_frames=durations[i] + headroom)
         for i, ps in enumerate(plan.scenes)
         if ps.needs_footage
     ]

@@ -125,26 +125,7 @@ def test_load_catalog_reads_real_templates():
     templates_dir = pathlib.Path(__file__).resolve().parents[2] / "templates"
     catalog = load_catalog(templates_dir)
     # the templates committed so far
-    for tid in ("hook", "scene", "stat", "outro", "overlay", "fade", "slide", "enumeration"):
+    for tid in ("hook", "scene", "stat", "outro", "overlay", "fade", "slide"):
         assert tid in catalog, f"{tid} missing from catalog"
     assert catalog["fade"].kind == "transition"
     assert catalog["stat"].kind == "stat"
-
-
-def test_enumeration_props_validate_against_generated_inputschema():
-    import json
-    import pathlib
-    import jsonschema
-
-    root = pathlib.Path(__file__).resolve().parents[2]
-    m = Manifest.model_validate(
-        json.loads((root / "templates" / "enumeration" / "manifest.json").read_text(encoding="utf-8"))
-    )
-    # valid: 2..6 non-empty labels
-    jsonschema.validate({"items": ["Sun", "Moon", "Planets"]}, m.inputSchema)
-    # invalid: <2 items
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate({"items": ["Sun"]}, m.inputSchema)
-    # invalid: extra key (additionalProperties false)
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate({"items": ["Sun", "Moon"], "icon": "x"}, m.inputSchema)

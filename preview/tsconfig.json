@@ -26,8 +26,7 @@
       "remotion": ["node_modules/remotion"],
       "remotion/*": ["node_modules/remotion/*"],
       "@remotion/transitions": ["node_modules/@remotion/transitions"],
-      "@remotion/transitions/*": ["node_modules/@remotion/transitions/*"],
-      "lucide-react": ["../remotion/node_modules/lucide-react"]
+      "@remotion/transitions/*": ["node_modules/@remotion/transitions/*"]
     }
   },
   "include": [

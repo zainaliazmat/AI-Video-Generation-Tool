@@ -15,7 +15,6 @@ import {
 import {RenderControls, type RenderRecord} from './RenderControls';
 import {HistoryList} from './HistoryList';
 import {Badge, Eyebrow} from './ui';
-import {FootageGate, type GateScene} from './FootageGate';
 
 const freshStages = (): Stage[] => DEFAULT_STAGES.map((s) => ({...s, state: 'queued'}));
 
@@ -32,9 +31,6 @@ export function Studio() {
   const [stages, setStages] = useState<Stage[]>(freshStages);
   const [generating, setGenerating] = useState(false);
   const [genNonce, setGenNonce] = useState(0); // bump to remount the Player on a new spec
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [gateScenes, setGateScenes] = useState<GateScene[]>([]);
-  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -101,22 +97,12 @@ export function Studio() {
             );
           } else if (msg.type === 'done') {
             finished = true;
-            const sid = typeof msg.sid === 'string' ? msg.sid : null;
-            setSessionId(sid);
             const r = await fetch(`/spec.json?t=${Date.now()}`);
             const s: Spec = await r.json();
             setSpec(s);
             setFailed(false);
             setGenNonce((n) => n + 1);
             toast.success('Video generated', {id: toastId, description: s.meta.title});
-            if (sid) {
-              try {
-                const st = await fetch(`/api/session/${sid}/state`).then((x) => x.json());
-                setGateScenes(Array.isArray(st?.scenes) ? st.scenes : []);
-              } catch {
-                setGateScenes([]);
-              }
-            }
           } else if (msg.type === 'error') {
             finished = true;
             throw new Error(String(msg.message));
@@ -132,110 +118,6 @@ export function Studio() {
       toast.error('Generation failed', {id: toastId, description: message});
     } finally {
       setGenerating(false);
-    }
-  }
-
-  async function pick(scene: number, rank: number) {
-    if (!sessionId || editing) return;
-    setEditing(true);
-    const toastId = toast.loading('Swapping clip…');
-    try {
-      const res = await fetch(`/api/session/${sessionId}/edit`, {
-        method: 'POST',
-        headers: {'content-type': 'application/json'},
-        body: JSON.stringify({op: 'pick', scene, rank}),
-      });
-      if (res.status === 409) {
-        toast.error('An edit is already in progress', {id: toastId});
-        return;
-      }
-      const json = await res.json();
-      if (!res.ok || json?.ok === false) throw new Error(json?.error ?? `HTTP ${res.status}`);
-      // re-highlight from the edit response (no second /state fetch)
-      setGateScenes((prev) =>
-        prev.map((s) =>
-          s.index === json.scene
-            ? {...s, candidates: s.candidates.map((c) => ({...c, selected: c.rank === json.selectedRank}))}
-            : s,
-        ),
-      );
-      // reload spec into the live Player (instant); export MP4 is now stale
-      const r = await fetch(`/spec.json?t=${Date.now()}`);
-      setSpec(await r.json());
-      setGenNonce((n) => n + 1);
-      toast.success('Clip swapped — preview updated', {id: toastId, description: 'Re-render to export the MP4.'});
-    } catch (e) {
-      toast.error('Swap failed', {id: toastId, description: e instanceof Error ? e.message : 'edit failed'});
-    } finally {
-      setEditing(false);
-    }
-  }
-
-  // re_query replaces the candidate pool and upload binds an off-pool clip, so neither
-  // can be re-highlighted optimistically from the response — re-fetch authoritative state.
-  async function refreshAfterEdit(sid: string) {
-    try {
-      const st = await fetch(`/api/session/${sid}/state`).then((x) => x.json());
-      if (Array.isArray(st?.scenes)) setGateScenes(st.scenes);
-    } catch {
-      /* keep the prior gate on a transient state error */
-    }
-    const r = await fetch(`/spec.json?t=${Date.now()}`);
-    setSpec(await r.json());
-    setGenNonce((n) => n + 1);
-  }
-
-  async function reQuery(scene: number, query: string) {
-    if (!sessionId || editing) return;
-    setEditing(true);
-    const toastId = toast.loading('Re-querying footage…');
-    try {
-      const res = await fetch(`/api/session/${sessionId}/edit`, {
-        method: 'POST',
-        headers: {'content-type': 'application/json'},
-        body: JSON.stringify({op: 're_query', scene, query}),
-      });
-      if (res.status === 409) {
-        toast.error('An edit is already in progress', {id: toastId});
-        return;
-      }
-      const json = await res.json();
-      if (!res.ok || json?.ok === false) throw new Error(json?.error ?? `HTTP ${res.status}`);
-      await refreshAfterEdit(sessionId);
-      toast.success('Footage re-queried — preview updated', {
-        id: toastId,
-        description: 'Re-render to export the MP4.',
-      });
-    } catch (e) {
-      toast.error('Re-query failed', {id: toastId, description: e instanceof Error ? e.message : 'edit failed'});
-    } finally {
-      setEditing(false);
-    }
-  }
-
-  async function upload(scene: number, file: File) {
-    if (!sessionId || editing) return;
-    setEditing(true);
-    const toastId = toast.loading('Uploading footage…');
-    try {
-      const form = new FormData();
-      form.append('op', 'upload');
-      form.append('scene', String(scene));
-      form.append('file', file);
-      // no content-type header — the browser sets the multipart boundary
-      const res = await fetch(`/api/session/${sessionId}/edit`, {method: 'POST', body: form});
-      if (res.status === 409) {
-        toast.error('An edit is already in progress', {id: toastId});
-        return;
-      }
-      const json = await res.json();
-      if (!res.ok || json?.ok === false) throw new Error(json?.error ?? `HTTP ${res.status}`);
-      await refreshAfterEdit(sessionId);
-      toast.success('Upload bound — preview updated', {id: toastId, description: 'Re-render to export the MP4.'});
-    } catch (e) {
-      toast.error('Upload failed', {id: toastId, description: e instanceof Error ? e.message : 'edit failed'});
-    } finally {
-      setEditing(false);
     }
   }
 
@@ -290,18 +172,6 @@ export function Studio() {
               <RenderControls
                 spec={spec}
                 onComplete={(r) => setHistory((h) => [r, ...h])}
-              />
-            </motion.div>
-          )}
-
-          {spec && gateScenes.length > 0 && (
-            <motion.div {...rise} transition={{...rise.transition, delay: 0.14}}>
-              <FootageGate
-                scenes={gateScenes}
-                busy={editing}
-                onPick={pick}
-                onRequery={reQuery}
-                onUpload={upload}
               />
             </motion.div>
           )}

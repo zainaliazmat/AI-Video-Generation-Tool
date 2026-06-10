@@ -2,9 +2,6 @@ import type {NextConfig} from 'next';
 import path from 'node:path';
 
 const dep = (p: string) => path.resolve(__dirname, 'node_modules', p);
-// Sibling remotion/ holds template-only third-party deps that this app does not
-// list (the top-level templates/ have no node_modules of their own).
-const remotionDep = (p: string) => path.resolve(__dirname, '..', 'remotion', 'node_modules', p);
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
@@ -30,11 +27,6 @@ const nextConfig: NextConfig = {
     config.resolve.alias = {
       ...(config.resolve.alias ?? {}),
       remotion: dep('remotion'),
-      // lucide-react: third-party dep imported by templates/enumeration (Tier 2).
-      // templates/ has no node_modules, so the bundler must resolve it to the
-      // sibling remotion/node_modules where it is installed. Mirrors the same
-      // alias in remotion.config.ts (the render bundler) so studio + render agree.
-      'lucide-react': remotionDep('lucide-react'),
     };
     return config;
   },
