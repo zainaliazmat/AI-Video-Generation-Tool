@@ -86,12 +86,22 @@ it chose. Return a small `Selection` namedtuple to keep one ranking path and avo
 Selection = namedtuple("Selection", "link duration_frames rank pexels_id pexels_url")
 ```
 
-`rank` mirrors `candidate_rows`' semantics exactly (1-based among *usable* portrait clips, i.e.
-`len(usable_so_far) + 1`). The `first_usable` fallback (floor cleared by nothing) carries the
-fallback clip's own rank/id/url. Two call sites unpack `select_clip` and must update:
-`_fetch_one` (§2 below) and `footage_diagnostic` (it already *re-locates* select_clip's link to
-compute a rank — it now reads `.rank` directly, removing a duplicate link-locate). Their tests
-update with them.
+`rank` mirrors `candidate_rows`' semantics exactly — **1-based among *usable* portrait clips**
+(`len(usable_so_far) + 1`), so the provenance rank equals the displayed-pool rank and the `pick`-by-
+rank op and the A.6 "#N" badge stay consistent. The `first_usable` fallback (floor cleared by
+nothing) carries the fallback clip's own rank/id/url. Two call sites unpack `select_clip`'s tuple
+today and must adapt to the namedtuple:
+- `_fetch_one` (§2 below) — reads `.link`/`.duration_frames` plus the new `.rank`/`.pexels_id`/
+  `.pexels_url`.
+- `footage_diagnostic.kfloor_pick` — reads `.link`/`.duration_frames` only and **keeps its own
+  link-locate loop**: it deliberately reports an *all-videos* rank (1-based over every video,
+  including non-usable, to line up with `summarize_candidates`), which is a different metric from
+  `select_clip`'s usable-only rank. It must **not** substitute `.rank`. Its `(rank, frames)`
+  contract is unchanged, so its tests stay green.
+
+The 5 `link, dur_f = select_clip(...)` unpackings in `tests/test_footage.py` update to the
+namedtuple in the same step as the signature change (collateral of the arity change, not the
+behavior under test).
 
 **`pipeline/footage.candidate_rows`** — each row gains `pexels_id` / `pexels_url` from the Pexels
 video object (`v.get("id")` / `v.get("url")`), alongside the existing `rank`/`query`/
