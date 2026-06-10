@@ -43,6 +43,9 @@ preview/next-env.d.ts
 # footage duration sidecars (cache, like the .mp4s)
 remotion/public/assets/*.frames
 
+# footage provenance sidecars (A.2a cache, like the .mp4s / .frames)
+remotion/public/assets/*.prov.json
+
 # remotion bundle output
 remotion/build/
 

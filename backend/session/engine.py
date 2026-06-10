@@ -89,6 +89,7 @@ class Engine:
         store.update_session(self.conn, self.sid, now=_now(), current_stage=stage)
         if stage == "footage":
             self._sync_footage_candidates_to_db(output)
+            self._stamp_auto_provenance(output)
         return output
 
     def _sync_footage_candidates_to_db(self, footage_output):
@@ -99,6 +100,19 @@ class Engine:
         for scene_index, rows in candidates.items():
             store.replace_footage_candidates(
                 self.conn, self.sid, scene_index=int(scene_index), candidates=rows)
+
+    def _stamp_auto_provenance(self, footage_output):
+        """Record source='auto' provenance for each clip from its surfaced origin.
+        Runs on any REAL execution of advance('footage') (never on the input-hash
+        cache-hit early return); a gate pick/re_query goes through _edit_footage, which
+        stamps its own source and does NOT re-advance footage. The one path that stamps
+        'auto' over a prior pick/re_query is regenerate('footage') — that forces a
+        non-cache-hit re-derive of the clips, so resetting to 'auto' is correct. rank/
+        pexels are None for a legacy pre-sidecar cached clip ('auto, origin unknown')."""
+        for clip in footage_output.get("clips", []):
+            store.upsert_provenance(
+                self.conn, self.sid, clip.index, source="auto", query=clip.query,
+                rank=clip.rank, pexels_id=clip.pexels_id, pexels_url=clip.pexels_url)
 
     def invalidate(self, from_stage):
         for st in stages.downstream(from_stage):
@@ -171,6 +185,15 @@ class Engine:
         store.upsert_stage(self.conn, self.sid, "footage", status="done",
                            input_hash=store.get_stage(self.conn, self.sid, "footage")["input_hash"],
                            output_json=json.dumps(to_json(out), default=str), now=_now())
+        # Non-atomic with the stage upsert above (two commits): a crash between them
+        # leaves the new clip persisted but the provenance row stale until the next
+        # edit. Acceptable for current-state, single-user, local-first — resume still
+        # re-derives correctly; the row is informational, never a render input.
+        store.upsert_provenance(
+            self.conn, self.sid, scene,
+            source="re_query" if op["op"] == "re_query" else "pick",
+            query=chosen["query"], rank=chosen["rank"],
+            pexels_id=chosen.get("pexels_id"), pexels_url=chosen.get("pexels_url"))
 
     def run_all(self):
         """Autopilot: advance every stage in order, then materialize spec.json."""
