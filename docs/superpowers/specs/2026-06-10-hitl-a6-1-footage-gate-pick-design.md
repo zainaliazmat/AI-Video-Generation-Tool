@@ -89,8 +89,11 @@ to stderr (keeps stdout parseable, per the `--progress-json` precedent).
 
 - `api.resume` → `api.edit("footage", {"op":"pick","scene_index":n,"rank":r})`. The
   `edit()` wrapper invalidates downstream, re-derives assemble, and **re-materializes
-  `spec.json`** at `spec_out`. Prints `{"ok": true, "sid": "…"}`. A non-footage scene /
-  unknown rank raises (caught → `{"ok": false, "error": "…"}`, non-zero exit).
+  `spec.json`** at `spec_out`. Prints the **post-edit scene state** so the UI updates the
+  grid highlight from the response (no second `/state` round-trip):
+  `{"ok": true, "sid": "…", "scene": n, "selectedRank": r, "provenance": {…}}`. A
+  non-footage scene / unknown rank raises (caught → `{"ok": false, "error": "…"}`,
+  non-zero exit).
 - Only `op="pick"` is accepted in A.6.1; any other `op` → error (re-query/upload arrive
   in A.6.2/A.6.3).
 
@@ -109,7 +112,8 @@ autopilot change.
   **single-flight guard** (reject 409 if a generate/edit is in flight) → spawn
   `python backend/session_edit.py --sid <id> --op pick --scene <scene> --rank <rank>` →
   on `{ok:true}`, run the existing `copy-assets` (mirror any newly-referenced asset into
-  `preview/public`) → return `{ok:true}`. On `{ok:false}` → 4xx with the error.
+  `preview/public`) → return the entrypoint's `{ok:true, scene, selectedRank, provenance}`
+  verbatim (so the UI re-highlights from the response). On `{ok:false}` → 4xx with the error.
 - Reuse the generate route's PYTHON/REPO_ROOT/spawn helpers (factor a tiny shared
   `spawnJson` helper if it reduces duplication; don't over-abstract).
 
@@ -120,11 +124,12 @@ autopilot change.
   `needsFootage`, render the candidate pool as a **thumbnail grid** (`thumbUrl`), the
   `selected` clip highlighted. Clicking a thumbnail → `POST /api/session/<sid>/edit
   {op:"pick", scene, rank}`.
-- On `{ok:true}`: **reload `/spec.json` into the in-browser Player** (the Player already
-  takes the spec as a prop — re-fetch + re-key it) so the new clip shows instantly; mark
-  the exported MP4 **stale** with a small "preview changed — re-render to export" hint.
-  **No auto MP4 re-render** — the live Player is the gate's feedback loop; the Render
-  button stays the explicit export.
+- On `{ok:true}`: update the grid highlight to `selectedRank` **from the edit response**
+  (no second `/state` fetch), and **reload `/spec.json` into the in-browser Player** (the
+  Player already takes the spec as a prop — re-fetch + re-key it) so the new clip shows
+  instantly; mark the exported MP4 **stale** with a small "preview changed — re-render to
+  export" hint. **No auto MP4 re-render** — the live Player is the gate's feedback loop;
+  the Render button stays the explicit export.
 - Pick is disabled while an edit is in flight (mirrors the single-flight backend).
 
 ## 6. Data flow
@@ -132,11 +137,11 @@ autopilot change.
 1. **Generate:** UI → `/api/generate` → `main.py` (autopilot, persists session) emits
    `sid` → UI stores `sid`, fetches `/state` → renders the gate panel.
 2. **Pick:** UI click → `/api/session/<sid>/edit {pick}` → `session_edit.py` resumes +
-   edits + re-materializes `spec.json` → route runs `copy-assets` → UI reloads
-   `/spec.json` into the Player (instant) + flags the MP4 stale.
-3. **Re-state (optional):** UI → `/api/session/<sid>/state` to refresh the pool's
-   `selected` after a pick (the edit re-marks selection in the pool).
-4. **Export:** unchanged — explicit Render button → `/api/render` → MP4.
+   edits + re-materializes `spec.json` → route runs `copy-assets` → returns
+   `{ok, scene, selectedRank, provenance}` → UI re-highlights the grid from the response
+   + reloads `/spec.json` into the Player (instant) + flags the MP4 stale. **No second
+   `/state` round-trip** — the edit response carries the new selection.
+3. **Export:** unchanged — explicit Render button → `/api/render` → MP4.
 
 ## 7. Error handling
 
