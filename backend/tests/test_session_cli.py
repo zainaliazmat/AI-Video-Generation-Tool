@@ -6,6 +6,7 @@ from schema import Theme
 from pipeline.content import Beat, BeatsScript
 from pipeline.contracts import LineOffset, WordTiming
 from pipeline import validate as validate_stage
+from pipeline import projects as projects_mod
 from session import store, executors, engine
 
 
@@ -33,10 +34,16 @@ def _seed_session(tmp_path, monkeypatch, *, sid="s-cli"):
     monkeypatch.setattr("pipeline.footage.require_env", lambda name: "KEY")
 
     catalog = validate_stage.load_catalog(Path(__file__).resolve().parents[2] / "templates")
+    # Materialize into projects/<sid>/ with the per-session voiceover the CLIs resolve,
+    # so build_state / apply_* (which read/write projects/<sid>/spec.json via
+    # job_ctx.REPO_ROOT) hit exactly this session's snapshot.
+    sid_dir = tmp_path / "projects" / sid
+    sid_dir.mkdir(parents=True, exist_ok=True)
     ctx = executors.EngineContext(
         topic="Reefs", fps=30, theme=Theme(), catalog=catalog, assets_dir=tmp_path / "a",
-        cache_dir=tmp_path / "c", voiceover_path=tmp_path / "a" / "v.wav",
-        spec_out=tmp_path / "spec.json", sources_out=tmp_path / "src.json")
+        cache_dir=tmp_path / "c",
+        voiceover_path=tmp_path / "a" / projects_mod.voiceover_name(sid),
+        spec_out=sid_dir / "spec.json", sources_out=sid_dir / "sources.json")
     conn = store.connect(tmp_path / "s.db")
     store.create_session(conn, id=sid, topic="Reefs", now="t0")
     eng = engine.Engine(conn, ctx, session_id=sid)
@@ -91,7 +98,7 @@ def test_build_state_shape(tmp_path, monkeypatch):
     import session_state as ss
     # point the CLI at the seed's DB + spec via monkeypatched job_ctx constants
     monkeypatch.setattr("session.job_ctx.SESSIONS_DB", tmp_path / "s.db")
-    monkeypatch.setattr("session.job_ctx.SPEC_OUT", tmp_path / "spec.json")
+    monkeypatch.setattr("session.job_ctx.REPO_ROOT", tmp_path)
     state = ss.build_state(sid)
 
     assert state["sid"] == sid
@@ -110,7 +117,7 @@ def test_build_state_shape(tmp_path, monkeypatch):
 
 def test_build_state_bad_sid_raises(tmp_path, monkeypatch):
     monkeypatch.setattr("session.job_ctx.SESSIONS_DB", tmp_path / "s.db")
-    monkeypatch.setattr("session.job_ctx.SPEC_OUT", tmp_path / "spec.json")
+    monkeypatch.setattr("session.job_ctx.REPO_ROOT", tmp_path)
     import session_state as ss
     import pytest
     # empty db (no such session) → KeyError
@@ -120,15 +127,14 @@ def test_build_state_bad_sid_raises(tmp_path, monkeypatch):
 
 def test_apply_pick_rebinds_and_returns_selection(tmp_path, monkeypatch):
     conn, ctx, sid = _seed_session(tmp_path, monkeypatch)
-    spec0 = json.loads((tmp_path / "spec.json").read_text())
+    spec0 = json.loads((tmp_path / "projects" / sid / "spec.json").read_text())
     media0 = spec0["scenes"][1]["templateProps"]["media"]["src"]
     conn.close()
 
     # point the CLI's ctx + db at the seed (build_ctx reads job_ctx constants)
     monkeypatch.setattr("session.job_ctx.SESSIONS_DB", tmp_path / "s.db")
-    monkeypatch.setattr("session.job_ctx.SPEC_OUT", tmp_path / "spec.json")
+    monkeypatch.setattr("session.job_ctx.REPO_ROOT", tmp_path)   # projects/<sid>/ resolves under tmp
     monkeypatch.setattr("session.job_ctx.ASSETS_DIR", tmp_path / "a")
-    monkeypatch.setattr("session.job_ctx.SOURCES_OUT", tmp_path / "src.json")
     monkeypatch.setattr("session.job_ctx.RETRIEVAL_CACHE", tmp_path / "c")
 
     import session_edit as se
@@ -136,7 +142,7 @@ def test_apply_pick_rebinds_and_returns_selection(tmp_path, monkeypatch):
 
     assert res["ok"] is True and res["scene"] == 1 and res["selectedRank"] == 2
     assert res["provenance"]["source"] == "pick" and res["provenance"]["rank"] == 2
-    spec1 = json.loads((tmp_path / "spec.json").read_text())
+    spec1 = json.loads((tmp_path / "projects" / sid / "spec.json").read_text())
     media1 = spec1["scenes"][1]["templateProps"]["media"]["src"]
     assert media1 != media0 and "_2." in media1   # rank-2 clip bound + spec re-materialized
     # timing unchanged (footage edit invariant)
@@ -149,9 +155,8 @@ def test_apply_pick_fails_loud(tmp_path, monkeypatch):
     conn, ctx, sid = _seed_session(tmp_path, monkeypatch)
     conn.close()
     monkeypatch.setattr("session.job_ctx.SESSIONS_DB", tmp_path / "s.db")
-    monkeypatch.setattr("session.job_ctx.SPEC_OUT", tmp_path / "spec.json")
+    monkeypatch.setattr("session.job_ctx.REPO_ROOT", tmp_path)   # projects/<sid>/ resolves under tmp
     monkeypatch.setattr("session.job_ctx.ASSETS_DIR", tmp_path / "a")
-    monkeypatch.setattr("session.job_ctx.SOURCES_OUT", tmp_path / "src.json")
     monkeypatch.setattr("session.job_ctx.RETRIEVAL_CACHE", tmp_path / "c")
     import session_edit as se
     import pytest
@@ -164,9 +169,8 @@ def test_apply_pick_fails_loud(tmp_path, monkeypatch):
 def _point_ctx_at_seed(tmp_path, monkeypatch):
     """Aim the CLI's job_ctx constants at the seeded session's tmp paths."""
     monkeypatch.setattr("session.job_ctx.SESSIONS_DB", tmp_path / "s.db")
-    monkeypatch.setattr("session.job_ctx.SPEC_OUT", tmp_path / "spec.json")
+    monkeypatch.setattr("session.job_ctx.REPO_ROOT", tmp_path)   # projects/<sid>/ resolves under tmp
     monkeypatch.setattr("session.job_ctx.ASSETS_DIR", tmp_path / "a")
-    monkeypatch.setattr("session.job_ctx.SOURCES_OUT", tmp_path / "src.json")
     monkeypatch.setattr("session.job_ctx.RETRIEVAL_CACHE", tmp_path / "c")
 
 
@@ -174,7 +178,7 @@ def test_apply_requery_rebinds_and_stamps(tmp_path, monkeypatch):
     """A.6.2 — re_query via the CLI rebinds to the new pool's top hit, stamps
     source='re_query', and preserves timing. The pool is re-fetched (replaced)."""
     conn, ctx, sid = _seed_session(tmp_path, monkeypatch)
-    spec0 = json.loads((tmp_path / "spec.json").read_text())
+    spec0 = json.loads((tmp_path / "projects" / sid / "spec.json").read_text())
     media0 = spec0["scenes"][1]["templateProps"]["media"]["src"]
     conn.close()
     _point_ctx_at_seed(tmp_path, monkeypatch)
@@ -188,7 +192,7 @@ def test_apply_requery_rebinds_and_stamps(tmp_path, monkeypatch):
 
     assert res["ok"] is True and res["scene"] == 1
     assert res["provenance"]["source"] == "re_query"
-    spec1 = json.loads((tmp_path / "spec.json").read_text())
+    spec1 = json.loads((tmp_path / "projects" / sid / "spec.json").read_text())
     media1 = spec1["scenes"][1]["templateProps"]["media"]["src"]
     assert media1 != media0                                   # rebound to the fresh clip
     t0 = [(s["startFrame"], s["durationInFrames"]) for s in spec0["scenes"]]
@@ -213,7 +217,7 @@ def test_apply_upload_binds_and_stamps(tmp_path, monkeypatch):
     assert res["selectedRank"] is None                        # an upload is not a pool rank
     assert res["provenance"]["source"] == "uploaded"
     assert res["provenance"]["query"] == "My Clip.mp4"
-    spec1 = json.loads((tmp_path / "spec.json").read_text())
+    spec1 = json.loads((tmp_path / "projects" / sid / "spec.json").read_text())
     media = spec1["scenes"][1]["templateProps"]["media"]
     assert media["type"] == "video" and "footage_upload_" in media["src"]
 

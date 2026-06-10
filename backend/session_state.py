@@ -15,6 +15,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # backend/
 
 import json
 from session import store, job_ctx
+from pipeline import projects as projects_mod
 
 
 def build_state(sid: str) -> dict:
@@ -22,7 +23,10 @@ def build_state(sid: str) -> dict:
     try:
         if store.get_session(conn, sid) is None:
             raise KeyError(f"no session {sid!r}")
-        spec = json.loads(pathlib.Path(job_ctx.SPEC_OUT).read_text(encoding="utf-8"))
+        # Read THIS session's own materialized spec (projects/<sid>/spec.json), not a
+        # global slot — that is what makes re-opening an old project's gate work.
+        spec_path = projects_mod.project_spec_path(job_ctx.REPO_ROOT, sid)
+        spec = json.loads(spec_path.read_text(encoding="utf-8"))
         prov = store.get_media_provenance(conn, sid)
         scenes = []
         for i, sc in enumerate(spec.get("scenes", [])):
