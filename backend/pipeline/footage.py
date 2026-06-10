@@ -71,7 +71,8 @@ def candidate_rows(videos, *, query, fps):
         thumb = pics[0].get("picture") if pics else None
         rows.append({"rank": len(rows) + 1, "query": query,
                      "duration_frames": _video_duration_frames(v, fps),
-                     "thumb_url": thumb, "link": link})
+                     "thumb_url": thumb, "link": link,
+                     "pexels_id": v.get("id"), "pexels_url": v.get("url")})
     return rows
 
 

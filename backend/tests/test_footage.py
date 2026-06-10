@@ -145,6 +145,16 @@ def test_fetch_cache_hit_recovers_duration_from_sidecar(tmp_path):
     assert second[0].duration_frames == first[0].duration_frames == 180
 
 
+def test_candidate_rows_include_pexels_origin():
+    rows = candidate_rows([_video_pid("a", 6, 101, "https://pexels.com/v/101")],
+                          query="coral reef", fps=30)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["rank"] == 1 and r["query"] == "coral reef"
+    assert r["pexels_id"] == 101 and r["pexels_url"] == "https://pexels.com/v/101"
+    assert r["link"] == "a"  # existing fields preserved
+
+
 def test_clip_provenance_fields_default_none_and_roundtrip():
     # Old construction (no provenance) still works — fields default to None.
     bare = Clip(index=0, query="q", path="assets/x.mp4", duration_frames=180)
