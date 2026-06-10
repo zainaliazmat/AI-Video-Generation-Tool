@@ -184,3 +184,13 @@ def get_media_provenance(conn, session_id):
     return {r["scene_index"]: {"source": r["source"], "query": r["query"], "rank": r["rank"],
                                "pexels_id": r["pexels_id"], "pexels_url": r["pexels_url"]}
             for r in rows}
+
+
+def delete_session(conn, session_id) -> None:
+    """Remove a session and all its rows (stages, footage candidates, provenance).
+    One transaction so a crash can't leave half the session behind. Idempotent."""
+    with conn:
+        conn.execute("DELETE FROM media_provenance WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM footage_candidates WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM stages WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
