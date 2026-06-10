@@ -61,9 +61,8 @@ def test_run_emits_session_id(tmp_path, monkeypatch):
     monkeypatch.setattr("pipeline.footage.search_pexels", lambda q, key: {"videos": pool.get(q, [])})
     monkeypatch.setattr("pipeline.footage._download", lambda url, dest: Path(dest).write_bytes(b"v"))
     monkeypatch.setattr("pipeline.footage.require_env", lambda name: "KEY")
+    monkeypatch.setattr(m, "REPO_ROOT", tmp_path)   # snapshot lands in projects/<sid>/ under tmp
     monkeypatch.setattr(m, "ASSETS_DIR", tmp_path / "a")
-    monkeypatch.setattr(m, "SPEC_OUT", tmp_path / "spec.json")
-    monkeypatch.setattr(m, "SOURCES_OUT", tmp_path / "src.json")
     monkeypatch.setattr(m, "SESSIONS_DB", tmp_path / "s.db")
     monkeypatch.setattr(m, "RETRIEVAL_CACHE", tmp_path / "c")
 
