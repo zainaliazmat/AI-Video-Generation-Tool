@@ -25,7 +25,10 @@ and later "uploaded"). Built directly on the A.1 session spine (PR #10, merged).
 - User uploads + the `uploaded` source value — **A.2b**.
 - DeepSeek-driven re-query (the natural-language → query path) — **A.2c** (the `re_query` *record
   shape* is built now; only the DeepSeek *driver* is deferred).
-- The A.6 badge UI itself, the preview API, and the frontend harness — **A.6**.
+- The A.6 badge UI itself, the preview API, and the frontend harness — **A.6**. This includes the
+  **broaden-after-whiff pool-display residual** (§5.1): A.2a records the provenance value correctly,
+  but reconciling the *displayed* candidate pool with a clip sourced from the broadened title search
+  is an A.6 concern (tolerate "selected not in pool", or persist the resolved pool there).
 - A credits/attribution feature. `pexels_id`/`pexels_url` are captured as **origin-completeness**
   (so a later credits feature *can* be built), not as a credits feature now.
 - An edit-history log + timestamps. The record is **current-state, one row per scene**
@@ -135,17 +138,31 @@ media_provenance(
 
 Two helpers:
 - `store.upsert_provenance(conn, session_id, scene_index, *, source, query, rank, pexels_id, pexels_url)`
-  — `INSERT … ON CONFLICT(session_id, scene_index) DO UPDATE` (current-state overwrite).
+  — `INSERT … ON CONFLICT(session_id, scene_index) DO UPDATE` (current-state overwrite). **Fails
+  loud on an unexpected `source`:** a module-level `_VALID_SOURCES = {"auto", "pick", "re_query"}`
+  guard raises `ValueError` before touching the DB, matching the codebase's fail-closed house
+  style. The column itself stays plain `TEXT` (forward-compatible — A.2b adds `"uploaded"` to the
+  set with **no migration**).
 - `store.get_media_provenance(conn, session_id)` → `{scene_index: {source, query, rank, pexels_id, pexels_url}}`.
 
 ## 4. Engine + gate stamping
 
 **`engine.advance("footage")`** — after the existing `_sync_footage_candidates_to_db(output)`,
 add a `_stamp_auto_provenance(output)` step: for each `clip` in `output["clips"]`, write a
-`source="auto"` row from `clip.rank` / `clip.pexels_id` / `clip.pexels_url` / `clip.query`. Because
-the sidecar (§2) guarantees clips carry provenance on both fresh and disk-cache paths, this stamps
-unconditionally; as a belt-and-suspenders guard it skips a clip whose `rank is None` rather than
-clobbering an existing row with nulls.
+`source="auto"` row from `clip.rank` / `clip.pexels_id` / `clip.pexels_url` / `clip.query`.
+
+**Stamp unconditionally, with nullable rank — a deliberate choice, not a guard side effect.**
+`_stamp_auto_provenance` runs *only* inside `advance("footage")`, immediately after `run_footage`
+produced fresh **auto** clips (a gate `pick`/`re_query` goes through `_edit_footage`, which never
+calls this path), so the clips it reads are always genuinely auto — stamping `source="auto"` is
+always consistent with the bound clips, and there is no pick/re_query row to protect. When the
+sidecar is present (every clip fetched under A.2a) the rank/Pexels fields are populated; for a
+**legacy pre-A.2a cached `.mp4`** with no `.prov.json`, we record `source="auto"` with
+`rank`/`pexels_id`/`pexels_url` = `None` ("auto, origin unknown") rather than writing no row at all
+— marginally more honest than leaving A.6 to infer a missing scene. The one bounded degradation:
+if a sidecar is *externally* deleted mid-session, a re-advance overwrites a previously-known rank
+with `None`; nothing in A.2a deletes sidecars, so within a session this does not arise, and the
+worst case is a re-fetch restoring it.
 
 **`engine._edit_footage(op)`** — already computes the `chosen` pool row (which now carries
 `pexels_id`/`pexels_url` from `candidate_rows`). After it rebinds the scene's `Clip`, stamp the
@@ -171,8 +188,12 @@ bounded and harmless:
   `output_json` bytes or the `input_hash`.
 - The footage `output_json` change perturbs assemble's `input_hash` *value* only. Within a session
   the footage output is persisted once and re-loaded deterministically (exact `asdict` ↔
-  `Clip(**c)` round-trip), so the hash is stable — no spurious cache misses. Even if assemble
-  re-ran, it would produce the identical `spec.json` (idempotent re-derive). Net effect: nil.
+  `Clip(**c)` round-trip), so the hash is normally stable. The one edge: a clip's provenance can
+  *flip* across a re-advance (fresh-fetched with provenance, later cache-hit with a missing/stale
+  sidecar → `None`), which changes the footage `output_json` and re-runs assemble **once**. That is
+  harmless — the re-derive is idempotent, so the resulting `spec.json` is identical — but it is a
+  real (rare, sidecar-makes-it-rarer) extra run, not literally nil. The deviation stands because
+  the cost ceiling is "one redundant assemble that produces byte-identical output."
 
 The simpler alternative considered and rejected — stripping provenance keys inside `clips_to_json`
 to keep `output_json` clean — adds a "serialize-some-but-not-all-`Clip`-fields" special case that a
@@ -189,28 +210,62 @@ A.1 API accessors. This is the surface A.6 reads to render badges.
   longer clip below it, `rank` is that lower position (e.g. 2), not 1.
 - *Broaden-to-title* — when a too-specific query whiffs and `fetch_footage` retries with the title,
   the chosen clip comes from the **broadened** search; `Clip.query` already records that resolved
-  query, and `rank`/`pexels_id`/`pexels_url` come from that same search. The provenance is correct
-  even though the *displayed* candidate pool (built from the specific query in `run_footage`) may
-  not contain that clip — provenance is surfaced from the clip, not matched against the pool, which
-  is exactly why "surface" beats "link-match."
+  query, and `rank`/`pexels_id`/`pexels_url` come from that same search. The provenance *value* is
+  correct — surfaced from the clip, not matched against the pool, which is exactly why "surface"
+  beats "link-match." **But this opens a downstream UI gap that A.2a does not close — see below.**
+
+### 5.1 Known A.6 residual — selected clip absent from the displayed pool (broaden-after-whiff only)
+
+A.2a records the provenance value correctly, but it does **not** make the recorded record consistent
+with the *displayed candidate pool* in the one broaden-after-whiff case, and that inconsistency
+lands at A.6, not here. Stated plainly so it is not buried:
+
+- **The gap:** `run_footage` builds the displayed pool from the scene's specific query (`ps.query`).
+  When that query returns zero usable portrait clips, `fetch_footage` broadens to
+  `broad_query = harden(title)` and the selected clip comes from the **title** search. So the
+  displayed pool (specific query) will **not contain the selected clip**, and the recorded `rank`
+  indexes the **broadened** search, not the displayed pool. At A.6 the UI would show a "selected"
+  clip that isn't a member of the pool it renders, with a rank that doesn't index that pool.
+- **A.6 must handle it** (this is the residual handed forward, not an A.2a fix): either the badge UI
+  tolerates "selected clip not in the displayed pool," **or** A.6 persists the *resolved* pool
+  (the broadened search's candidates) so the pool it shows is the one the clip and rank actually
+  index. Surfacing the resolved pool is deliberately out of A.2a's scope — it is pool *display*,
+  not provenance capture.
+- **Tight bound — this is broaden-*after-whiff* only.** The query is hardened at **plan time**
+  (`recipe.py:177` → `query=harden(beat.keywords or title, title=title)`), so both Layer-A lexicon
+  remaps *and* the Layer-B named-entity "degrade to title" have **already** rewritten `ps.query`
+  before `run_footage` builds the pool from that same `ps.query`. In those cases the pool is built
+  from the very query that produced the clip → **pool matches clip, no gap**. The gap exists only
+  when a hardened *specific* query is searched, returns zero usable portrait clips, and is broadened
+  at fetch time. Whiffs (zero usable *portrait* clips, not zero results) are rare — so this is
+  rare-but-real, and it is an A.6 concern, not an A.2a defect.
 
 ## 6. Testing (tests-only; no eyes-on)
 
 - **Footage stage:** `select_clip` returns the correct `Selection` (rank/id/url) for the
   relevance-first pick, the K-floor displacement (rank > 1), and the `first_usable` fallback;
   `candidate_rows` includes `pexels_id`/`pexels_url`; `_fetch_one` writes the `.prov.json` sidecar
-  on fresh fetch and **restores provenance from it on a disk-cache hit** (the regenerate guard);
-  a missing/corrupt sidecar degrades to `None` provenance without raising.
-- **Engine:** `advance("footage")` stamps `source="auto"` rows from the clips (fresh path **and**
-  the disk-cache path via the sidecar); `regenerate("footage")` preserves provenance rather than
-  nulling it; `edit` with `pick` stamps `source="pick"` and `re_query` stamps `source="re_query"`,
-  each overwriting the prior `auto` row for that scene.
-- **Store:** `upsert_provenance` round-trips and overwrites on PK conflict; `get_media_provenance`
-  shape; the migration is idempotent (open an existing DB twice).
+  on fresh fetch and **restores provenance from it on a disk-cache hit**; a missing/corrupt sidecar
+  degrades to `None` provenance without raising.
+- **Broaden-after-whiff provenance** (the §5.1 case): a specific query that yields zero usable
+  portrait clips broadens to the title; assert the recorded provenance comes from the **broadened**
+  clip — `query` == the (hardened) title and `rank`/`pexels_id`/`pexels_url` index the title search
+  — confirming the value is captured from the clip, independent of the displayed pool.
+- **Engine:** `advance("footage")` stamps `source="auto"` rows from the clips on the fresh path
+  **and** the disk-cache path (rank preserved via the sidecar); a legacy cache hit with **no**
+  sidecar stamps `source="auto"` with `rank=None` (the deliberate "auto, origin unknown" record,
+  §4); `regenerate("footage")` re-stamps auto from the sidecar rather than nulling a known rank;
+  `edit` with `pick` stamps `source="pick"` and `re_query` stamps `source="re_query"`, each
+  overwriting the prior `auto` row for that scene.
+- **Store:** `upsert_provenance` round-trips and overwrites on PK conflict; **raises `ValueError` on
+  an unexpected `source`** (the fail-loud guard, §3); `get_media_provenance` shape; the migration is
+  idempotent (open an existing DB twice).
 - **API:** `media_provenance` returns the `{scene_index: {...}}` map after autopilot and after a
   gate edit.
-- **A.1 regression:** the full A.1 suite stays green; the golden-autopilot / content-identity test
-  confirms `spec.json` is **byte-identical** with the provenance fields present on the clips.
+- **A.1 regression (invariant #1 pinned on both sides):** the full A.1 suite stays green; the
+  golden-autopilot / content-identity test confirms `spec.json` is **byte-identical** both with the
+  provenance fields **populated** on the clips **and** with them left `None` — so the render
+  contract is pinned for the default path and the captured-provenance path alike.
 
 Build size: **~6–8 TDD tasks**, one branch off `development`, PR → `development`.
 
