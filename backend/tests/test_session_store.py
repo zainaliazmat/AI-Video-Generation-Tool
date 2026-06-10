@@ -112,3 +112,16 @@ def test_upsert_provenance_allows_null_rank_for_legacy_clip(tmp_path):
                             pexels_id=None, pexels_url=None)
     assert store.get_media_provenance(conn, "s1")[0]["rank"] is None
     conn.close()
+
+
+def test_upsert_provenance_accepts_uploaded_source(tmp_path):
+    from session import store
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="T", now="t0")
+    store.upsert_provenance(conn, "s1", 1, source="uploaded",
+                            query="beach-sunset.mp4", rank=None,
+                            pexels_id=None, pexels_url=None)
+    prov = store.get_media_provenance(conn, "s1")
+    assert prov[1] == {"source": "uploaded", "query": "beach-sunset.mp4",
+                       "rank": None, "pexels_id": None, "pexels_url": None}
+    conn.close()

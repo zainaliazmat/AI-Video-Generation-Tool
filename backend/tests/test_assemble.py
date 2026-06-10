@@ -125,3 +125,27 @@ def test_theme_and_layers_defaults_and_roundtrip(tmp_path):
     out = tmp_path / "spec.json"
     write_spec(spec, out)
     Spec.model_validate(json.loads(out.read_text()))   # must not raise
+
+
+def test_scene_media_emits_kind_and_gates_loop():
+    from pipeline.assemble import _scene_media
+    from pipeline.contracts import Clip
+
+    # video shorter than its span → loops
+    short_vid = Clip(index=0, query="q", path="assets/v.mp4", duration_frames=10)
+    m = _scene_media(short_vid, span_frames=30)
+    assert m.type == "video" and m.loop is True
+
+    # video longer than span → no loop
+    long_vid = Clip(index=0, query="q", path="assets/v.mp4", duration_frames=90)
+    assert _scene_media(long_vid, span_frames=30).loop is False
+
+    # video with unknown duration → no loop
+    unk = Clip(index=0, query="q", path="assets/v.mp4", duration_frames=None)
+    assert _scene_media(unk, span_frames=30).loop is False
+
+    # image → type image, never loops (even with a tiny duration)
+    img = Clip(index=0, query="pic.png", path="assets/pic.png",
+               duration_frames=5, kind="image")
+    mi = _scene_media(img, span_frames=30)
+    assert mi.type == "image" and mi.loop is False

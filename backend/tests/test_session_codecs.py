@@ -23,6 +23,27 @@ def test_clips_roundtrip():
     assert codecs.clips_from_json(codecs.clips_to_json(cs)) == cs
 
 
+def test_clip_kind_round_trips_and_defaults_video():
+    from pipeline.contracts import Clip
+    from session.codecs import clips_to_json, clips_from_json
+
+    # default kind is "video"
+    c = Clip(index=0, query="q", path="assets/x.mp4", duration_frames=10)
+    assert c.kind == "video"
+
+    # an image clip round-trips through the footage codec
+    img = Clip(index=1, query="pic.png", path="assets/pic.png",
+               duration_frames=None, kind="image")
+    restored = clips_from_json(clips_to_json([c, img]))
+    assert restored[0].kind == "video"
+    assert restored[1].kind == "image"
+
+    # legacy JSON missing the key loads with the default (forward-compat)
+    legacy = [{"index": 0, "query": "q", "path": "assets/x.mp4",
+               "duration_frames": 10}]
+    assert clips_from_json(legacy)[0].kind == "video"
+
+
 def test_script_bundle_roundtrip():
     script = BeatsScript(title="T", beats=[Beat(text="h"), Beat(text="scene"), Beat(text="o")])
     p = recipe_plan(script, theme=Theme())

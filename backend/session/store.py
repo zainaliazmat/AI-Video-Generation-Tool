@@ -154,7 +154,7 @@ def set_candidate_clip_path(conn, session_id, *, scene_index, rank, clip_path) -
 
 # A.2a provenance sources. Fail loud on anything else (house style); A.2b adds
 # "uploaded" here with NO migration — the column is plain TEXT, forward-compatible.
-_VALID_SOURCES = {"auto", "pick", "re_query"}
+_VALID_SOURCES = {"auto", "pick", "re_query", "uploaded"}
 
 
 def upsert_provenance(conn, session_id, scene_index, *, source, query, rank,
