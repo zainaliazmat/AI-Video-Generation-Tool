@@ -15,6 +15,7 @@ import {
 import {RenderControls, type RenderRecord} from './RenderControls';
 import {HistoryList} from './HistoryList';
 import {Badge, Eyebrow} from './ui';
+import {FootageGate, type GateScene} from './FootageGate';
 
 const freshStages = (): Stage[] => DEFAULT_STAGES.map((s) => ({...s, state: 'queued'}));
 
@@ -31,6 +32,9 @@ export function Studio() {
   const [stages, setStages] = useState<Stage[]>(freshStages);
   const [generating, setGenerating] = useState(false);
   const [genNonce, setGenNonce] = useState(0); // bump to remount the Player on a new spec
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [gateScenes, setGateScenes] = useState<GateScene[]>([]);
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -97,12 +101,22 @@ export function Studio() {
             );
           } else if (msg.type === 'done') {
             finished = true;
+            const sid = typeof msg.sid === 'string' ? msg.sid : null;
+            setSessionId(sid);
             const r = await fetch(`/spec.json?t=${Date.now()}`);
             const s: Spec = await r.json();
             setSpec(s);
             setFailed(false);
             setGenNonce((n) => n + 1);
             toast.success('Video generated', {id: toastId, description: s.meta.title});
+            if (sid) {
+              try {
+                const st = await fetch(`/api/session/${sid}/state`).then((x) => x.json());
+                setGateScenes(Array.isArray(st?.scenes) ? st.scenes : []);
+              } catch {
+                setGateScenes([]);
+              }
+            }
           } else if (msg.type === 'error') {
             finished = true;
             throw new Error(String(msg.message));
@@ -118,6 +132,42 @@ export function Studio() {
       toast.error('Generation failed', {id: toastId, description: message});
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function pick(scene: number, rank: number) {
+    if (!sessionId || editing) return;
+    setEditing(true);
+    const toastId = toast.loading('Swapping clip…');
+    try {
+      const res = await fetch(`/api/session/${sessionId}/edit`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({op: 'pick', scene, rank}),
+      });
+      if (res.status === 409) {
+        toast.error('An edit is already in progress', {id: toastId});
+        return;
+      }
+      const json = await res.json();
+      if (!res.ok || json?.ok === false) throw new Error(json?.error ?? `HTTP ${res.status}`);
+      // re-highlight from the edit response (no second /state fetch)
+      setGateScenes((prev) =>
+        prev.map((s) =>
+          s.index === json.scene
+            ? {...s, candidates: s.candidates.map((c) => ({...c, selected: c.rank === json.selectedRank}))}
+            : s,
+        ),
+      );
+      // reload spec into the live Player (instant); export MP4 is now stale
+      const r = await fetch(`/spec.json?t=${Date.now()}`);
+      setSpec(await r.json());
+      setGenNonce((n) => n + 1);
+      toast.success('Clip swapped — preview updated', {id: toastId, description: 'Re-render to export the MP4.'});
+    } catch (e) {
+      toast.error('Swap failed', {id: toastId, description: e instanceof Error ? e.message : 'edit failed'});
+    } finally {
+      setEditing(false);
     }
   }
 
@@ -173,6 +223,12 @@ export function Studio() {
                 spec={spec}
                 onComplete={(r) => setHistory((h) => [r, ...h])}
               />
+            </motion.div>
+          )}
+
+          {spec && gateScenes.length > 0 && (
+            <motion.div {...rise} transition={{...rise.transition, delay: 0.14}}>
+              <FootageGate scenes={gateScenes} busy={editing} onPick={pick} />
             </motion.div>
           )}
 
