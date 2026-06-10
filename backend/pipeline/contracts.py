@@ -25,6 +25,7 @@ class Clip:
     query: str
     path: str  # relative to remotion/public/, e.g. "assets/footage_ab12cd34.mp4"
     duration_frames: int | None = None  # clip length; None if unknown (no loop fallback)
+    kind: str = "video"  # "video" | "image" — render media type; default keeps autopilot spec byte-identical
     # A.2a media provenance — surfaced from select_clip's real choice; None until set
     # (and for legacy pre-A.2a cached clips). Render-irrelevant: assemble ignores these.
     rank: int | None = None          # 1-based position among USABLE clips in the chosen search
