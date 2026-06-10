@@ -72,3 +72,15 @@ def test_run_emits_session_id(tmp_path, monkeypatch):
     sid_events = [v for (k, v) in events if k == "session"]
     assert len(sid_events) == 1
     assert sid_events[0].startswith("auto-")
+
+
+def test_job_ctx_paths_match_main():
+    import main as m
+    from session import job_ctx
+    ctx = job_ctx.build_ctx(topic="X", fps=30)
+    assert ctx.spec_out == m.SPEC_OUT
+    assert ctx.assets_dir == m.ASSETS_DIR
+    assert ctx.sources_out == m.SOURCES_OUT
+    assert ctx.cache_dir == m.RETRIEVAL_CACHE
+    assert ctx.topic == "X" and ctx.fps == 30
+    assert ctx.catalog  # templates loaded
