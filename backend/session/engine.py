@@ -182,6 +182,11 @@ class Engine:
         store.upsert_stage(self.conn, self.sid, "footage", status="done",
                            input_hash=store.get_stage(self.conn, self.sid, "footage")["input_hash"],
                            output_json=json.dumps(to_json(out), default=str), now=_now())
+        store.upsert_provenance(
+            self.conn, self.sid, scene,
+            source="re_query" if op["op"] == "re_query" else "pick",
+            query=chosen["query"], rank=chosen["rank"],
+            pexels_id=chosen.get("pexels_id"), pexels_url=chosen.get("pexels_url"))
 
     def run_all(self):
         """Autopilot: advance every stage in order, then materialize spec.json."""

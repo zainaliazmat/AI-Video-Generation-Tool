@@ -69,3 +69,21 @@ def test_stamp_auto_records_unknown_origin_for_legacy_clip(tmp_path, monkeypatch
     prov = store.get_media_provenance(conn, "s1")
     assert prov[1]["source"] == "auto" and prov[1]["rank"] is None and prov[1]["pexels_id"] is None
     conn.close()
+
+
+def test_pick_stamps_pick_provenance(tmp_path, monkeypatch):
+    conn, eng = _seed(tmp_path, monkeypatch)
+    eng.edit("footage", {"op": "pick", "scene_index": 1, "rank": 2})
+    prov = store.get_media_provenance(conn, "s1")
+    assert prov[1] == {"source": "pick", "query": "coral reef", "rank": 2,
+                       "pexels_id": 102, "pexels_url": "https://pexels.com/v/102"}
+    conn.close()
+
+
+def test_requery_stamps_requery_provenance(tmp_path, monkeypatch):
+    conn, eng = _seed(tmp_path, monkeypatch)
+    eng.edit("footage", {"op": "re_query", "scene_index": 1, "query": "reef shark"})
+    prov = store.get_media_provenance(conn, "s1")
+    assert prov[1] == {"source": "re_query", "query": "reef shark", "rank": 1,
+                       "pexels_id": 201, "pexels_url": "https://pexels.com/v/201"}
+    conn.close()
