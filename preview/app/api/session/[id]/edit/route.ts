@@ -30,9 +30,12 @@ export async function POST(req: Request, {params}: {params: Promise<{id: string}
   }
   editing = true;
   try {
-    const {code, json} = await spawnJson('session_edit.py', [
-      '--sid', id, '--op', 'pick', '--scene', String(body.scene), '--rank', String(body.rank),
-    ]);
+    const {code, json} = await spawnJson(
+      'session_edit.py',
+      ['--sid', id, '--op', 'pick', '--scene', String(body.scene), '--rank', String(body.rank)],
+      // a first-time pick of a rank downloads its (multi-MB) clip — allow well beyond the 60s default
+      180_000,
+    );
     if (code !== 0 || json?.ok === false) {
       return Response.json({error: json?.error ?? 'edit failed'}, {status: 400});
     }
