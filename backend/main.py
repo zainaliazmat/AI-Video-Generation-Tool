@@ -91,6 +91,7 @@ def run(topic: str, fps: int = DEFAULT_FPS, on_stage=None):
         sid = f"auto-{uuid.uuid4().hex}"
         store.create_session(conn, id=sid, topic=topic, now="autopilot")
         eng = engine.Engine(conn, ctx, session_id=sid)
+        emit("session", sid)   # A.6: surface the session id so the preview can resume + edit it
 
         # on_stage is a UI progress signal, not a file-readiness one: emit(key,"done")
         # marks in-memory stage completion. spec.json is written by materialize_spec()
