@@ -154,7 +154,7 @@ def set_candidate_clip_path(conn, session_id, *, scene_index, rank, clip_path) -
 
 # A.2a provenance sources. Fail loud on anything else (house style); A.2b adds
 # "uploaded" here with NO migration — the column is plain TEXT, forward-compatible.
-_VALID_SOURCES = {"auto", "pick", "re_query"}
+_VALID_SOURCES = {"auto", "pick", "re_query", "uploaded"}
 
 
 def upsert_provenance(conn, session_id, scene_index, *, source, query, rank,
@@ -184,3 +184,13 @@ def get_media_provenance(conn, session_id):
     return {r["scene_index"]: {"source": r["source"], "query": r["query"], "rank": r["rank"],
                                "pexels_id": r["pexels_id"], "pexels_url": r["pexels_url"]}
             for r in rows}
+
+
+def delete_session(conn, session_id) -> None:
+    """Remove a session and all its rows (stages, footage candidates, provenance).
+    One transaction so a crash can't leave half the session behind. Idempotent."""
+    with conn:
+        conn.execute("DELETE FROM media_provenance WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM footage_candidates WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM stages WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))

@@ -79,6 +79,7 @@ export async function POST(req: Request) {
     start(controller) {
       let closed = false;
       let stderrTail = '';
+      let sid: string | null = null;
 
       const send = (payload: unknown) => {
         if (closed) return;
@@ -125,7 +126,9 @@ export async function POST(req: Request) {
           if (i === -1) continue;
           try {
             const evt = JSON.parse(line.slice(i + 'PROGRESS '.length));
-            if (evt && typeof evt.stage === 'string' && typeof evt.state === 'string') {
+            if (evt?.stage === 'session' && typeof evt.state === 'string') {
+              sid = evt.state; // the resumable session id — not a pipeline stage
+            } else if (evt && typeof evt.stage === 'string' && typeof evt.state === 'string') {
               send({type: 'stage', stage: evt.stage, state: evt.state});
             }
           } catch {
@@ -146,7 +149,7 @@ export async function POST(req: Request) {
       child.on('close', async (code) => {
         if (code === 0) {
           await stageAssets();
-          send({type: 'done', spec: '/spec.json'});
+          send({type: 'done', sid});
         } else {
           const tail = stderrTail.trim().split('\n').slice(-3).join('\n');
           send({type: 'error', message: `Generation failed (exit ${code})${tail ? `: ${tail}` : ''}`});

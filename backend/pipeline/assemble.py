@@ -69,10 +69,12 @@ def _resolve_transition(
 
 
 def _scene_media(clip, span_frames: int) -> Media:
-    """Footage media for a scene span. Loop iff the clip is known-shorter than
-    the span the renderer will play it for (dᵢ + Tᵢ)."""
-    loop = clip.duration_frames is not None and clip.duration_frames < span_frames
-    return Media(type="video", src=clip.path, fit="cover", kenBurns=KenBurns(), loop=loop)
+    """Footage media for a scene span. Emits the clip's media `kind` and loops iff
+    it is a VIDEO known-shorter than the span the renderer plays it for (dᵢ + Tᵢ).
+    Images (kind='image') carry no duration and never loop — the <Img> renders for
+    the full span."""
+    loop = clip.kind == "video" and clip.duration_frames is not None and clip.duration_frames < span_frames
+    return Media(type=clip.kind, src=clip.path, fit="cover", kenBurns=KenBurns(), loop=loop)
 
 
 def build_spec(
@@ -84,6 +86,7 @@ def build_spec(
     catalog: Dict[str, Manifest],
     fps: int = 30,
     music: str | None = None,
+    voiceover_rel: str = "assets/voiceover.wav",
 ) -> Spec:
     scenes_plan = plan.scenes
     n = len(scenes_plan)
@@ -128,7 +131,7 @@ def build_spec(
 
     return Spec(
         meta=Meta(title=plan.title, fps=fps, width=1080, height=1920, durationInFrames=total),
-        audio=Audio(voiceover="assets/voiceover.wav", music=music, musicVolumeDb=-18.0),
+        audio=Audio(voiceover=voiceover_rel, music=music, musicVolumeDb=-18.0),
         scenes=scenes,
         captions=captions,
         theme=Theme(),

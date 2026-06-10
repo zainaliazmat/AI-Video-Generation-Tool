@@ -112,3 +112,31 @@ def test_upsert_provenance_allows_null_rank_for_legacy_clip(tmp_path):
                             pexels_id=None, pexels_url=None)
     assert store.get_media_provenance(conn, "s1")[0]["rank"] is None
     conn.close()
+
+
+def test_upsert_provenance_accepts_uploaded_source(tmp_path):
+    from session import store
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="T", now="t0")
+    store.upsert_provenance(conn, "s1", 1, source="uploaded",
+                            query="beach-sunset.mp4", rank=None,
+                            pexels_id=None, pexels_url=None)
+    prov = store.get_media_provenance(conn, "s1")
+    assert prov[1] == {"source": "uploaded", "query": "beach-sunset.mp4",
+                       "rank": None, "pexels_id": None, "pexels_url": None}
+    conn.close()
+
+
+def test_delete_session_purges_all_tables(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="auto-x", topic="t", now="now")
+    store.upsert_stage(conn, "auto-x", "script", status="done", now="now", output_json="{}")
+    store.replace_footage_candidates(conn, "auto-x", scene_index=0, candidates=[
+        {"rank": 1, "query": "q", "duration_frames": 30, "thumb_url": "u", "selected": 1}])
+    store.upsert_provenance(conn, "auto-x", 0, source="auto", query="q", rank=1,
+                            pexels_id=1, pexels_url="u")
+    store.delete_session(conn, "auto-x")
+    assert store.get_session(conn, "auto-x") is None
+    assert store.get_stage(conn, "auto-x", "script") is None
+    assert store.get_footage_candidates(conn, "auto-x", scene_index=0) == []
+    assert store.get_media_provenance(conn, "auto-x") == {}

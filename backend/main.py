@@ -18,6 +18,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # backend/
 import argparse
 import json
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from pipeline import script as script_stage       # noqa: F401 — test patches via m.script_stage
@@ -26,6 +27,7 @@ from pipeline import timing as timing_stage       # noqa: F401 — test patches 
 from pipeline import footage as footage_stage     # noqa: F401 — test patches via m.footage_stage
 from pipeline import assemble as assemble_stage
 from pipeline import validate as validate_stage
+from pipeline import projects as projects_mod
 from pipeline.contracts import FootageRequest
 from pipeline.footage_query import harden
 from schema import Theme
@@ -76,39 +78,43 @@ def run(topic: str, fps: int = DEFAULT_FPS, on_stage=None):
 
     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
     catalog = validate_stage.load_catalog(TEMPLATES_DIR)
+    now = datetime.now()
+    sid = f"auto-{uuid.uuid4().hex}"
     ctx = executors.EngineContext(
         topic=topic, fps=fps, theme=Theme(), catalog=catalog,
         assets_dir=ASSETS_DIR, cache_dir=RETRIEVAL_CACHE,
-        voiceover_path=ASSETS_DIR / "voiceover.wav",
-        spec_out=SPEC_OUT, sources_out=SOURCES_OUT,
+        voiceover_path=ASSETS_DIR / projects_mod.voiceover_name(sid),
+        spec_out=projects_mod.project_spec_path(REPO_ROOT, sid),
+        sources_out=projects_mod.project_sources_path(REPO_ROOT, sid),
     )
     conn = store.connect(SESSIONS_DB)
     try:
-        # Mint a FRESH session per autopilot run so re-generating a topic is always a
-        # real cold run (never a cache no-op that would re-stage a stale spec pointing
-        # at possibly-deleted clips). Persistent/resumable sessions come via the Session
-        # API (A.6) with caller-supplied ids; autopilot stays stateless-per-invocation.
-        sid = f"auto-{uuid.uuid4().hex}"
         store.create_session(conn, id=sid, topic=topic, now="autopilot")
         eng = engine.Engine(conn, ctx, session_id=sid)
+        emit("session", sid)
 
-        # on_stage is a UI progress signal, not a file-readiness one: emit(key,"done")
-        # marks in-memory stage completion. spec.json is written by materialize_spec()
-        # AFTER the loop and flushed before run() returns (the API reads it post-exit).
         for i, key in enumerate(PIPELINE_STAGES, start=1):
             emit(key, "running")
             _log(f"[{i}/{len(PIPELINE_STAGES)}] {key}...")
             eng.advance(key)
             emit(key, "done")
-        eng.materialize_spec()
+        projects_mod.project_dir(REPO_ROOT, sid).mkdir(parents=True, exist_ok=True)
+        eng.materialize_spec()   # writes projects/<sid>/spec.json (ctx.spec_out)
 
-        # sources sidecar from the script stage output (unchanged Phase-3 behavior)
         script_bundle = eng._load_output("script")
-        SOURCES_OUT.write_text(json.dumps(build_sources_sidecar(script_bundle["script"]), indent=2),
-                               encoding="utf-8")
-        spec = eng._load_output("assemble")   # codec round-tripped; value-equal to build_spec output
-        _log(f"      wrote {SPEC_OUT}  ({spec.meta.durationInFrames} frames @ {fps}fps)")
-        _log(f"      wrote {SOURCES_OUT}  ({len(script_bundle['script'].sources or [])} sources cited)")
+        ctx.sources_out.write_text(  # project dir already created above
+            json.dumps(build_sources_sidecar(script_bundle["script"]), indent=2),
+            encoding="utf-8")
+        spec = eng._load_output("assemble")
+        projects_mod.write_meta(REPO_ROOT, sid, meta={
+            "id": sid,
+            "topic": topic,
+            "title": spec.meta.title,
+            "createdAt": int(now.timestamp() * 1000),
+            "durationInFrames": spec.meta.durationInFrames,
+            "fps": spec.meta.fps,
+        })
+        _log(f"      wrote {ctx.spec_out}  ({spec.meta.durationInFrames} frames @ {fps}fps)")
         return spec
     finally:
         conn.close()
