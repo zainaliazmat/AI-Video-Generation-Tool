@@ -21,27 +21,32 @@ export function spawnJson(
     });
     let out = '';
     let err = '';
+    // Settle once: a timeout rejects AND then SIGTERM makes the child emit `close`,
+    // which would otherwise settle the promise a second time.
+    let settled = false;
+    const done = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
-      reject(new Error(`${scriptRelToBackend} timed out`));
+      done(() => reject(new Error(`${scriptRelToBackend} timed out`)));
     }, timeoutMs);
     child.stdout.on('data', (b) => (out += b.toString()));
     child.stderr.on('data', (b) => (err = (err + b.toString()).slice(-2000)));
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      reject(e);
-    });
+    child.on('error', (e) => done(() => reject(e)));
     child.on('close', (code) => {
-      clearTimeout(timer);
       const line = out.trim().split('\n').filter(Boolean).pop() ?? '';
       let json: any;
       try {
         json = JSON.parse(line);
       } catch {
-        reject(new Error(`${scriptRelToBackend} bad output (exit ${code}): ${err.slice(-300)}`));
+        done(() => reject(new Error(`${scriptRelToBackend} bad output (exit ${code}): ${err.slice(-300)}`)));
         return;
       }
-      resolve({code: code ?? 0, json});
+      done(() => resolve({code: code ?? 0, json}));
     });
   });
 }
