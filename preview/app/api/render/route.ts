@@ -1,4 +1,5 @@
 import {spawn, type ChildProcess} from 'node:child_process';
+import {copyFileSync, mkdirSync} from 'node:fs';
 import path from 'node:path';
 
 // child_process + fs are Node-only; never bundle this for Edge.
@@ -16,7 +17,20 @@ const RENDER_TIMEOUT_MS = 15 * 60 * 1000;
 // module state, so a dev hot-reload could reset it; fine for a single user.
 let rendering = false;
 
-export async function POST() {
+export async function POST(req: Request) {
+  let id = '';
+  try {
+    const body = await req.json();
+    id = typeof body?.id === 'string' ? body.id.trim() : '';
+  } catch {
+    id = '';
+  }
+  if (!id || !/^[A-Za-z0-9_-]+$/.test(id)) {
+    return new Response(JSON.stringify({error: 'A valid project "id" is required to render.'}), {
+      status: 400, headers: {'content-type': 'application/json'},
+    });
+  }
+
   if (rendering) {
     return new Response(JSON.stringify({error: 'A render is already in progress.'}), {
       status: 409,
@@ -76,7 +90,7 @@ export async function POST() {
       // `remotion render Video out/video.mp4` (config: jpeg / concurrency 2 / 120s).
       child = spawn('npm', ['run', 'render'], {
         cwd: REMOTION_DIR, // MUST be remotion/ — matches the verified render path
-        env: process.env, // inherit PATH so npm/node/Chrome resolve
+        env: {...process.env, SPEC_PATH: `projects/${id}/spec.json`}, // inherit PATH so npm/node/Chrome resolve
         shell: false,
         detached: true, // own process group so killChild() tears down the tree
       });
@@ -110,8 +124,21 @@ export async function POST() {
         finish();
       });
       child.on('close', (code) => {
-        if (code === 0) send({type: 'done', output: '/api/render/output'});
-        else send({type: 'error', message: `Render exited with code ${code}`});
+        if (code === 0) {
+          try {
+            const src = path.resolve(REMOTION_DIR, 'out', 'video.mp4');
+            const destDir = path.resolve(REMOTION_DIR, '..', 'projects', id);
+            mkdirSync(destDir, {recursive: true});
+            copyFileSync(src, path.join(destDir, 'video.mp4'));
+          } catch (e) {
+            send({type: 'error', message: `Render saved but archiving failed: ${(e as Error).message}`});
+            finish();
+            return;
+          }
+          send({type: 'done', id, output: `/api/projects/${id}/video`});
+        } else {
+          send({type: 'error', message: `Render exited with code ${code}`});
+        }
         finish();
       });
     },

@@ -69,12 +69,13 @@ def test_engine_autopilot_produces_valid_spec(tmp_path, monkeypatch):
 def _run_main(tmp_path, monkeypatch):
     """Drive the refactored main.run() hermetically (outputs + sessions DB in tmp)."""
     import main
-    monkeypatch.setattr(main, "SPEC_OUT", tmp_path / "spec.json")
-    monkeypatch.setattr(main, "SOURCES_OUT", tmp_path / "sources.json")
+    monkeypatch.setattr(main, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(main, "ASSETS_DIR", tmp_path / "assets")
     monkeypatch.setattr(main, "SESSIONS_DB", tmp_path / "s.db")
-    main.run("Coral Reefs")
-    return json.loads((tmp_path / "spec.json").read_text())
+    sid_box = {}
+    main.run("Coral Reefs",
+             on_stage=lambda k, v: sid_box.update(sid=v) if k == "session" else None)
+    return json.loads((tmp_path / "projects" / sid_box["sid"] / "spec.json").read_text())
 
 
 def test_refactored_main_run_produces_valid_spec(tmp_path, monkeypatch):
@@ -91,8 +92,7 @@ def test_autopilot_regenerates_fresh_each_run(tmp_path, monkeypatch):
     pointing at possibly-deleted clips). The script executor must run on every call."""
     import main
     calls = _install_fakes(monkeypatch)
-    monkeypatch.setattr(main, "SPEC_OUT", tmp_path / "spec.json")
-    monkeypatch.setattr(main, "SOURCES_OUT", tmp_path / "sources.json")
+    monkeypatch.setattr(main, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(main, "ASSETS_DIR", tmp_path / "assets")
     monkeypatch.setattr(main, "SESSIONS_DB", tmp_path / "s.db")
 
@@ -159,4 +159,8 @@ def test_refactored_main_run_content_identical_to_direct_engine(tmp_path, monkey
     # (b) refactored main.run() -> main/spec.json
     main_spec = _run_main(tmp_path / "main", monkeypatch)
 
-    assert main_spec == engine_spec   # content parity: same spec from both code paths
+    # The one intentional divergence under the project library: main.run() namespaces the
+    # voiceover per session (voiceover_<sid>.wav) while the direct-engine ctx above uses the
+    # global voiceover.wav. Normalize that single field; everything else must be byte-equal.
+    main_spec["audio"]["voiceover"] = "assets/voiceover.wav"
+    assert main_spec == engine_spec   # structural parity: same spec from both code paths

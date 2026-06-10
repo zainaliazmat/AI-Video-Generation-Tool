@@ -140,5 +140,6 @@ def run_assemble(ctx: EngineContext, inputs: dict) -> Any:
     words = inputs["timing"]
     clips = inputs["footage"]["clips"]
     return assemble_stage.build_spec(
-        plan, offsets, words, clips, catalog=ctx.catalog, fps=ctx.fps
+        plan, offsets, words, clips, catalog=ctx.catalog, fps=ctx.fps,
+        voiceover_rel=f"assets/{ctx.voiceover_path.name}",
     )

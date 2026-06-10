@@ -29,7 +29,7 @@ from session import api, store, job_ctx
 def _apply(sid: str, op: dict) -> dict:
     """resume → apply one footage edit → return the post-edit scene state. Fail-loud
     (no internal except: a bad sid / op propagates to the caller)."""
-    ctx = job_ctx.build_ctx(topic=_topic_for(sid))
+    ctx = job_ctx.build_ctx(topic=_topic_for(sid), sid=sid)
     sess = api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)   # KeyError if no such session
     try:
         api.edit(sess, "footage", op)
