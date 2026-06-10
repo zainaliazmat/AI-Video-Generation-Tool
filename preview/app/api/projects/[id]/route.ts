@@ -25,10 +25,12 @@ export async function DELETE(_req: Request, {params}: {params: Promise<{id: stri
   const {id} = await params;
   if (!isValidProjectId(id)) return bad(400, 'Invalid project id');
   // All sqlite + filesystem teardown lives in Python (single owner of the DB).
-  // spawnJson rejects on non-zero exit, so a failed delete throws into the catch.
+  // spawnJson resolves {code, json} even on non-zero exit; it only rejects on a spawn
+  // error / timeout / unparseable stdout — hence both the code check and the try/catch
+  // (mirrors the session/[id]/state + edit routes).
   try {
-    const {json} = await spawnJson('session_delete.py', ['--sid', id]);
-    if (json?.ok === false) return bad(500, json?.error ?? 'delete failed');
+    const {code, json} = await spawnJson('session_delete.py', ['--sid', id]);
+    if (code !== 0 || json?.ok === false) return bad(500, json?.error ?? 'delete failed');
     return Response.json({ok: true});
   } catch (e) {
     return bad(500, e instanceof Error ? e.message : 'delete failed');

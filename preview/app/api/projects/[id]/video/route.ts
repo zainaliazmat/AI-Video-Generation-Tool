@@ -43,7 +43,8 @@ export async function GET(req: Request, {params}: {params: Promise<{id: string}>
 
   const size = statSync(file).size;
   const rangeHeader = req.headers.get('range');
-  const base = {'content-type': 'video/mp4', 'accept-ranges': 'bytes'};
+  // no-store so a re-rendered project's MP4 isn't served stale from cache.
+  const base = {'content-type': 'video/mp4', 'accept-ranges': 'bytes', 'cache-control': 'no-store'};
 
   if (rangeHeader) {
     const r = parseRange(rangeHeader, size);
@@ -64,6 +65,6 @@ export async function GET(req: Request, {params}: {params: Promise<{id: string}>
   const stream = createReadStream(file);
   return new Response(toResponseBody(stream, req.signal), {
     status: 200,
-    headers: {...base, 'content-length': String(size)},
+    headers: {...base, 'content-length': String(size), 'content-disposition': 'inline; filename="video.mp4"'},
   });
 }
