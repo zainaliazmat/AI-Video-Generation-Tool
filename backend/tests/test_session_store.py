@@ -1,5 +1,6 @@
 """HITL A.1 — SQLite session store. Schema migration is idempotent; sessions,
 stage rows, and footage candidate pools round-trip."""
+import pytest
 from session import store
 
 
@@ -69,4 +70,45 @@ def test_update_session_sets_fields_and_bumps_updated_at(tmp_path):
     # no fields -> still a valid UPDATE that only bumps updated_at (no SQL syntax error)
     store.update_session(conn, "sess1", now="t2")
     assert store.get_session(conn, "sess1")["updated_at"] == "t2"
+    conn.close()
+
+
+def test_media_provenance_table_created_idempotently(tmp_path):
+    db = tmp_path / "s.db"
+    store.connect(db).close()
+    c2 = store.connect(db)  # reopening an existing DB must not error
+    tables = {r[0] for r in c2.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    c2.close()
+    assert "media_provenance" in tables
+
+
+def test_media_provenance_roundtrip_and_overwrite(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    store.upsert_provenance(conn, "s1", 1, source="auto", query="coral reef", rank=1,
+                            pexels_id=101, pexels_url="u101")
+    assert store.get_media_provenance(conn, "s1") == {
+        1: {"source": "auto", "query": "coral reef", "rank": 1,
+            "pexels_id": 101, "pexels_url": "u101"}}
+    # current-state overwrite on PK conflict (one row per scene)
+    store.upsert_provenance(conn, "s1", 1, source="pick", query="coral reef", rank=2,
+                            pexels_id=102, pexels_url="u102")
+    got = store.get_media_provenance(conn, "s1")
+    assert got[1]["source"] == "pick" and got[1]["rank"] == 2 and len(got) == 1
+    conn.close()
+
+
+def test_upsert_provenance_rejects_unknown_source(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    with pytest.raises(ValueError, match="unknown provenance source"):
+        store.upsert_provenance(conn, "s1", 0, source="bogus", query="q", rank=1,
+                                pexels_id=1, pexels_url="u")
+    conn.close()
+
+
+def test_upsert_provenance_allows_null_rank_for_legacy_clip(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    store.upsert_provenance(conn, "s1", 0, source="auto", query="q", rank=None,
+                            pexels_id=None, pexels_url=None)
+    assert store.get_media_provenance(conn, "s1")[0]["rank"] is None
     conn.close()

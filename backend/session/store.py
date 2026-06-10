@@ -39,6 +39,16 @@ CREATE TABLE IF NOT EXISTS footage_candidates (
   selected        INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (session_id, scene_index, rank)
 );
+CREATE TABLE IF NOT EXISTS media_provenance (
+  session_id  TEXT    NOT NULL,
+  scene_index INTEGER NOT NULL,
+  source      TEXT    NOT NULL,
+  query       TEXT,
+  rank        INTEGER,
+  pexels_id   INTEGER,
+  pexels_url  TEXT,
+  PRIMARY KEY (session_id, scene_index)
+);
 """
 
 
@@ -140,3 +150,37 @@ def set_candidate_clip_path(conn, session_id, *, scene_index, rank, clip_path) -
                  " WHERE session_id=? AND scene_index=? AND rank=?",
                  (clip_path, session_id, scene_index, rank))
     conn.commit()
+
+
+# A.2a provenance sources. Fail loud on anything else (house style); A.2b adds
+# "uploaded" here with NO migration — the column is plain TEXT, forward-compatible.
+_VALID_SOURCES = {"auto", "pick", "re_query"}
+
+
+def upsert_provenance(conn, session_id, scene_index, *, source, query, rank,
+                      pexels_id, pexels_url) -> None:
+    """Record current-state provenance for one footage scene (one row per scene)."""
+    if source not in _VALID_SOURCES:
+        raise ValueError(
+            f"unknown provenance source {source!r} (valid: {sorted(_VALID_SOURCES)})")
+    conn.execute(
+        "INSERT INTO media_provenance"
+        " (session_id, scene_index, source, query, rank, pexels_id, pexels_url)"
+        " VALUES (?,?,?,?,?,?,?)"
+        " ON CONFLICT(session_id, scene_index) DO UPDATE SET"
+        " source=excluded.source, query=excluded.query, rank=excluded.rank,"
+        " pexels_id=excluded.pexels_id, pexels_url=excluded.pexels_url",
+        (session_id, scene_index, source, query, rank, pexels_id, pexels_url),
+    )
+    conn.commit()
+
+
+def get_media_provenance(conn, session_id):
+    """{scene_index: {source, query, rank, pexels_id, pexels_url}} for the session."""
+    rows = conn.execute(
+        "SELECT scene_index, source, query, rank, pexels_id, pexels_url"
+        " FROM media_provenance WHERE session_id=? ORDER BY scene_index",
+        (session_id,)).fetchall()
+    return {r["scene_index"]: {"source": r["source"], "query": r["query"], "rank": r["rank"],
+                               "pexels_id": r["pexels_id"], "pexels_url": r["pexels_url"]}
+            for r in rows}
