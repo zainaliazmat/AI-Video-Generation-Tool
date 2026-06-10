@@ -76,7 +76,7 @@ export function Studio() {
 
   useEffect(() => {
     refreshProjects().then((list) => {
-      if (list[0]) openProject(list[0].id);
+      if (list[0]) return openProject(list[0].id);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -305,7 +305,7 @@ export function Studio() {
 
           {spec && selectedId && (
             <motion.div {...rise} transition={{...rise.transition, delay: 0.12}}>
-              <RenderControls spec={spec} projectId={selectedId} onRendered={refreshProjects} />
+              <RenderControls key={selectedId} spec={spec} projectId={selectedId} onRendered={refreshProjects} />
             </motion.div>
           )}
 
