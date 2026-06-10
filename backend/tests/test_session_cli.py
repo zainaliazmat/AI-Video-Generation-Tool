@@ -84,3 +84,36 @@ def test_job_ctx_paths_match_main():
     assert ctx.cache_dir == m.RETRIEVAL_CACHE
     assert ctx.topic == "X" and ctx.fps == 30
     assert ctx.catalog  # templates loaded
+
+
+def test_build_state_shape(tmp_path, monkeypatch):
+    conn, ctx, sid = _seed_session(tmp_path, monkeypatch)
+    conn.close()
+    import session_state as ss
+    # point the CLI at the seed's DB + spec via monkeypatched job_ctx constants
+    monkeypatch.setattr("session.job_ctx.SESSIONS_DB", tmp_path / "s.db")
+    monkeypatch.setattr("session.job_ctx.SPEC_OUT", tmp_path / "spec.json")
+    state = ss.build_state(sid)
+
+    assert state["sid"] == sid
+    scenes = state["scenes"]
+    # footage scene (index 1) has a non-empty candidate pool with the documented fields
+    foot = next(s for s in scenes if s["needsFootage"])
+    assert foot["index"] == 1
+    cand = foot["candidates"]
+    assert cand and {"rank", "thumbUrl", "durationFrames", "selected"} <= cand[0].keys()
+    assert any(c["selected"] for c in cand)           # exactly the auto pick is selected
+    assert foot["provenance"]["source"] == "auto"
+    # a non-footage scene reports needsFootage False + empty pool
+    nonfoot = next(s for s in scenes if not s["needsFootage"])
+    assert nonfoot["candidates"] == []
+
+
+def test_build_state_bad_sid_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr("session.job_ctx.SESSIONS_DB", tmp_path / "s.db")
+    monkeypatch.setattr("session.job_ctx.SPEC_OUT", tmp_path / "spec.json")
+    import session_state as ss
+    import pytest
+    # empty db (no such session) → KeyError
+    with pytest.raises(KeyError):
+        ss.build_state("nope")
