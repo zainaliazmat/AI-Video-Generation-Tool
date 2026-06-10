@@ -139,6 +139,10 @@ class Engine:
         out = self._load_output("footage")
         scene = op["scene_index"]
 
+        if op["op"] == "upload":
+            self._upload_footage(out, scene, op)
+            return
+
         if op["op"] == "re_query":
             from pipeline.footage_query import harden
             q = harden(op["query"], title=self.ctx.topic)
@@ -194,6 +198,54 @@ class Engine:
             source="re_query" if op["op"] == "re_query" else "pick",
             query=chosen["query"], rank=chosen["rank"],
             pexels_id=chosen.get("pexels_id"), pexels_url=chosen.get("pexels_url"))
+
+    def _upload_footage(self, out, scene, op):
+        """A.2b — bind a user-supplied video OR image file to a footage scene.
+
+        Self-contained: classifies by extension, measures a video's duration
+        (fail-loud), stages the file under a content-hashed name so distinct
+        content can't silently overwrite, binds a Clip (kind=video/image), persists
+        the footage output, and stamps source='uploaded'. The Pexels candidate pool
+        is left untouched (an upload is not a pool member). Returns to edit(), which
+        invalidates {assemble, render} and re-derives the spec."""
+        from pathlib import Path
+        from pipeline import media_probe
+        from pipeline.contracts import Clip
+
+        file = Path(op["file"])
+        if not file.exists():
+            raise RuntimeError(f"upload: file not found: {file}")
+        kind = media_probe.kind_from_extension(file)  # ValueError on bad extension
+
+        if kind == "video":
+            dur_s = media_probe.ffprobe_duration_seconds(file)  # RuntimeError if unmeasurable
+            duration_frames = round(dur_s * self.ctx.fps)
+        else:
+            duration_frames = None  # images carry no duration; never loop
+
+        basename = file.name                       # provenance label keeps the extension
+        data = file.read_bytes()
+        hash8 = hashlib.sha256(data).hexdigest()[:8]
+        ext = file.suffix.lower()
+        name = f"footage_upload_s{scene}_{media_probe.slug(file.stem)}_{hash8}{ext}"
+        self.ctx.assets_dir.mkdir(parents=True, exist_ok=True)
+        dest = self.ctx.assets_dir / name
+        if not dest.exists():                      # same content (hash) → idempotent
+            dest.write_bytes(data)
+
+        new_clip = Clip(index=scene, query=basename, path=f"assets/{name}",
+                        duration_frames=duration_frames, kind=kind,
+                        rank=None, pexels_id=None, pexels_url=None)
+        out["clips"] = [new_clip if c.index == scene else c for c in out["clips"]]
+
+        to_json, _ = CODECS["footage"]
+        store.upsert_stage(self.conn, self.sid, "footage", status="done",
+                           input_hash=store.get_stage(self.conn, self.sid, "footage")["input_hash"],
+                           output_json=json.dumps(to_json(out), default=str), now=_now())
+        # Provenance: source='uploaded', query=basename (inert display label — never
+        # re-run as a search). rank/pexels are None (not a Pexels result).
+        store.upsert_provenance(self.conn, self.sid, scene, source="uploaded",
+                                query=basename, rank=None, pexels_id=None, pexels_url=None)
 
     def run_all(self):
         """Autopilot: advance every stage in order, then materialize spec.json."""
