@@ -83,7 +83,12 @@ def test_run_builds_multi_template_spec_from_a_plan(monkeypatch, tmp_path):
     events = []
     spec = m.run("anything", on_stage=lambda key, state: events.append((key, state)))
 
-    assert events == [
+    # A.6.1: session id is emitted first, before any stage events
+    session_events = [(k, v) for (k, v) in events if k == "session"]
+    assert len(session_events) == 1
+    assert session_events[0][1].startswith("auto-")
+    stage_events = [(k, v) for (k, v) in events if k != "session"]
+    assert stage_events == [
         ("script", "running"), ("script", "done"),
         ("voice", "running"), ("voice", "done"),
         ("timing", "running"), ("timing", "done"),
