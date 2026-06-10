@@ -149,7 +149,7 @@ export async function POST(req: Request) {
       child.on('close', async (code) => {
         if (code === 0) {
           await stageAssets();
-          send({type: 'done', spec: '/spec.json', sid});
+          send({type: 'done', sid});
         } else {
           const tail = stderrTail.trim().split('\n').slice(-3).join('\n');
           send({type: 'error', message: `Generation failed (exit ${code})${tail ? `: ${tail}` : ''}`});
