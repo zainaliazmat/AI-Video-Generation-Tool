@@ -1,6 +1,6 @@
 import dataclasses
 
-from pipeline.footage import pick_video_file, select_clip, fetch_footage, candidate_rows
+from pipeline.footage import pick_video_file, select_clip, fetch_footage, candidate_rows, query_slug
 from pipeline.contracts import Clip, FootageRequest
 from pathlib import Path
 
@@ -143,6 +143,58 @@ def test_fetch_cache_hit_recovers_duration_from_sidecar(tmp_path):
 
     assert calls["download"] == 1                            # cached, not re-downloaded
     assert second[0].duration_frames == first[0].duration_frames == 180
+
+
+def test_fetch_one_populates_clip_provenance_and_writes_sidecar(tmp_path):
+    vids = {"videos": [_video_pid("x.mp4", 6, 7, "https://pexels.com/v/7")]}
+    calls = {"n": 0}
+
+    def fake_search(q, key):
+        calls["n"] += 1
+        return vids
+
+    dl = lambda url, dest: Path(dest).write_bytes(b"v")
+    req = FootageRequest(index=0, query="q", min_frames=0)
+
+    c1 = fetch_footage([req], tmp_path, fps=30, key="K", search=fake_search, downloader=dl)[0]
+    assert c1.rank == 1 and c1.pexels_id == 7 and c1.pexels_url == "https://pexels.com/v/7"
+    assert (tmp_path / f"footage_{query_slug('q')}.prov.json").exists()
+
+    # Second fetch hits the disk cache: search NOT called again; provenance restored
+    # from the sidecar (this is the regenerate-safe path).
+    c2 = fetch_footage([req], tmp_path, fps=30, key="K", search=fake_search, downloader=dl)[0]
+    assert calls["n"] == 1  # no re-search
+    assert c2.rank == 1 and c2.pexels_id == 7 and c2.pexels_url == "https://pexels.com/v/7"
+
+
+def test_fetch_one_missing_prov_sidecar_degrades_to_none(tmp_path):
+    # A legacy pre-A.2a cached clip (clip file present, no .prov.json) must yield None
+    # provenance without raising or re-searching.
+    slug = query_slug("legacy")
+    (tmp_path / f"footage_{slug}.mp4").write_bytes(b"v")
+
+    def boom(q, key):
+        raise AssertionError("must not search when the clip is already cached")
+
+    req = FootageRequest(index=0, query="legacy", min_frames=0)
+    c = fetch_footage([req], tmp_path, fps=30, key="K", search=boom,
+                      downloader=lambda u, d: None)[0]
+    assert c.rank is None and c.pexels_id is None and c.pexels_url is None
+
+
+def test_fetch_footage_broaden_surfaces_broadened_provenance(tmp_path):
+    # §5.1: a specific query with zero usable portrait clips broadens to the title;
+    # provenance must come from the BROADENED clip (query=title, rank/origin from it).
+    def fake_search(query, key):
+        if query == "specific":
+            return {"videos": []}  # whiff
+        return {"videos": [_video_pid("broad.mp4", 6, 555, "https://pexels.com/v/555")]}
+
+    req = FootageRequest(index=0, query="specific", min_frames=0, broad_query="title")
+    c = fetch_footage([req], tmp_path, fps=30, key="K", search=fake_search,
+                      downloader=lambda url, dest: Path(dest).write_bytes(b"v"))[0]
+    assert c.query == "title"  # resolved (broadened) query recorded
+    assert c.rank == 1 and c.pexels_id == 555 and c.pexels_url == "https://pexels.com/v/555"
 
 
 def test_candidate_rows_include_pexels_origin():

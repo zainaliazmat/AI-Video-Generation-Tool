@@ -21,6 +21,7 @@ import pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # backend/
 
 import hashlib
+import json
 import os
 import time
 from collections import namedtuple
@@ -142,20 +143,38 @@ def _read_sidecar(path: Path):
         return None
 
 
+def _write_prov_sidecar(path, rank, pexels_id, pexels_url) -> None:
+    path.write_text(json.dumps({"rank": rank, "pexels_id": pexels_id, "pexels_url": pexels_url}))
+
+
+def _read_prov_sidecar(path):
+    """(rank, pexels_id, pexels_url) from the sidecar, or (None, None, None) when it is
+    absent/corrupt — mirrors _read_sidecar's tolerant posture for legacy cached clips."""
+    try:
+        d = json.loads(path.read_text())
+        return d.get("rank"), d.get("pexels_id"), d.get("pexels_url")
+    except (OSError, ValueError):
+        return None, None, None
+
+
 def _fetch_one(req, query, out_dir, *, fps, key, search, downloader):
     """Cache-or-fetch one clip for `query`. Returns a Clip, or None when the search
-    yields no usable portrait clip (so the caller can broaden). Caches by query
-    slug; a sidecar `.frames` preserves the duration across the download cache."""
+    yields no usable portrait clip (so the caller can broaden). Caches by query slug;
+    a `.frames` sidecar preserves the duration and a `.prov.json` sidecar preserves the
+    A.2a provenance (rank + Pexels id/url) across the download cache."""
     slug = query_slug(query)
     dest = out_dir / f"footage_{slug}.mp4"
     sidecar = out_dir / f"footage_{slug}.frames"
+    prov_sidecar = out_dir / f"footage_{slug}.prov.json"
 
     if dest.exists():
         duration_frames = _read_sidecar(sidecar)  # may be None if unknown
+        rank, pexels_id, pexels_url = _read_prov_sidecar(prov_sidecar)  # None,None,None if legacy
     else:
         data = search(query, key)
         sel = select_clip(data.get("videos", []), min_frames=req.min_frames, fps=fps)
         url, duration_frames = sel.link, sel.duration_frames
+        rank, pexels_id, pexels_url = sel.rank, sel.pexels_id, sel.pexels_url
         if not url:
             return None
         # Atomic write: stream into a sibling .part, then os.replace onto dest only
@@ -169,8 +188,11 @@ def _fetch_one(req, query, out_dir, *, fps, key, search, downloader):
             raise
         if duration_frames is not None:
             sidecar.write_text(str(duration_frames))  # only AFTER the rename
+        _write_prov_sidecar(prov_sidecar, rank, pexels_id, pexels_url)  # only AFTER the rename
 
-    return Clip(index=req.index, query=query, path=f"assets/{dest.name}", duration_frames=duration_frames)
+    return Clip(index=req.index, query=query, path=f"assets/{dest.name}",
+                duration_frames=duration_frames, rank=rank,
+                pexels_id=pexels_id, pexels_url=pexels_url)
 
 
 def fetch_footage(requests_, out_dir, *, fps: int = 30, key=None, search=None, downloader=None) -> list[Clip]:
