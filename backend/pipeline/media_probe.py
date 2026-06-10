@@ -16,7 +16,7 @@ VIDEO_EXTS = {".mp4", ".mov", ".webm", ".m4v"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
-def kind_from_extension(path) -> str:
+def kind_from_extension(path: str | Path) -> str:
     """'video' | 'image' from the file extension. ValueError on anything else."""
     ext = Path(path).suffix.lower()
     if ext in VIDEO_EXTS:
@@ -28,14 +28,14 @@ def kind_from_extension(path) -> str:
         f"(video: {sorted(VIDEO_EXTS)}, image: {sorted(IMAGE_EXTS)})")
 
 
-def slug(text) -> str:
+def slug(text: str | Path) -> str:
     """Lowercase, hyphenated, filesystem-safe token for a filename component.
     Empty/symbol-only input degrades to 'upload' so the dest name is never blank."""
     s = re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")
     return s or "upload"
 
 
-def ffprobe_duration_seconds(path, *, run=None) -> float:
+def ffprobe_duration_seconds(path: str | Path, *, run=None) -> float:
     """Duration in seconds via ffprobe. `run` is an injectable subprocess runner
     (defaults to subprocess.run) so tests need no real binary. Fail-loud
     (RuntimeError) on a missing binary, non-zero exit, or empty/unparseable/

@@ -1,6 +1,8 @@
 """A.2b — media_probe: extension → kind, and a fail-loud injectable ffprobe duration.
 No real subprocess runs here; the runner is faked."""
 import types
+from pathlib import Path
+
 import pytest
 
 from pipeline import media_probe
@@ -16,6 +18,7 @@ def test_kind_from_extension_video_image_and_unsupported():
     assert media_probe.kind_from_extension("a/b/clip.MP4") == "video"
     assert media_probe.kind_from_extension("photo.JPG") == "image"
     assert media_probe.kind_from_extension("x.png") == "image"
+    assert media_probe.kind_from_extension(Path("clip.mp4")) == "video"
     with pytest.raises(ValueError, match="unsupported upload extension"):
         media_probe.kind_from_extension("notes.txt")
 
