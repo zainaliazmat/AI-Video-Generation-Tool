@@ -160,3 +160,72 @@ def test_apply_pick_fails_loud(tmp_path, monkeypatch):
         se.apply_pick(sid, scene=1, rank=99)
     with pytest.raises(KeyError):           # bad sid → resume raises
         se.apply_pick("nope", scene=1, rank=1)
+
+
+def _point_ctx_at_seed(tmp_path, monkeypatch):
+    """Aim the CLI's job_ctx constants at the seeded session's tmp paths."""
+    monkeypatch.setattr("session.job_ctx.SESSIONS_DB", tmp_path / "s.db")
+    monkeypatch.setattr("session.job_ctx.SPEC_OUT", tmp_path / "spec.json")
+    monkeypatch.setattr("session.job_ctx.ASSETS_DIR", tmp_path / "a")
+    monkeypatch.setattr("session.job_ctx.SOURCES_OUT", tmp_path / "src.json")
+    monkeypatch.setattr("session.job_ctx.RETRIEVAL_CACHE", tmp_path / "c")
+
+
+def test_apply_requery_rebinds_and_stamps(tmp_path, monkeypatch):
+    """A.6.2 — re_query via the CLI rebinds to the new pool's top hit, stamps
+    source='re_query', and preserves timing. The pool is re-fetched (replaced)."""
+    conn, ctx, sid = _seed_session(tmp_path, monkeypatch)
+    spec0 = json.loads((tmp_path / "spec.json").read_text())
+    media0 = spec0["scenes"][1]["templateProps"]["media"]["src"]
+    conn.close()
+    _point_ctx_at_seed(tmp_path, monkeypatch)
+    # the re-query returns a FRESH pool regardless of the hardened query string
+    fresh = [{"duration": 7, "video_files": [{"link": "fresh.mp4", "width": 1080, "height": 1920,
+              "file_type": "video/mp4"}], "video_pictures": [{"picture": "tn"}]}]
+    monkeypatch.setattr("pipeline.footage.search_pexels", lambda q, key: {"videos": fresh})
+
+    import session_edit as se
+    res = se.apply_requery(sid, scene=1, query="vivid coral macro")
+
+    assert res["ok"] is True and res["scene"] == 1
+    assert res["provenance"]["source"] == "re_query"
+    spec1 = json.loads((tmp_path / "spec.json").read_text())
+    media1 = spec1["scenes"][1]["templateProps"]["media"]["src"]
+    assert media1 != media0                                   # rebound to the fresh clip
+    t0 = [(s["startFrame"], s["durationInFrames"]) for s in spec0["scenes"]]
+    t1 = [(s["startFrame"], s["durationInFrames"]) for s in spec1["scenes"]]
+    assert t0 == t1                                           # footage-edit timing invariant
+
+
+def test_apply_upload_binds_and_stamps(tmp_path, monkeypatch):
+    """A.6.3 — upload via the CLI binds the user file, stamps source='uploaded'
+    (rank None), and emits the right Media.type."""
+    conn, ctx, sid = _seed_session(tmp_path, monkeypatch)
+    conn.close()
+    _point_ctx_at_seed(tmp_path, monkeypatch)
+    monkeypatch.setattr("pipeline.media_probe.ffprobe_duration_seconds", lambda path, run=None: 2.0)
+    f = tmp_path / "My Clip.mp4"
+    f.write_bytes(b"VIDEOBYTES")
+
+    import session_edit as se
+    res = se.apply_upload(sid, scene=1, file=str(f))
+
+    assert res["ok"] is True and res["scene"] == 1
+    assert res["selectedRank"] is None                        # an upload is not a pool rank
+    assert res["provenance"]["source"] == "uploaded"
+    assert res["provenance"]["query"] == "My Clip.mp4"
+    spec1 = json.loads((tmp_path / "spec.json").read_text())
+    media = spec1["scenes"][1]["templateProps"]["media"]
+    assert media["type"] == "video" and "footage_upload_" in media["src"]
+
+
+def test_apply_upload_bad_extension_fails_loud(tmp_path, monkeypatch):
+    conn, ctx, sid = _seed_session(tmp_path, monkeypatch)
+    conn.close()
+    _point_ctx_at_seed(tmp_path, monkeypatch)
+    f = tmp_path / "notes.txt"
+    f.write_bytes(b"x")
+    import session_edit as se
+    import pytest
+    with pytest.raises(ValueError, match="unsupported upload extension"):
+        se.apply_upload(sid, scene=1, file=str(f))

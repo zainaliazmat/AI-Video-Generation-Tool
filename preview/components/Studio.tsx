@@ -171,6 +171,74 @@ export function Studio() {
     }
   }
 
+  // re_query replaces the candidate pool and upload binds an off-pool clip, so neither
+  // can be re-highlighted optimistically from the response — re-fetch authoritative state.
+  async function refreshAfterEdit(sid: string) {
+    try {
+      const st = await fetch(`/api/session/${sid}/state`).then((x) => x.json());
+      if (Array.isArray(st?.scenes)) setGateScenes(st.scenes);
+    } catch {
+      /* keep the prior gate on a transient state error */
+    }
+    const r = await fetch(`/spec.json?t=${Date.now()}`);
+    setSpec(await r.json());
+    setGenNonce((n) => n + 1);
+  }
+
+  async function reQuery(scene: number, query: string) {
+    if (!sessionId || editing) return;
+    setEditing(true);
+    const toastId = toast.loading('Re-querying footage…');
+    try {
+      const res = await fetch(`/api/session/${sessionId}/edit`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({op: 're_query', scene, query}),
+      });
+      if (res.status === 409) {
+        toast.error('An edit is already in progress', {id: toastId});
+        return;
+      }
+      const json = await res.json();
+      if (!res.ok || json?.ok === false) throw new Error(json?.error ?? `HTTP ${res.status}`);
+      await refreshAfterEdit(sessionId);
+      toast.success('Footage re-queried — preview updated', {
+        id: toastId,
+        description: 'Re-render to export the MP4.',
+      });
+    } catch (e) {
+      toast.error('Re-query failed', {id: toastId, description: e instanceof Error ? e.message : 'edit failed'});
+    } finally {
+      setEditing(false);
+    }
+  }
+
+  async function upload(scene: number, file: File) {
+    if (!sessionId || editing) return;
+    setEditing(true);
+    const toastId = toast.loading('Uploading footage…');
+    try {
+      const form = new FormData();
+      form.append('op', 'upload');
+      form.append('scene', String(scene));
+      form.append('file', file);
+      // no content-type header — the browser sets the multipart boundary
+      const res = await fetch(`/api/session/${sessionId}/edit`, {method: 'POST', body: form});
+      if (res.status === 409) {
+        toast.error('An edit is already in progress', {id: toastId});
+        return;
+      }
+      const json = await res.json();
+      if (!res.ok || json?.ok === false) throw new Error(json?.error ?? `HTTP ${res.status}`);
+      await refreshAfterEdit(sessionId);
+      toast.success('Upload bound — preview updated', {id: toastId, description: 'Re-render to export the MP4.'});
+    } catch (e) {
+      toast.error('Upload failed', {id: toastId, description: e instanceof Error ? e.message : 'edit failed'});
+    } finally {
+      setEditing(false);
+    }
+  }
+
   return (
     <main className="relative z-[1] mx-auto max-w-[1040px] px-7 py-10 sm:px-8 sm:py-14">
       {/* Header */}
@@ -228,7 +296,13 @@ export function Studio() {
 
           {spec && gateScenes.length > 0 && (
             <motion.div {...rise} transition={{...rise.transition, delay: 0.14}}>
-              <FootageGate scenes={gateScenes} busy={editing} onPick={pick} />
+              <FootageGate
+                scenes={gateScenes}
+                busy={editing}
+                onPick={pick}
+                onRequery={reQuery}
+                onUpload={upload}
+              />
             </motion.div>
           )}
 
