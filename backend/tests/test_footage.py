@@ -1,3 +1,5 @@
+import dataclasses
+
 from pipeline.footage import pick_video_file, select_clip, fetch_footage
 from pipeline.contracts import Clip, FootageRequest
 
@@ -111,3 +113,17 @@ def test_fetch_cache_hit_recovers_duration_from_sidecar(tmp_path):
 
     assert calls["download"] == 1                            # cached, not re-downloaded
     assert second[0].duration_frames == first[0].duration_frames == 180
+
+
+def test_clip_provenance_fields_default_none_and_roundtrip():
+    # Old construction (no provenance) still works — fields default to None.
+    bare = Clip(index=0, query="q", path="assets/x.mp4", duration_frames=180)
+    assert bare.rank is None and bare.pexels_id is None and bare.pexels_url is None
+
+    # New construction carries provenance, and asdict<->Clip(**d) round-trips it
+    # (this IS the mechanism session/codecs.clips_to_json/from_json rely on).
+    c = Clip(index=1, query="reef", path="assets/r.mp4", duration_frames=210,
+             rank=2, pexels_id=12345, pexels_url="https://pexels.com/v/12345")
+    d = dataclasses.asdict(c)
+    assert d["rank"] == 2 and d["pexels_id"] == 12345 and d["pexels_url"] == "https://pexels.com/v/12345"
+    assert Clip(**d) == c
