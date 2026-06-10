@@ -101,6 +101,40 @@ def test_autopilot_regenerates_fresh_each_run(tmp_path, monkeypatch):
     assert calls["script"] == 2      # fresh generation each run, NOT a cache hit
 
 
+def test_autopilot_spec_identical_regardless_of_clip_provenance(tmp_path, monkeypatch):
+    """Invariant #1: provenance fields on Clip NEVER change spec.json. Run the engine
+    with clips carrying provenance vs. clips without, and assert byte-equal spec.json —
+    pinning the render contract for both the default path and the captured-provenance path."""
+    from session import store, engine, executors
+    catalog = validate_stage.load_catalog(_TEMPLATES)
+
+    def run_with(fetch_fake, sub):
+        _install_fakes(monkeypatch)
+        monkeypatch.setattr("pipeline.footage.fetch_footage", fetch_fake)
+        d = tmp_path / sub
+        ctx = executors.EngineContext(
+            topic="Coral Reefs", fps=30, theme=Theme(), catalog=catalog,
+            assets_dir=d / "assets", cache_dir=d / "c",
+            voiceover_path=d / "assets" / "voiceover.wav",
+            spec_out=d / "spec.json", sources_out=d / "sources.json")
+        conn = store.connect(d / "s.db")
+        store.create_session(conn, id="s1", topic="Coral Reefs", now="t0")
+        engine.Engine(conn, ctx, session_id="s1").run_all()
+        conn.close()
+        return (d / "spec.json").read_text()
+
+    def plain(reqs, out_dir, *, fps=30, **kw):
+        return [Clip(index=r.index, query=r.query, path=f"assets/f{r.index}.mp4",
+                     duration_frames=300) for r in reqs]
+
+    def with_prov(reqs, out_dir, *, fps=30, **kw):
+        return [Clip(index=r.index, query=r.query, path=f"assets/f{r.index}.mp4",
+                     duration_frames=300, rank=3, pexels_id=999,
+                     pexels_url="https://pexels.com/v/999") for r in reqs]
+
+    assert run_with(plain, "plain") == run_with(with_prov, "prov")
+
+
 def test_refactored_main_run_content_identical_to_direct_engine(tmp_path, monkeypatch):
     """The strongest parity proof: main.run() and the direct engine, on identical
     faked inputs, must emit byte-equal spec.json content. If the refactor ever drifts
