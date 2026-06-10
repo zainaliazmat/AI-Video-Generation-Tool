@@ -236,6 +236,8 @@ class Engine:
         new_clip = Clip(index=scene, query=basename, path=f"assets/{name}",
                         duration_frames=duration_frames, kind=kind,
                         rank=None, pexels_id=None, pexels_url=None)
+        if not any(c.index == scene for c in out["clips"]):
+            raise RuntimeError(f"upload: no footage clip at scene {scene} to replace")
         out["clips"] = [new_clip if c.index == scene else c for c in out["clips"]]
 
         to_json, _ = CODECS["footage"]

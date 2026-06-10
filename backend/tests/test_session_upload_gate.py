@@ -136,6 +136,20 @@ def test_upload_unprobeable_video_fails_loud(tmp_path, monkeypatch):
     conn.close()
 
 
+def test_upload_to_scene_without_clip_fails_loud(tmp_path, monkeypatch):
+    # The footage scene is index 1; scenes 0 and 2 are non-footage (hook/outro) and
+    # have no clip. Uploading to a scene with no clip to replace must fail loud rather
+    # than silently drop the upload.
+    conn, eng = _seed(tmp_path, monkeypatch)
+    monkeypatch.setattr("pipeline.media_probe.ffprobe_duration_seconds",
+                        lambda path, run=None: 2.0)
+    f = tmp_path / "clip.mp4"
+    f.write_bytes(b"DATA")
+    with pytest.raises(RuntimeError, match="no footage clip at scene"):
+        eng.edit("footage", {"op": "upload", "scene_index": 0, "file": str(f)})
+    conn.close()
+
+
 def test_upload_same_content_is_idempotent_on_disk(tmp_path, monkeypatch):
     conn, eng = _seed(tmp_path, monkeypatch)
     monkeypatch.setattr("pipeline.media_probe.ffprobe_duration_seconds",
