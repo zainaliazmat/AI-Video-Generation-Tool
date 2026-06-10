@@ -71,6 +71,25 @@ def test_stamp_auto_records_unknown_origin_for_legacy_clip(tmp_path, monkeypatch
     conn.close()
 
 
+def test_advance_stamps_unknown_origin_for_legacy_cached_clip(tmp_path, monkeypatch):
+    # Engine-PATH coverage of the legacy case (the direct-call test above bypasses
+    # advance): a real footage re-advance whose _fetch_one hits the disk cache with no
+    # usable .prov.json yields rank=None clips, and advance still stamps source="auto"
+    # (origin unknown) through the run_footage -> fetch_footage -> _stamp wiring.
+    conn, eng = _seed(tmp_path, monkeypatch)
+    # The clip .mp4 is already on disk from run_all, so _fetch_one will take its
+    # cache-hit branch; make the prov-sidecar read come back empty (legacy clip).
+    monkeypatch.setattr("pipeline.footage._read_prov_sidecar", lambda path: (None, None, None))
+    # Bust the footage input-hash cache so advance("footage") really re-executes.
+    row = store.get_stage(conn, "s1", "footage")
+    store.upsert_stage(conn, "s1", "footage", status="stale", input_hash=None,
+                       output_json=row["output_json"], now="t")
+    eng.advance("footage")
+    prov = store.get_media_provenance(conn, "s1")
+    assert prov[1]["source"] == "auto" and prov[1]["rank"] is None and prov[1]["pexels_id"] is None
+    conn.close()
+
+
 def test_pick_stamps_pick_provenance(tmp_path, monkeypatch):
     conn, eng = _seed(tmp_path, monkeypatch)
     eng.edit("footage", {"op": "pick", "scene_index": 1, "rank": 2})
@@ -94,5 +113,6 @@ def test_api_media_provenance_getter(tmp_path, monkeypatch):
     from session import api
     sess = api.Session(conn=conn, engine=eng, id="s1")
     prov = api.media_provenance(sess)
-    assert prov[1]["source"] == "auto" and prov[1]["rank"] == 1 and prov[1]["pexels_id"] == 101
+    assert prov[1] == {"source": "auto", "query": "coral reef", "rank": 1,
+                       "pexels_id": 101, "pexels_url": "https://pexels.com/v/101"}
     conn.close()
