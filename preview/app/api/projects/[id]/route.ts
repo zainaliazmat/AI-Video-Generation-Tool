@@ -1,0 +1,36 @@
+// preview/app/api/projects/[id]/route.ts
+import {readFileSync, existsSync} from 'node:fs';
+import path from 'node:path';
+import {isValidProjectId, projectDir} from '@/lib/projects';
+import {spawnJson} from '../../_spawn';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+const bad = (status: number, error: string) =>
+  new Response(JSON.stringify({error}), {status, headers: {'content-type': 'application/json'}});
+
+export async function GET(_req: Request, {params}: {params: Promise<{id: string}>}) {
+  const {id} = await params;
+  if (!isValidProjectId(id)) return bad(400, 'Invalid project id');
+  const specPath = path.join(projectDir(id), 'spec.json');
+  if (!existsSync(specPath)) return bad(404, 'Project not found');
+  const spec = JSON.parse(readFileSync(specPath, 'utf-8'));
+  const sourcesPath = path.join(projectDir(id), 'sources.json');
+  const sources = existsSync(sourcesPath) ? JSON.parse(readFileSync(sourcesPath, 'utf-8')) : null;
+  return Response.json({spec, sources});
+}
+
+export async function DELETE(_req: Request, {params}: {params: Promise<{id: string}>}) {
+  const {id} = await params;
+  if (!isValidProjectId(id)) return bad(400, 'Invalid project id');
+  // All sqlite + filesystem teardown lives in Python (single owner of the DB).
+  // spawnJson rejects on non-zero exit, so a failed delete throws into the catch.
+  try {
+    const {json} = await spawnJson('session_delete.py', ['--sid', id]);
+    if (json?.ok === false) return bad(500, json?.error ?? 'delete failed');
+    return Response.json({ok: true});
+  } catch (e) {
+    return bad(500, e instanceof Error ? e.message : 'delete failed');
+  }
+}
