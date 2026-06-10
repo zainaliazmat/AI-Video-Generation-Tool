@@ -89,6 +89,7 @@ class Engine:
         store.update_session(self.conn, self.sid, now=_now(), current_stage=stage)
         if stage == "footage":
             self._sync_footage_candidates_to_db(output)
+            self._stamp_auto_provenance(output)
         return output
 
     def _sync_footage_candidates_to_db(self, footage_output):
@@ -99,6 +100,16 @@ class Engine:
         for scene_index, rows in candidates.items():
             store.replace_footage_candidates(
                 self.conn, self.sid, scene_index=int(scene_index), candidates=rows)
+
+    def _stamp_auto_provenance(self, footage_output):
+        """Record source='auto' provenance for each clip from its surfaced origin.
+        Runs ONLY here (advance -> run_footage produced fresh auto clips); a gate
+        pick/re_query goes through _edit_footage, which stamps its own source. rank/
+        pexels are None for a legacy pre-sidecar cached clip ('auto, origin unknown')."""
+        for clip in footage_output.get("clips", []):
+            store.upsert_provenance(
+                self.conn, self.sid, clip.index, source="auto", query=clip.query,
+                rank=clip.rank, pexels_id=clip.pexels_id, pexels_url=clip.pexels_url)
 
     def invalidate(self, from_stage):
         for st in stages.downstream(from_stage):
