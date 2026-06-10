@@ -27,6 +27,8 @@ out/
 templates/registry.generated.ts
 # stock footage downloaded by the Phase 4 pipeline (regenerated per run)
 remotion/public/assets/footage_*.mp4
+# A.2b user-uploaded media staged by the upload op (video OR image, content-hashed)
+remotion/public/assets/footage_upload_*
 # spec copied into remotion/public/ by the copy-spec script (source of truth is root)
 remotion/public/sample-spec.json
 remotion/public/spec.json
@@ -43,5 +45,35 @@ preview/next-env.d.ts
 # footage duration sidecars (cache, like the .mp4s)
 remotion/public/assets/*.frames
 
+# footage provenance sidecars (A.2a cache, like the .mp4s / .frames)
+remotion/public/assets/*.prov.json
+
 # remotion bundle output
 remotion/build/
+
+# review / gate scratch — frame strips, contact-sheet zips, listen renders, and
+# the real TTS wavs the gate harness produces. Pure review artifacts; never pushed.
+*-review-frames.zip
+*-review-frames/
+*-review.zip
+*-review/
+hook-gate-frames/
+hook-wordsync-gate-frames.zip
+hook-wordsync-gate-frames/
+hook-wordsync-listen-*.mp4
+remotion/public/assets/hook-gate-*.wav
+enumeration-gate-frames/
+enumeration-gate-frames*/
+enumeration-gate-frames*.zip
+remotion/public/assets/enum-gate-*.wav
+
+# the generated TTS voiceover — the voice stage rewrites it every run; only its
+# path string is referenced in specs, never the binary. Same class as the gate wavs.
+remotion/public/assets/voiceover.wav
+
+# local repro / bakeoff scratch specs (throwaway debugging fixtures)
+bakeoff-*.json
+repro-*.json
+
+# HITL session store (runtime state)
+backend/.sessions/
