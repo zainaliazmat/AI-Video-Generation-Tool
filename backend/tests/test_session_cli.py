@@ -117,3 +117,46 @@ def test_build_state_bad_sid_raises(tmp_path, monkeypatch):
     # empty db (no such session) → KeyError
     with pytest.raises(KeyError):
         ss.build_state("nope")
+
+
+def test_apply_pick_rebinds_and_returns_selection(tmp_path, monkeypatch):
+    conn, ctx, sid = _seed_session(tmp_path, monkeypatch)
+    spec0 = json.loads((tmp_path / "spec.json").read_text())
+    media0 = spec0["scenes"][1]["templateProps"]["media"]["src"]
+    conn.close()
+
+    # point the CLI's ctx + db at the seed (build_ctx reads job_ctx constants)
+    monkeypatch.setattr("session.job_ctx.SESSIONS_DB", tmp_path / "s.db")
+    monkeypatch.setattr("session.job_ctx.SPEC_OUT", tmp_path / "spec.json")
+    monkeypatch.setattr("session.job_ctx.ASSETS_DIR", tmp_path / "a")
+    monkeypatch.setattr("session.job_ctx.SOURCES_OUT", tmp_path / "src.json")
+    monkeypatch.setattr("session.job_ctx.RETRIEVAL_CACHE", tmp_path / "c")
+
+    import session_edit as se
+    res = se.apply_pick(sid, scene=1, rank=2)
+
+    assert res["ok"] is True and res["scene"] == 1 and res["selectedRank"] == 2
+    assert res["provenance"]["source"] == "pick" and res["provenance"]["rank"] == 2
+    spec1 = json.loads((tmp_path / "spec.json").read_text())
+    media1 = spec1["scenes"][1]["templateProps"]["media"]["src"]
+    assert media1 != media0 and "_2." in media1   # rank-2 clip bound + spec re-materialized
+    # timing unchanged (footage edit invariant)
+    t0 = [(s["startFrame"], s["durationInFrames"]) for s in spec0["scenes"]]
+    t1 = [(s["startFrame"], s["durationInFrames"]) for s in spec1["scenes"]]
+    assert t0 == t1
+
+
+def test_apply_pick_fails_loud(tmp_path, monkeypatch):
+    conn, ctx, sid = _seed_session(tmp_path, monkeypatch)
+    conn.close()
+    monkeypatch.setattr("session.job_ctx.SESSIONS_DB", tmp_path / "s.db")
+    monkeypatch.setattr("session.job_ctx.SPEC_OUT", tmp_path / "spec.json")
+    monkeypatch.setattr("session.job_ctx.ASSETS_DIR", tmp_path / "a")
+    monkeypatch.setattr("session.job_ctx.SOURCES_OUT", tmp_path / "src.json")
+    monkeypatch.setattr("session.job_ctx.RETRIEVAL_CACHE", tmp_path / "c")
+    import session_edit as se
+    import pytest
+    with pytest.raises(Exception):          # unknown rank → engine raises
+        se.apply_pick(sid, scene=1, rank=99)
+    with pytest.raises(KeyError):           # bad sid → resume raises
+        se.apply_pick("nope", scene=1, rank=1)
