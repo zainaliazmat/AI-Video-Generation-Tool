@@ -1,7 +1,8 @@
 import dataclasses
 
-from pipeline.footage import pick_video_file, select_clip, fetch_footage
+from pipeline.footage import pick_video_file, select_clip, fetch_footage, candidate_rows
 from pipeline.contracts import Clip, FootageRequest
+from pathlib import Path
 
 
 def test_pick_prefers_portrait_mp4_near_1920():
@@ -22,20 +23,27 @@ def _video(link, duration):
         {"link": link, "width": 1080, "height": 1920, "file_type": "video/mp4"}]}
 
 
+def _video_pid(link, duration, pid, purl):
+    v = _video(link, duration)
+    v["id"] = pid
+    v["url"] = purl
+    return v
+
+
 def test_select_clip_returns_link_and_duration_frames():
-    link, dur_f = select_clip([_video("a", 6)], min_frames=0, fps=30)
-    assert link == "a"
-    assert dur_f == 180  # 6s * 30fps
+    sel = select_clip([_video("a", 6)], min_frames=0, fps=30)
+    assert sel.link == "a"
+    assert sel.duration_frames == 180  # 6s * 30fps
 
 
 def test_select_clip_relevance_wins_when_top_clip_clears_the_floor():
     # Phase 4 ③: relevance (Pexels order) wins among clips that clear the loop floor.
     # The top clip is 4s — well over the 60f (2s) floor — so it is kept even though a
     # much longer clip follows. Length never displaces a relevant-enough top hit.
-    link, dur_f = select_clip([_video("relevant_ok", 4), _video("longer_offtopic", 20)],
-                              min_frames=60, fps=30)
-    assert link == "relevant_ok"
-    assert dur_f == 120
+    sel = select_clip([_video("relevant_ok", 4), _video("longer_offtopic", 20)],
+                      min_frames=60, fps=30)
+    assert sel.link == "relevant_ok"
+    assert sel.duration_frames == 120
 
 
 def test_select_clip_skips_pathologically_short_top_clip_for_a_longer_usable_one():
@@ -45,23 +53,45 @@ def test_select_clip_skips_pathologically_short_top_clip_for_a_longer_usable_one
     # pathologically short clip #1", not pool sparsity). When the top clip is below the
     # floor AND a later usable clip clears it, take the longer one — a tight loop reads
     # worse than dropping one rank.
-    link, dur_f = select_clip([_video("one_second", 1), _video("seventeen_second", 17)],
-                              min_frames=60, fps=30)
-    assert link == "seventeen_second"
-    assert dur_f == 510
+    sel = select_clip([_video("one_second", 1), _video("seventeen_second", 17)],
+                      min_frames=60, fps=30)
+    assert sel.link == "seventeen_second"
+    assert sel.duration_frames == 510
 
 
 def test_select_clip_falls_back_to_first_when_none_long_enough():
-    link, dur_f = select_clip([_video("a", 1), _video("b", 2)], min_frames=999, fps=30)
-    assert link == "a"  # relevance order preserved when nothing qualifies
-    assert dur_f == 30
+    sel = select_clip([_video("a", 1), _video("b", 2)], min_frames=999, fps=30)
+    assert sel.link == "a"  # relevance order preserved when nothing qualifies
+    assert sel.duration_frames == 30
 
 
 def test_select_clip_handles_missing_duration():
-    link, dur_f = select_clip([{"video_files": [
+    sel = select_clip([{"video_files": [
         {"link": "x", "width": 1080, "height": 1920, "file_type": "video/mp4"}]}], min_frames=0, fps=30)
-    assert link == "x"
-    assert dur_f is None
+    assert sel.link == "x"
+    assert sel.duration_frames is None
+
+
+def test_select_clip_surfaces_rank_and_pexels_origin():
+    sel = select_clip([_video_pid("a", 6, 101, "https://pexels.com/v/101")], min_frames=0, fps=30)
+    assert sel.link == "a" and sel.duration_frames == 180
+    assert sel.rank == 1 and sel.pexels_id == 101 and sel.pexels_url == "https://pexels.com/v/101"
+
+
+def test_select_clip_rank_is_kfloor_displaced_position():
+    # The 1s top clip is below the 60f floor; select_clip drops to the 17s clip at
+    # usable-rank 2 — provenance rank must be 2, not 1.
+    sel = select_clip([_video_pid("one_second", 1, 11, "u11"),
+                       _video_pid("seventeen_second", 17, 22, "u22")], min_frames=60, fps=30)
+    assert sel.link == "seventeen_second" and sel.rank == 2 and sel.pexels_id == 22
+
+
+def test_select_clip_fallback_carries_first_usable_origin():
+    # Nothing clears the floor -> fall back to the first usable clip (rank 1) and carry
+    # ITS origin.
+    sel = select_clip([_video_pid("a", 1, 7, "u7"), _video_pid("b", 2, 8, "u8")],
+                      min_frames=999, fps=30)
+    assert sel.link == "a" and sel.rank == 1 and sel.pexels_id == 7
 
 
 # ── fetch_footage: request-driven, cached, duration recorded ────────────────

@@ -23,12 +23,17 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # backend/
 import hashlib
 import os
 import time
+from collections import namedtuple
 from pathlib import Path
 
 import requests
 
 from pipeline.config import require_env
 from pipeline.contracts import Clip, FootageRequest
+
+# select_clip's surfaced choice: link/duration as before, plus the chosen clip's
+# usable-rank (1-based among USABLE clips, matching candidate_rows) and Pexels origin.
+Selection = namedtuple("Selection", "link duration_frames rank pexels_id pexels_url")
 
 PEXELS_VIDEO_SEARCH = "https://api.pexels.com/videos/search"
 
@@ -71,30 +76,25 @@ def candidate_rows(videos, *, query, fps):
 
 
 def select_clip(videos, *, min_frames=0, fps):
-    """Return (link, duration_frames) for the most relevant usable clip, subject to a
-    SOFT loop floor: walk Pexels relevance order and take the first usable portrait
-    clip whose duration clears `min_frames`; if none clears it, fall back to the first
-    usable clip regardless of length.
-
-    `min_frames` is the loop FLOOR (half the scene span, set by the caller — K=2), not
-    the full span: relevance still wins among clips long enough to loop ≤ ~2× over the
-    beat. The floor only displaces a *pathologically* short top hit when a longer
-    usable clip exists below it (the diagnostic's 1s radar clip that looped 5× while a
-    relevant 17s clip sat at rank 2). A clip with unknown duration is treated as
-    clearing the floor (we can't measure it, so don't penalize it). When nothing
-    clears the floor the assemble loop seam still covers the short clip over the span.
+    """Return a Selection for the most relevant usable clip, subject to a SOFT loop
+    floor (see FootageRequest). Surfaces the chosen clip's usable-rank (1-based among
+    usable portrait clips — the same metric candidate_rows reports) and Pexels id/url
+    so provenance is captured from the real choice, never link-matched.
     """
     first_usable = None
+    usable_rank = 0
     for v in videos:
         link = pick_video_file(v.get("video_files", []))
         if not link:
             continue
+        usable_rank += 1
         frames = _video_duration_frames(v, fps)
+        sel = Selection(link, frames, usable_rank, v.get("id"), v.get("url"))
         if first_usable is None:
-            first_usable = (link, frames)
+            first_usable = sel
         if frames is None or frames >= min_frames:
-            return link, frames
-    return first_usable if first_usable is not None else (None, None)
+            return sel
+    return first_usable if first_usable is not None else Selection(None, None, None, None, None)
 
 
 def search_pexels(query: str, key: str, *, _get=None, _sleep=None, max_retries: int = 3) -> dict:
@@ -153,7 +153,8 @@ def _fetch_one(req, query, out_dir, *, fps, key, search, downloader):
         duration_frames = _read_sidecar(sidecar)  # may be None if unknown
     else:
         data = search(query, key)
-        url, duration_frames = select_clip(data.get("videos", []), min_frames=req.min_frames, fps=fps)
+        sel = select_clip(data.get("videos", []), min_frames=req.min_frames, fps=fps)
+        url, duration_frames = sel.link, sel.duration_frames
         if not url:
             return None
         # Atomic write: stream into a sibling .part, then os.replace onto dest only

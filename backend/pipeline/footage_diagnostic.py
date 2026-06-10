@@ -63,17 +63,16 @@ def loop_playthroughs(span_frames, clip_frames):
 
 def kfloor_pick(videos, *, min_frames, fps):
     """(rank, frames) the REAL select_clip renders under the loop floor — computed by
-    CALLING select_clip and locating its link in the ranked list, never a reimpl. This
-    is what the pipeline ACTUALLY picks, distinct from summarize_candidates' relevance-
-    first `selected` marker; comparing the two ranks shows K-floor displacement (the
-    floor bumped a too-short top hit down) vs dormancy (floor changed nothing)."""
-    link, frames = select_clip(videos, min_frames=min_frames, fps=fps)
-    if link is None:
+    CALLING select_clip and locating its link in the ranked list, never a reimpl. The
+    rank here is ALL-VIDEOS position (matches summarize_candidates), distinct from
+    select_clip's usable-only Selection.rank, so we keep the link-locate."""
+    sel = select_clip(videos, min_frames=min_frames, fps=fps)
+    if sel.link is None:
         return None, None
     for rank, v in enumerate(videos, 1):
-        if pick_video_file(v.get("video_files", [])) == link:
-            return rank, frames
-    return None, frames
+        if pick_video_file(v.get("video_files", [])) == sel.link:
+            return rank, sel.duration_frames
+    return None, sel.duration_frames
 
 
 # ── instrumentation (I/O; the pure cores above are unit-tested) ─────────────
