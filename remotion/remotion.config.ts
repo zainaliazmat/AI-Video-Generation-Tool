@@ -21,10 +21,6 @@ Config.overrideWebpackConfig((config) => ({
       react: path.resolve(process.cwd(), 'node_modules/react'),
       'react-dom': path.resolve(process.cwd(), 'node_modules/react-dom'),
       remotion: path.resolve(process.cwd(), 'node_modules/remotion'),
-      // lucide-react: third-party dep imported by templates/enumeration (Tier 2).
-      // Like react/remotion above, templates/ has no node_modules, so the bundler
-      // must resolve it here in remotion/node_modules (where it is installed).
-      'lucide-react': path.resolve(process.cwd(), 'node_modules/lucide-react'),
     },
   },
 }));

@@ -23,16 +23,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from manifest import Manifest
 from pipeline.content import Beat, BeatsScript
-from pipeline.footage_query import harden
 from schema import Theme
-
-# The content capability the enumeration layout consumes. ONE constant shared by
-# the content predicate (_required_capability) and the manifest lookup
-# (_template_for_capability), so the routing signal can never drift between the two
-# sides (the first brick of the capability standard — design flag #2).
-ENUMERATION_CAPABILITY = "enumeration"
 
 # Recipe knobs.
 TransitionPolicy = str  # "selective" (default) | "every" | "none"
@@ -90,41 +82,6 @@ def _stat_props(beat: Beat) -> Dict:
     return props
 
 
-def _is_enumeration(beat: Beat) -> bool:
-    """items-shaped data → enumeration, UNLESS the beat is stat-shaped (a both-
-    fields beat resolves to stat — mutual exclusion, design flag #1). Mirrors the
-    `_is_stat` data-shape precedent; `data` stays the open extension channel."""
-    d = beat.data
-    return bool(isinstance(d, dict) and d.get("items") and not _is_stat(beat))
-
-
-def _required_capability(beat: Beat) -> Optional[str]:
-    """The content capability a MIDDLE beat needs, if any — the routing signal that
-    generalizes the hardcoded kind branch. Returns a capability a template may
-    declare via `manifest.consumes`, or None for default (scene) routing."""
-    if _is_enumeration(beat):
-        return ENUMERATION_CAPABILITY
-    return None
-
-
-def _template_for_capability(manifests: Optional[Dict[str, Manifest]], capability: str) -> Optional[str]:
-    """The id of the template DECLARING `consumes == capability`, read generically
-    from the catalog (no hardcoded id — the cash-in of the capability standard).
-    None when the catalog is absent or none declare it (→ graceful scene fallback)."""
-    if not manifests:
-        return None
-    for m in manifests.values():
-        if m.consumes == capability:
-            return m.id
-    return None
-
-
-def _enumeration_props(beat: Beat) -> Dict:
-    """CONTENT in props: the label set, in spoken order. Icons are NOT here — the
-    template curates label→glyph itself (design §3.3). Timing is render-derived."""
-    return {"items": list((beat.data or {})["items"])}
-
-
 def _derive_role(index: int, n: int, beat: Beat) -> str:
     """Position wins over data: first → hook, last → outro; middle → stat|scene."""
     if index == 0:
@@ -139,7 +96,6 @@ def plan(
     *,
     theme: Theme,
     templates: Optional[Dict[str, str]] = None,
-    manifests: Optional[Dict[str, Manifest]] = None,
     recipe: str = "fact-list",
     transition_policy: TransitionPolicy = "selective",
 ) -> ScenePlan:
@@ -165,17 +121,10 @@ def plan(
             scenes.append(PlannedScene(role, catalog["outro"], {"title": beat.text}, needs_footage=False))
         elif role == "stat":
             scenes.append(PlannedScene(role, catalog["stat"], _stat_props(beat), needs_footage=False))
-        else:  # middle, not stat: enumeration (if a template consumes it) else footage scene
-            cap = _required_capability(beat)
-            enum_id = _template_for_capability(manifests, cap) if cap else None
-            if enum_id:
-                scenes.append(
-                    PlannedScene("enumeration", enum_id, _enumeration_props(beat), needs_footage=False)
-                )
-            else:
-                scenes.append(
-                    PlannedScene(role, catalog["scene"], {}, needs_footage=True, query=harden(beat.keywords or script.title, title=script.title))
-                )
+        else:  # scene
+            scenes.append(
+                PlannedScene(role, catalog["scene"], {}, needs_footage=True, query=(beat.keywords or beat.text))
+            )
 
     _assign_transitions(scenes, theme.transition, transition_policy)
     return ScenePlan(title=script.title, scenes=scenes)

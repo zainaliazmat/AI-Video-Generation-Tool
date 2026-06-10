@@ -69,12 +69,10 @@ def _resolve_transition(
 
 
 def _scene_media(clip, span_frames: int) -> Media:
-    """Footage media for a scene span. Emits the clip's media `kind` and loops iff
-    it is a VIDEO known-shorter than the span the renderer plays it for (dᵢ + Tᵢ).
-    Images (kind='image') carry no duration and never loop — the <Img> renders for
-    the full span."""
-    loop = clip.kind == "video" and clip.duration_frames is not None and clip.duration_frames < span_frames
-    return Media(type=clip.kind, src=clip.path, fit="cover", kenBurns=KenBurns(), loop=loop)
+    """Footage media for a scene span. Loop iff the clip is known-shorter than
+    the span the renderer will play it for (dᵢ + Tᵢ)."""
+    loop = clip.duration_frames is not None and clip.duration_frames < span_frames
+    return Media(type="video", src=clip.path, fit="cover", kenBurns=KenBurns(), loop=loop)
 
 
 def build_spec(

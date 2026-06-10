@@ -19,8 +19,6 @@
 import type {ComponentType} from 'react';
 import type {TransitionPresentation} from '@remotion/transitions';
 import type {Theme} from '../remotion/src/schema';
-import type {HookWordTiming} from '../remotion/src/word-alignment';
-import type {ItemTiming} from '../remotion/src/item-timing';
 
 export type {Theme};
 
@@ -62,14 +60,6 @@ export interface Manifest {
    * MUST stay in lockstep with backend/manifest.py.
    */
   rendersOwnText?: boolean;
-  /**
-   * Content capability this template CONSUMES — the routing signal the recipe
-   * reads generically (the generalization of rendersOwnText). A beat whose content
-   * shape matches the capability is routed to whichever template DECLARES it, with
-   * no hardcoded template id. Today: "enumeration". Absent on position/data-routed
-   * templates. MUST stay in lockstep with backend/manifest.py.
-   */
-  consumes?: string;
 }
 
 /** staticFile-resolved absolute paths for any media a template references. */
@@ -86,21 +76,6 @@ export interface TemplateProps<Data = Record<string, unknown>> {
   timing: {fps: number; durationInFrames: number};
   /** staticFile-resolved paths for any media the template needs */
   assets: ResolvedAssets;
-  /**
-   * RENDER-DERIVED (not from spec): per-display-word narration timings for a
-   * voice-locked reveal, computed by the renderer from spec.captions ∩ the scene
-   * span ∩ the display text. Absent/empty → the template MUST fall back to its
-   * non-synced entrance (FAIL-CLOSED). Only the hook consumes it today.
-   */
-  wordTimings?: readonly HookWordTiming[];
-  /**
-   * RENDER-DERIVED (not from spec): per-item reveal frames for the enumeration
-   * layout's voice-locked one-by-one reveal, computed by the renderer from
-   * spec.captions ∩ the scene span ∩ the item labels. Absent/empty → the template
-   * MUST fall back to its even-staggered entrance (FAIL-CLOSED). Only a template
-   * declaring `consumes:"enumeration"` receives it today.
-   */
-  itemTimings?: readonly ItemTiming[];
 }
 
 /**

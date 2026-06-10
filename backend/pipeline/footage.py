@@ -21,20 +21,12 @@ import pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # backend/
 
 import hashlib
-import json
-import os
-import time
-from collections import namedtuple
 from pathlib import Path
 
 import requests
 
 from pipeline.config import require_env
 from pipeline.contracts import Clip, FootageRequest
-
-# select_clip's surfaced choice: link/duration as before, plus the chosen clip's
-# usable-rank (1-based among USABLE clips, matching candidate_rows) and Pexels origin.
-Selection = namedtuple("Selection", "link duration_frames rank pexels_id pexels_url")
 
 PEXELS_VIDEO_SEARCH = "https://api.pexels.com/videos/search"
 
@@ -59,73 +51,37 @@ def _video_duration_frames(video, fps):
     return round(dur * fps) if dur else None
 
 
-def candidate_rows(videos, *, query, fps):
-    """Ranked candidate metadata for the HITL footage pool: rank (Pexels order),
-    query, duration_frames, thumb_url. Usable portrait clips only (same filter as
-    select_clip's pick_video_file)."""
-    rows = []
-    for v in videos:
-        link = pick_video_file(v.get("video_files", []))
-        if not link:
-            continue   # rank counts usable clips only (len(rows)+1), not Pexels position
-        pics = v.get("video_pictures") or []
-        thumb = pics[0].get("picture") if pics else None
-        rows.append({"rank": len(rows) + 1, "query": query,
-                     "duration_frames": _video_duration_frames(v, fps),
-                     "thumb_url": thumb, "link": link,
-                     "pexels_id": v.get("id"), "pexels_url": v.get("url")})
-    return rows
+def select_clip(videos, *, min_frames, fps):
+    """Choose a (download_link, duration_frames) from Pexels search `videos`.
 
-
-def select_clip(videos, *, min_frames=0, fps):
-    """Return a Selection for the most relevant usable clip, subject to a SOFT loop
-    floor (see FootageRequest). Surfaces the chosen clip's usable-rank (1-based among
-    usable portrait clips — the same metric candidate_rows reports) and Pexels id/url
-    so provenance is captured from the real choice, never link-matched.
+    Bias toward the FIRST video (Pexels relevance order) whose duration covers
+    `min_frames` and has a usable portrait mp4; fall back to the first usable
+    video when none are long enough.
     """
-    first_usable = None
-    usable_rank = 0
+    usable = []  # (link, duration_frames)
+    fallback = None
     for v in videos:
         link = pick_video_file(v.get("video_files", []))
         if not link:
             continue
-        usable_rank += 1
-        frames = _video_duration_frames(v, fps)
-        sel = Selection(link, frames, usable_rank, v.get("id"), v.get("url"))
-        if first_usable is None:
-            first_usable = sel
-        if frames is None or frames >= min_frames:
-            return sel
-    return first_usable if first_usable is not None else Selection(None, None, None, None, None)
+        dur_f = _video_duration_frames(v, fps)
+        if fallback is None:
+            fallback = (link, dur_f)
+        if dur_f is not None and dur_f >= min_frames:
+            return link, dur_f
+        usable.append((link, dur_f))
+    return fallback if fallback is not None else (None, None)
 
 
-def search_pexels(query: str, key: str, *, _get=None, _sleep=None, max_retries: int = 3) -> dict:
-    """Search Pexels for portrait clips. Bounded retry with exponential backoff on
-    429/5xx (honoring a Retry-After header on 429 when present), then raise — the
-    caller (fetch_footage) broadens to the title on the raised error. The retry cap
-    is small and fixed (Phase-3 cost discipline); _get/_sleep are injectable for tests."""
-    _get = _get or requests.get
-    _sleep = _sleep or time.sleep
-    for attempt in range(max_retries + 1):
-        r = _get(
-            PEXELS_VIDEO_SEARCH,
-            params={"query": query, "orientation": "portrait", "per_page": 15, "size": "medium"},
-            headers={"Authorization": key},
-            timeout=30,
-        )
-        retryable = r.status_code == 429 or 500 <= r.status_code < 600
-        if retryable and attempt < max_retries:
-            retry_after = r.headers.get("Retry-After")
-            try:
-                delay = float(retry_after)
-                if delay <= 0:
-                    raise ValueError("non-positive Retry-After")
-            except (TypeError, ValueError):
-                delay = 2.0 ** attempt
-            _sleep(delay)
-            continue
-        r.raise_for_status()
-        return r.json()
+def search_pexels(query: str, key: str) -> dict:
+    r = requests.get(
+        PEXELS_VIDEO_SEARCH,
+        params={"query": query, "orientation": "portrait", "per_page": 5, "size": "medium"},
+        headers={"Authorization": key},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()
 
 
 def _download(url: str, dest: Path) -> None:
@@ -143,58 +99,6 @@ def _read_sidecar(path: Path):
         return None
 
 
-def _write_prov_sidecar(path: Path, rank, pexels_id, pexels_url) -> None:
-    path.write_text(json.dumps({"rank": rank, "pexels_id": pexels_id, "pexels_url": pexels_url}))
-
-
-def _read_prov_sidecar(path: Path):
-    """(rank, pexels_id, pexels_url) from the sidecar, or (None, None, None) when it is
-    absent/corrupt — mirrors _read_sidecar's tolerant posture for legacy cached clips."""
-    try:
-        d = json.loads(path.read_text())
-        return d.get("rank"), d.get("pexels_id"), d.get("pexels_url")
-    except (OSError, ValueError):
-        return None, None, None
-
-
-def _fetch_one(req, query, out_dir, *, fps, key, search, downloader):
-    """Cache-or-fetch one clip for `query`. Returns a Clip, or None when the search
-    yields no usable portrait clip (so the caller can broaden). Caches by query slug;
-    a `.frames` sidecar preserves the duration and a `.prov.json` sidecar preserves the
-    A.2a provenance (rank + Pexels id/url) across the download cache."""
-    slug = query_slug(query)
-    dest = out_dir / f"footage_{slug}.mp4"
-    sidecar = out_dir / f"footage_{slug}.frames"
-    prov_sidecar = out_dir / f"footage_{slug}.prov.json"
-
-    if dest.exists():
-        duration_frames = _read_sidecar(sidecar)  # may be None if unknown
-        rank, pexels_id, pexels_url = _read_prov_sidecar(prov_sidecar)  # None,None,None if legacy
-    else:
-        data = search(query, key)
-        sel = select_clip(data.get("videos", []), min_frames=req.min_frames, fps=fps)
-        url, duration_frames = sel.link, sel.duration_frames
-        rank, pexels_id, pexels_url = sel.rank, sel.pexels_id, sel.pexels_url
-        if not url:
-            return None
-        # Atomic write: stream into a sibling .part, then os.replace onto dest only
-        # on success. A truncated .part is unlinked and never becomes a cached dest.
-        tmp = dest.parent / (dest.name + ".part")
-        try:
-            downloader(url, tmp)
-            os.replace(tmp, dest)
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
-        if duration_frames is not None:
-            sidecar.write_text(str(duration_frames))  # only AFTER the rename
-        _write_prov_sidecar(prov_sidecar, rank, pexels_id, pexels_url)  # only AFTER the rename
-
-    return Clip(index=req.index, query=query, path=f"assets/{dest.name}",
-                duration_frames=duration_frames, rank=rank,
-                pexels_id=pexels_id, pexels_url=pexels_url)
-
-
 def fetch_footage(requests_, out_dir, *, fps: int = 30, key=None, search=None, downloader=None) -> list[Clip]:
     key = key or require_env("PEXELS_API_KEY")
     search = search or search_pexels
@@ -202,35 +106,26 @@ def fetch_footage(requests_, out_dir, *, fps: int = 30, key=None, search=None, d
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    def attempt(req, query):
-        """Fetch one clip, treating a Pexels/network ERROR the same as an empty result:
-        return (clip_or_None, error_or_None) so the caller can broaden instead of letting
-        a raw requests exception abort the whole render. An empty query is skipped (Pexels
-        400s on it) so it falls straight through to the broaden fallback."""
-        if not query:
-            return None, None
-        try:
-            return _fetch_one(req, query, out_dir, fps=fps, key=key, search=search, downloader=downloader), None
-        except requests.RequestException as e:
-            return None, e
-
     clips: list[Clip] = []
     for req in requests_:
         query = req.query.strip()
-        clip, err = attempt(req, query)
-        if clip is None and req.broad_query:
-            # The specific query whiffed (zero portrait clips) OR errored (a 400 on an odd
-            # query, a 429 burst, a 5xx, a timeout). Broaden to the title before failing the
-            # whole render — a loosely-relevant clip beats a crash, and the simpler title
-            # query usually succeeds where a too-specific one trips a Pexels error.
-            broad = req.broad_query.strip()
-            if broad and broad.lower() != query.lower():
-                clip, broad_err = attempt(req, broad)
-                err = broad_err or err
-        if clip is None:
-            detail = f" ({err})" if err else ""
-            raise RuntimeError(f"No Pexels portrait video for beat {req.index}: {req.query!r}{detail}")
-        clips.append(clip)
+        slug = query_slug(query)
+        dest = out_dir / f"footage_{slug}.mp4"
+        sidecar = out_dir / f"footage_{slug}.frames"
+
+        if dest.exists():
+            duration_frames = _read_sidecar(sidecar)  # may be None if unknown
+        else:
+            data = search(query, key)
+            videos = data.get("videos", [])
+            url, duration_frames = select_clip(videos, min_frames=req.min_frames, fps=fps)
+            if not url:
+                raise RuntimeError(f"No Pexels portrait video for beat {req.index}: {query!r}")
+            downloader(url, dest)
+            if duration_frames is not None:
+                sidecar.write_text(str(duration_frames))
+
+        clips.append(Clip(index=req.index, query=query, path=f"assets/{dest.name}", duration_frames=duration_frames))
     return clips
 
 
