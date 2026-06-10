@@ -12,9 +12,10 @@ import {
   type Stage,
   type StageState,
 } from './PipelineStepper';
-import {RenderControls, type RenderRecord} from './RenderControls';
-import {HistoryList} from './HistoryList';
+import {RenderControls} from './RenderControls';
+import {ProjectList} from './HistoryList';
 import {Badge, Eyebrow} from './ui';
+import type {ProjectMeta} from '@/lib/projects';
 import {FootageGate, type GateScene} from './FootageGate';
 
 const freshStages = (): Stage[] => DEFAULT_STAGES.map((s) => ({...s, state: 'queued'}));
@@ -27,8 +28,8 @@ const rise = {
 
 export function Studio() {
   const [spec, setSpec] = useState<Spec | null>(null);
-  const [failed, setFailed] = useState(false);
-  const [history, setHistory] = useState<RenderRecord[]>([]);
+  const [projects, setProjects] = useState<ProjectMeta[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [stages, setStages] = useState<Stage[]>(freshStages);
   const [generating, setGenerating] = useState(false);
   const [genNonce, setGenNonce] = useState(0); // bump to remount the Player on a new spec
@@ -36,20 +37,48 @@ export function Studio() {
   const [gateScenes, setGateScenes] = useState<GateScene[]>([]);
   const [editing, setEditing] = useState(false);
 
+  async function refreshProjects(): Promise<ProjectMeta[]> {
+    const r = await fetch('/api/projects');
+    const list: ProjectMeta[] = r.ok ? await r.json() : [];
+    setProjects(list);
+    return list;
+  }
+
+  async function openProject(id: string) {
+    const r = await fetch(`/api/projects/${id}?t=${Date.now()}`);
+    if (!r.ok) return;
+    const {spec: s} = (await r.json()) as {spec: Spec};
+    setSpec(s);
+    setSelectedId(id);
+    setSessionId(id);            // edits + footage gate target this session
+    setGenNonce((n) => n + 1);
+    try {
+      const st = await fetch(`/api/session/${id}/state`).then((x) => x.json());
+      setGateScenes(Array.isArray(st?.scenes) ? st.scenes : []);
+    } catch {
+      setGateScenes([]);
+    }
+  }
+
+  async function deleteProject(id: string) {
+    await fetch(`/api/projects/${id}`, {method: 'DELETE'});
+    const list = await refreshProjects();
+    if (id === selectedId) {
+      if (list[0]) await openProject(list[0].id);
+      else {
+        setSpec(null);
+        setSelectedId(null);
+        setSessionId(null);
+        setGateScenes([]);
+      }
+    }
+  }
+
   useEffect(() => {
-    const ac = new AbortController();
-    fetch('/spec.json', {signal: ac.signal})
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((s: Spec) => setSpec(s))
-      .catch((e) => {
-        if (ac.signal.aborted) return;
-        console.error('Failed to load spec.json:', e);
-        setFailed(true);
-      });
-    return () => ac.abort();
+    refreshProjects().then((list) => {
+      if (list[0]) openProject(list[0].id);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function generate(topic: string) {
@@ -102,21 +131,10 @@ export function Studio() {
           } else if (msg.type === 'done') {
             finished = true;
             const sid = typeof msg.sid === 'string' ? msg.sid : null;
-            setSessionId(sid);
-            const r = await fetch(`/spec.json?t=${Date.now()}`);
-            const s: Spec = await r.json();
-            setSpec(s);
-            setFailed(false);
-            setGenNonce((n) => n + 1);
-            toast.success('Video generated', {id: toastId, description: s.meta.title});
-            if (sid) {
-              try {
-                const st = await fetch(`/api/session/${sid}/state`).then((x) => x.json());
-                setGateScenes(Array.isArray(st?.scenes) ? st.scenes : []);
-              } catch {
-                setGateScenes([]);
-              }
-            }
+            const list = await refreshProjects();
+            if (sid) await openProject(sid);
+            const title = list.find((p) => p.id === sid)?.title ?? 'Untitled';
+            toast.success('Video generated', {id: toastId, description: title});
           } else if (msg.type === 'error') {
             finished = true;
             throw new Error(String(msg.message));
@@ -160,8 +178,8 @@ export function Studio() {
         ),
       );
       // reload spec into the live Player (instant); export MP4 is now stale
-      const r = await fetch(`/spec.json?t=${Date.now()}`);
-      setSpec(await r.json());
+      const r = await fetch(`/api/projects/${sessionId}?t=${Date.now()}`);
+      setSpec((await r.json()).spec);
       setGenNonce((n) => n + 1);
       toast.success('Clip swapped — preview updated', {id: toastId, description: 'Re-render to export the MP4.'});
     } catch (e) {
@@ -180,8 +198,8 @@ export function Studio() {
     } catch {
       /* keep the prior gate on a transient state error */
     }
-    const r = await fetch(`/spec.json?t=${Date.now()}`);
-    setSpec(await r.json());
+    const r = await fetch(`/api/projects/${sid}?t=${Date.now()}`);
+    setSpec((await r.json()).spec);
     setGenNonce((n) => n + 1);
   }
 
@@ -285,12 +303,9 @@ export function Studio() {
             </p>
           </motion.div>
 
-          {spec && (
+          {spec && selectedId && (
             <motion.div {...rise} transition={{...rise.transition, delay: 0.12}}>
-              <RenderControls
-                spec={spec}
-                onComplete={(r) => setHistory((h) => [r, ...h])}
-              />
+              <RenderControls spec={spec} projectId={selectedId} onRendered={refreshProjects} />
             </motion.div>
           )}
 
@@ -307,7 +322,12 @@ export function Studio() {
           )}
 
           <motion.div {...rise} transition={{...rise.transition, delay: 0.16}}>
-            <HistoryList records={history} />
+            <ProjectList
+              projects={projects}
+              selectedId={selectedId}
+              onOpen={openProject}
+              onDelete={deleteProject}
+            />
           </motion.div>
         </div>
 
@@ -328,15 +348,12 @@ export function Studio() {
               )}
             </div>
             <div className="overflow-hidden rounded-[var(--radius-md)] bg-black">
-              {failed ? (
-                <div className="flex aspect-[1080/1920] items-center justify-center p-6 text-center font-ui text-[13px] text-ink-muted">
-                  Could not load spec.json. Run{' '}
-                  <code className="mx-1 font-mono">npm run copy-assets</code> in preview/.
-                </div>
-              ) : spec ? (
+              {spec ? (
                 <PlayerClient key={genNonce} spec={spec} />
               ) : (
-                <div className="aspect-[1080/1920] w-full animate-pulse-dot bg-white/[0.03]" />
+                <div className="flex aspect-[1080/1920] items-center justify-center p-6 text-center font-ui text-[13px] text-ink-muted">
+                  No videos yet — generate one to get started.
+                </div>
               )}
             </div>
             {spec && (
