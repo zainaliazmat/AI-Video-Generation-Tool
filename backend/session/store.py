@@ -7,6 +7,7 @@ spec.json stays on disk for the renderer (the renderer never reads this DB).
 """
 from __future__ import annotations
 
+import json as _json
 import sqlite3
 from pathlib import Path
 
@@ -48,6 +49,17 @@ CREATE TABLE IF NOT EXISTS media_provenance (
   pexels_id   INTEGER,
   pexels_url  TEXT,
   PRIMARY KEY (session_id, scene_index)
+);
+CREATE TABLE IF NOT EXISTS spec_patches (
+  session_id  TEXT    NOT NULL,
+  seq         INTEGER NOT NULL,
+  kind        TEXT    NOT NULL DEFAULT 'patch',  -- 'patch' | 'revert'
+  patch_json  TEXT    NOT NULL,                  -- the ops that were applied
+  diff_json   TEXT    NOT NULL,                  -- [{path,before,after}] at apply time
+  reverted    INTEGER NOT NULL DEFAULT 0,        -- set when a later revert undid this entry
+  reverts_seq INTEGER,                           -- kind='revert': which seq it undid
+  created_at  TEXT    NOT NULL,
+  PRIMARY KEY (session_id, seq)
 );
 """
 
@@ -150,6 +162,45 @@ def set_candidate_clip_path(conn, session_id, *, scene_index, rank, clip_path) -
                  " WHERE session_id=? AND scene_index=? AND rank=?",
                  (clip_path, session_id, scene_index, rank))
     conn.commit()
+
+
+# ---- F-5: assemble patch history (append-only event log) ----
+# The spec "version" is DERIVED — v1 is the initial materialize, and every history
+# row (a patch apply OR a revert, both are edits) bumps it by one. Deriving from
+# the log instead of storing a counter means no sessions-table migration and the
+# rail chip can never drift from what the history actually shows.
+
+def append_spec_patch(conn, session_id, *, kind, patch, diff, now, reverts_seq=None) -> int:
+    """Append one history entry; returns its seq (1-based, per session)."""
+    if kind not in ("patch", "revert"):
+        raise ValueError(f"unknown spec_patches kind {kind!r}")
+    with conn:
+        row = conn.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM spec_patches"
+                           " WHERE session_id=?", (session_id,)).fetchone()
+        seq = row[0]
+        conn.execute(
+            "INSERT INTO spec_patches"
+            " (session_id, seq, kind, patch_json, diff_json, reverted, reverts_seq, created_at)"
+            " VALUES (?,?,?,?,?,0,?,?)",
+            (session_id, seq, kind, _json.dumps(patch), _json.dumps(diff), reverts_seq, now))
+    return seq
+
+
+def get_spec_patches(conn, session_id):
+    return conn.execute("SELECT * FROM spec_patches WHERE session_id=? ORDER BY seq",
+                        (session_id,)).fetchall()
+
+
+def mark_patch_reverted(conn, session_id, *, seq) -> None:
+    conn.execute("UPDATE spec_patches SET reverted=1 WHERE session_id=? AND seq=?",
+                 (session_id, seq))
+    conn.commit()
+
+
+def spec_version(conn, session_id) -> int:
+    row = conn.execute("SELECT COUNT(*) FROM spec_patches WHERE session_id=?",
+                       (session_id,)).fetchone()
+    return 1 + row[0]
 
 
 # A.2a provenance sources. Fail loud on anything else (house style); A.2b adds

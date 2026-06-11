@@ -18,7 +18,16 @@ export async function GET(_req: Request, {params}: {params: Promise<{id: string}
   const spec = JSON.parse(readFileSync(specPath, 'utf-8'));
   const sourcesPath = path.join(projectDir(id), 'sources.json');
   const sources = existsSync(sourcesPath) ? JSON.parse(readFileSync(sourcesPath, 'utf-8')) : null;
-  return Response.json({spec, sources});
+  // F-7: real server-side validation + the derived spec version for the rail pills.
+  // Best-effort — a spawn failure degrades the pills to "unverified", never a 500.
+  let meta: unknown = null;
+  try {
+    const {code, json} = await spawnJson('session_meta.py', ['--sid', id], 30_000);
+    if (code === 0 && json?.ok) meta = json;
+  } catch {
+    /* pills render the unverified state */
+  }
+  return Response.json({spec, sources, meta});
 }
 
 export async function DELETE(_req: Request, {params}: {params: Promise<{id: string}>}) {
