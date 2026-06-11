@@ -75,14 +75,21 @@ def test_run_builds_multi_template_spec_from_a_plan(monkeypatch, tmp_path):
         return [Clip(index=r.index, query=r.query, path=f"assets/f{r.index}.mp4", duration_frames=300) for r in reqs]
 
     monkeypatch.setattr(m.footage_stage, "fetch_footage", fake_footage)
+    monkeypatch.setattr(m, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(m, "ASSETS_DIR", tmp_path / "assets")
-    monkeypatch.setattr(m, "SPEC_OUT", tmp_path / "spec.json")
-    monkeypatch.setattr(m, "SOURCES_OUT", tmp_path / "sources.json")
+    monkeypatch.setattr(m, "SESSIONS_DB", tmp_path / "s.db")
 
     events = []
     spec = m.run("anything", on_stage=lambda key, state: events.append((key, state)))
+    sid = next(v for (k, v) in events if k == "session")
+    pdir = tmp_path / "projects" / sid
 
-    assert events == [
+    # A.6.1: session id is emitted first, before any stage events
+    session_events = [(k, v) for (k, v) in events if k == "session"]
+    assert len(session_events) == 1
+    assert session_events[0][1].startswith("auto-")
+    stage_events = [(k, v) for (k, v) in events if k != "session"]
+    assert stage_events == [
         ("script", "running"), ("script", "done"),
         ("voice", "running"), ("voice", "done"),
         ("timing", "running"), ("timing", "done"),
@@ -98,13 +105,14 @@ def test_run_builds_multi_template_spec_from_a_plan(monkeypatch, tmp_path):
     assert seen["footage_reqs"][0].min_frames > 0          # biased by scene duration
 
     # the written spec is multi-template and valid (validate ran without raising)
-    written = json.loads((tmp_path / "spec.json").read_text())
+    written = json.loads((pdir / "spec.json").read_text())
     assert [s["template"] for s in written["scenes"]] == ["hook", "stat", "scene", "outro"]
     assert written["meta"]["title"] == "T"
     assert spec.meta.durationInFrames == 120               # round(4.0 * 30)
+    assert not (tmp_path / "spec.json").exists()           # root spec no longer written
 
     # the sources sidecar is written next to the spec on the grounded path
-    sidecar = json.loads((tmp_path / "sources.json").read_text())
+    sidecar = json.loads((pdir / "sources.json").read_text())
     assert sidecar["title"] == "T"
     assert sidecar["facts"] == [] and sidecar["sources"] == []  # these beats carry no source
     assert captured["cache_dir"] is not None                    # retrieval is cached (cost bound)

@@ -5,23 +5,16 @@ import {toast} from 'sonner';
 import type {Spec} from '@remotion-src/schema';
 import {Badge, Button, ProgressBar} from './ui';
 
-export type RenderRecord = {
-  id: string;
-  title: string;
-  durationInFrames: number;
-  fps: number;
-  at: number;
-  url: string;
-};
-
 type Status = 'idle' | 'rendering' | 'done' | 'error';
 
 export function RenderControls({
   spec,
-  onComplete,
+  projectId,
+  onRendered,
 }: {
   spec: Spec;
-  onComplete: (record: RenderRecord) => void;
+  projectId: string;
+  onRendered: () => void;
 }) {
   const [status, setStatus] = useState<Status>('idle');
   const [progress, setProgress] = useState(0);
@@ -38,7 +31,11 @@ export function RenderControls({
     const toastId = toast.loading('Rendering video…');
 
     try {
-      const res = await fetch('/api/render', {method: 'POST'});
+      const res = await fetch('/api/render', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({id: projectId}),
+      });
       if (res.status === 409) {
         toast.error('A render is already in progress', {id: toastId});
         setStatus('idle');
@@ -73,19 +70,12 @@ export function RenderControls({
             setFrame(msg.frame as number);
           } else if (msg.type === 'done') {
             finished = true;
-            const url = `${msg.output}?t=${Date.now()}`;
+            const url = `/api/projects/${projectId}/video?t=${Date.now()}`;
             setProgress(1);
             setStatus('done');
             setOutputUrl(url);
             toast.success('Render complete', {id: toastId});
-            onComplete({
-              id: `${Date.now()}`,
-              title: spec.meta.title,
-              durationInFrames: spec.meta.durationInFrames,
-              fps: spec.meta.fps,
-              at: Date.now(),
-              url,
-            });
+            onRendered();
           } else if (msg.type === 'error') {
             finished = true;
             throw new Error(String(msg.message));

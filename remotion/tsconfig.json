@@ -23,7 +23,8 @@
       "remotion": ["node_modules/remotion"],
       "remotion/*": ["node_modules/remotion/*"],
       "@remotion/transitions": ["node_modules/@remotion/transitions"],
-      "@remotion/transitions/*": ["node_modules/@remotion/transitions/*"]
+      "@remotion/transitions/*": ["node_modules/@remotion/transitions/*"],
+      "lucide-react": ["node_modules/lucide-react/dist/lucide-react.d.ts"]
     }
   },
   "include": ["src", "remotion.config.ts", "../templates/**/*.ts", "../templates/**/*.tsx"]

@@ -5,7 +5,7 @@ import {usePathname} from 'next/navigation';
 import {cn} from '@/lib/cn';
 
 const LINKS = [
-  {href: '/', label: 'Studio'},
+  {href: '/', label: 'Home'},
   {href: '/templates', label: 'Templates'},
 ];
 

@@ -83,7 +83,18 @@ def test_core_full_text_templates_declare_rendersOwnText():
     # The full-text hero cards own their on-screen text, so the karaoke caption is
     # suppressed over them; footage/overlay templates keep captions.
     catalog = load_catalog(_TEMPLATES_DIR)
-    for hero in ("hook", "stat", "outro"):
+    # enumeration is a scene-slot card that renders its OWN labels, so it belongs on
+    # the own-text side (caption suppressed) despite kind=="scene" (design §3 watch-item).
+    for hero in ("hook", "stat", "outro", "enumeration"):
         assert catalog[hero].rendersOwnText is True, f"{hero} must set rendersOwnText"
     for footage in ("scene", "overlay"):
         assert catalog[footage].rendersOwnText is False, f"{footage} must not own text"
+
+
+def test_enumeration_manifest_loads_with_capability():
+    # The enumeration plugin declares the routing capability the recipe reads.
+    catalog = load_catalog(_TEMPLATES_DIR)
+    m = catalog["enumeration"]
+    assert m.kind == "scene"
+    assert m.rendersOwnText is True
+    assert m.consumes == "enumeration"

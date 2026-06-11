@@ -13,14 +13,20 @@
   --glass-border: rgba(255, 255, 255, 0.08);
   --glass-border-active: rgba(99, 102, 241, 0.4);
 
-  --accent-1: #6366f1;
+  /* Studio v2 Liquid Glass tint (PRD §9): Apple indigo #5E5CE6 */
+  --accent-1: #5e5ce6;
   --accent-2: #8b5cf6;
   --accent-3: #a78bfa;
-  --grad-main: linear-gradient(135deg, #6366f1, #8b5cf6);
+  --grad-main: linear-gradient(135deg, #5e5ce6, #8b5cf6);
 
-  --green: #10b981;
-  --amber: #f59e0b;
+  --green: #30d158;
+  --amber: #ff9f0a;
   --red: #ef4444;
+  --blue: #0a84ff;
+
+  /* Content plane: quiet standard-material card (glass is the FLOATING layer only) */
+  --card-bg: rgba(24, 25, 32, 0.62);
+  --card-border: rgba(255, 255, 255, 0.08);
 
   --text-primary: rgba(255, 255, 255, 0.92);
   --text-secondary: rgba(255, 255, 255, 0.55);
@@ -80,5 +86,16 @@
   .glass-hover:hover {
     background: var(--glass-bg-hover);
     border-color: rgba(255, 255, 255, 0.12);
+  }
+
+  /* Content plane card — the quiet standard-material surface beats/scenes/chat sit
+     on. Liquid Glass is reserved for the FLOATING control layer (toolbars, rail,
+     action bars); content never uses .glass (PRD §9 layer discipline). */
+  .content-card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-lg);
+    -webkit-backdrop-filter: blur(8px) saturate(150%);
+    backdrop-filter: blur(8px) saturate(150%);
   }
 }

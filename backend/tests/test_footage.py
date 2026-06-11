@@ -1,5 +1,8 @@
-from pipeline.footage import pick_video_file, select_clip, fetch_footage
+import dataclasses
+
+from pipeline.footage import pick_video_file, select_clip, fetch_footage, candidate_rows, query_slug
 from pipeline.contracts import Clip, FootageRequest
+from pathlib import Path
 
 
 def test_pick_prefers_portrait_mp4_near_1920():
@@ -20,30 +23,75 @@ def _video(link, duration):
         {"link": link, "width": 1080, "height": 1920, "file_type": "video/mp4"}]}
 
 
+def _video_pid(link, duration, pid, purl):
+    v = _video(link, duration)
+    v["id"] = pid
+    v["url"] = purl
+    return v
+
+
 def test_select_clip_returns_link_and_duration_frames():
-    link, dur_f = select_clip([_video("a", 6)], min_frames=0, fps=30)
-    assert link == "a"
-    assert dur_f == 180  # 6s * 30fps
+    sel = select_clip([_video("a", 6)], min_frames=0, fps=30)
+    assert sel.link == "a"
+    assert sel.duration_frames == 180  # 6s * 30fps
 
 
-def test_select_clip_biases_toward_long_enough_clip():
-    # second video is long enough for min_frames=120 (4s@30), first is not
-    link, dur_f = select_clip([_video("short", 2), _video("long", 5)], min_frames=120, fps=30)
-    assert link == "long"
-    assert dur_f == 150
+def test_select_clip_relevance_wins_when_top_clip_clears_the_floor():
+    # Phase 4 ③: relevance (Pexels order) wins among clips that clear the loop floor.
+    # The top clip is 4s — well over the 60f (2s) floor — so it is kept even though a
+    # much longer clip follows. Length never displaces a relevant-enough top hit.
+    sel = select_clip([_video("relevant_ok", 4), _video("longer_offtopic", 20)],
+                      min_frames=60, fps=30)
+    assert sel.link == "relevant_ok"
+    assert sel.duration_frames == 120
+
+
+def test_select_clip_skips_pathologically_short_top_clip_for_a_longer_usable_one():
+    # Phase 4 duration floor — the diagnostic's K-floor case, reproducible in place via
+    # `--query "storm clouds radar"`: a 1s clip ranked #1 looped 5× over a beat while a
+    # relevant 17s clip sat at rank 2 (a fat pool — the trigger is "Pexels ranks a
+    # pathologically short clip #1", not pool sparsity). When the top clip is below the
+    # floor AND a later usable clip clears it, take the longer one — a tight loop reads
+    # worse than dropping one rank.
+    sel = select_clip([_video("one_second", 1), _video("seventeen_second", 17)],
+                      min_frames=60, fps=30)
+    assert sel.link == "seventeen_second"
+    assert sel.duration_frames == 510
 
 
 def test_select_clip_falls_back_to_first_when_none_long_enough():
-    link, dur_f = select_clip([_video("a", 1), _video("b", 2)], min_frames=999, fps=30)
-    assert link == "a"  # relevance order preserved when nothing qualifies
-    assert dur_f == 30
+    sel = select_clip([_video("a", 1), _video("b", 2)], min_frames=999, fps=30)
+    assert sel.link == "a"  # relevance order preserved when nothing qualifies
+    assert sel.duration_frames == 30
 
 
 def test_select_clip_handles_missing_duration():
-    link, dur_f = select_clip([{"video_files": [
+    sel = select_clip([{"video_files": [
         {"link": "x", "width": 1080, "height": 1920, "file_type": "video/mp4"}]}], min_frames=0, fps=30)
-    assert link == "x"
-    assert dur_f is None
+    assert sel.link == "x"
+    assert sel.duration_frames is None
+
+
+def test_select_clip_surfaces_rank_and_pexels_origin():
+    sel = select_clip([_video_pid("a", 6, 101, "https://pexels.com/v/101")], min_frames=0, fps=30)
+    assert sel.link == "a" and sel.duration_frames == 180
+    assert sel.rank == 1 and sel.pexels_id == 101 and sel.pexels_url == "https://pexels.com/v/101"
+
+
+def test_select_clip_rank_is_kfloor_displaced_position():
+    # The 1s top clip is below the 60f floor; select_clip drops to the 17s clip at
+    # usable-rank 2 — provenance rank must be 2, not 1.
+    sel = select_clip([_video_pid("one_second", 1, 11, "u11"),
+                       _video_pid("seventeen_second", 17, 22, "u22")], min_frames=60, fps=30)
+    assert sel.link == "seventeen_second" and sel.rank == 2 and sel.pexels_id == 22
+
+
+def test_select_clip_fallback_carries_first_usable_origin():
+    # Nothing clears the floor -> fall back to the first usable clip (rank 1) and carry
+    # ITS origin.
+    sel = select_clip([_video_pid("a", 1, 7, "u7"), _video_pid("b", 2, 8, "u8")],
+                      min_frames=999, fps=30)
+    assert sel.link == "a" and sel.rank == 1 and sel.pexels_id == 7
 
 
 # ── fetch_footage: request-driven, cached, duration recorded ────────────────
@@ -95,3 +143,96 @@ def test_fetch_cache_hit_recovers_duration_from_sidecar(tmp_path):
 
     assert calls["download"] == 1                            # cached, not re-downloaded
     assert second[0].duration_frames == first[0].duration_frames == 180
+
+
+def test_fetch_one_populates_clip_provenance_and_writes_sidecar(tmp_path):
+    vids = {"videos": [_video_pid("x.mp4", 6, 7, "https://pexels.com/v/7")]}
+    calls = {"n": 0}
+
+    def fake_search(q, key):
+        calls["n"] += 1
+        return vids
+
+    dl = lambda url, dest: Path(dest).write_bytes(b"v")
+    req = FootageRequest(index=0, query="q", min_frames=0)
+
+    c1 = fetch_footage([req], tmp_path, fps=30, key="K", search=fake_search, downloader=dl)[0]
+    assert c1.rank == 1 and c1.pexels_id == 7 and c1.pexels_url == "https://pexels.com/v/7"
+    assert (tmp_path / f"footage_{query_slug('q')}.prov.json").exists()
+
+    # Second fetch hits the disk cache: search NOT called again; provenance restored
+    # from the sidecar (this is the regenerate-safe path).
+    c2 = fetch_footage([req], tmp_path, fps=30, key="K", search=fake_search, downloader=dl)[0]
+    assert calls["n"] == 1  # no re-search
+    assert c2.rank == 1 and c2.pexels_id == 7 and c2.pexels_url == "https://pexels.com/v/7"
+
+
+def test_fetch_one_missing_prov_sidecar_degrades_to_none(tmp_path):
+    # A legacy pre-A.2a cached clip (clip file present, no .prov.json) must yield None
+    # provenance without raising or re-searching.
+    slug = query_slug("legacy")
+    (tmp_path / f"footage_{slug}.mp4").write_bytes(b"v")
+
+    def boom(q, key):
+        raise AssertionError("must not search when the clip is already cached")
+
+    req = FootageRequest(index=0, query="legacy", min_frames=0)
+    c = fetch_footage([req], tmp_path, fps=30, key="K", search=boom,
+                      downloader=lambda u, d: None)[0]
+    assert c.rank is None and c.pexels_id is None and c.pexels_url is None
+
+
+def test_fetch_one_corrupt_prov_sidecar_degrades_to_none(tmp_path):
+    # A truncated/corrupt .prov.json (e.g. an interrupted write_text) must degrade to
+    # None via the ValueError branch of _read_prov_sidecar — not raise — so a cached
+    # clip stays usable. Complements the missing-file (OSError) case above.
+    slug = query_slug("legacy")
+    (tmp_path / f"footage_{slug}.mp4").write_bytes(b"v")
+    (tmp_path / f"footage_{slug}.prov.json").write_text("{bad json")  # corrupt
+
+    def boom(q, key):
+        raise AssertionError("must not search when the clip is already cached")
+
+    req = FootageRequest(index=0, query="legacy", min_frames=0)
+    c = fetch_footage([req], tmp_path, fps=30, key="K", search=boom,
+                      downloader=lambda u, d: None)[0]
+    assert c.rank is None and c.pexels_id is None and c.pexels_url is None
+
+
+def test_fetch_footage_broaden_surfaces_broadened_provenance(tmp_path):
+    # §5.1: a specific query with zero usable portrait clips broadens to the title;
+    # provenance must come from the BROADENED clip (query=title, rank/origin from it).
+    def fake_search(query, key):
+        if query == "specific":
+            return {"videos": []}  # whiff
+        return {"videos": [_video_pid("broad.mp4", 6, 555, "https://pexels.com/v/555")]}
+
+    req = FootageRequest(index=0, query="specific", min_frames=0, broad_query="title")
+    c = fetch_footage([req], tmp_path, fps=30, key="K", search=fake_search,
+                      downloader=lambda url, dest: Path(dest).write_bytes(b"v"))[0]
+    assert c.query == "title"  # resolved (broadened) query recorded
+    assert c.rank == 1 and c.pexels_id == 555 and c.pexels_url == "https://pexels.com/v/555"
+
+
+def test_candidate_rows_include_pexels_origin():
+    rows = candidate_rows([_video_pid("a", 6, 101, "https://pexels.com/v/101")],
+                          query="coral reef", fps=30)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["rank"] == 1 and r["query"] == "coral reef"
+    assert r["pexels_id"] == 101 and r["pexels_url"] == "https://pexels.com/v/101"
+    assert r["link"] == "a"  # existing fields preserved
+
+
+def test_clip_provenance_fields_default_none_and_roundtrip():
+    # Old construction (no provenance) still works — fields default to None.
+    bare = Clip(index=0, query="q", path="assets/x.mp4", duration_frames=180)
+    assert bare.rank is None and bare.pexels_id is None and bare.pexels_url is None
+
+    # New construction carries provenance, and asdict<->Clip(**d) round-trips it
+    # (this IS the mechanism session/codecs.clips_to_json/from_json rely on).
+    c = Clip(index=1, query="reef", path="assets/r.mp4", duration_frames=210,
+             rank=2, pexels_id=12345, pexels_url="https://pexels.com/v/12345")
+    d = dataclasses.asdict(c)
+    assert d["rank"] == 2 and d["pexels_id"] == 12345 and d["pexels_url"] == "https://pexels.com/v/12345"
+    assert Clip(**d) == c
