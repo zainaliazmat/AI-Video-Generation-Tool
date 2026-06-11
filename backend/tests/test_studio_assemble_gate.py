@@ -82,12 +82,13 @@ def test_patch_rejects_non_replace_op():
 
 
 def test_patch_rejects_unknown_theme_key_loudly():
-    """The honesty hole (review F-3): an unknown theme leaf (e.g. caption.size,
-    which has no schema field yet, or any misspelled key) used to be accepted,
-    diffed, and silently DISCARDED by pydantic's default extra='ignore' — a green
-    patch card and an unchanged render. It must fail loudly instead."""
+    """The honesty hole (review F-3): an unknown theme leaf (or any misspelled key)
+    used to be accepted, diffed, and silently DISCARDED by pydantic's default
+    extra='ignore' — a green patch card and an unchanged render. It must fail
+    loudly instead. (caption.size graduated to a real field — see the migration
+    test below — so the unknown examples here are misspellings.)"""
     spec = _spec()
-    for path in ("/theme/caption/size",          # the deferred CaptionStyle.size ruling
+    for path in ("/theme/caption/sizes",         # near-miss of the now-real size
                  "/theme/caption/colour",        # misspelling of an existing key
                  "/theme/pallete/background"):   # misspelled container
         with pytest.raises(spec_patch.PatchError):
@@ -99,9 +100,29 @@ def test_spec_model_rejects_unknown_fields():
     must raise, not silently vanish (the contract mirror in schema.ts is types-only,
     so Python is the only runtime guard)."""
     data = _spec().model_dump(by_alias=True)
-    data["theme"]["caption"]["size"] = 56
+    data["theme"]["caption"]["sizes"] = 56
     with pytest.raises(Exception):
         Spec.model_validate(data)
+
+
+def test_caption_size_migration_round_trip():
+    """CaptionStyle.size — the deferred ruling, closed. Optional[int] (None default
+    -> the renderer keeps its legacy height*0.045 derivation, byte-identical legacy
+    rendering; mirrored in remotion/src/caption-size.ts). A size patch now survives
+    the validate -> apply -> dump round trip — the F-3 'make captions bigger' hole
+    closed FOR REAL, not just loudly."""
+    spec = _spec()
+    assert spec.theme.caption.size is None              # default: absent
+    out = spec_patch.apply_patch(spec, [
+        {"op": "replace", "path": "/theme/caption/size", "value": 56}])
+    assert out.theme.caption.size == 56
+    assert out.model_dump(by_alias=True)["theme"]["caption"]["size"] == 56
+
+    # contract guard: a non-positive size is rejected loudly (mirrors the TS
+    # resolver's >0 fail-safe — but Python fails the patch, never a silent 0px).
+    with pytest.raises(spec_patch.PatchError):
+        spec_patch.apply_patch(spec, [
+            {"op": "replace", "path": "/theme/caption/size", "value": 0}])
 
 
 def test_diff_lines():
