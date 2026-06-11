@@ -104,3 +104,50 @@ def verify_script(
     script.beats = kept
     script.verify_report = report
     return script
+
+
+def verify_edited_beats(
+    script: BeatsScript,
+    indices,
+    *,
+    verify_fn: Callable[[List[Dict]], List[Dict]],
+    retrieve_fn=None,
+    retrieval_key: Optional[str] = None,
+    cache_dir=None,
+) -> BeatsScript:
+    """Studio v2 edit-time verify (PRD §6.1).
+
+    DIFFERENT semantics from generation-time `verify_script`: a human's free edit is
+    NEVER auto-dropped — an unsupported edited claim is FLAGGED amber so the operator
+    decides (add a source / reword / warn-and-ship). Only the edited `indices` are
+    re-checked (targeted Tavily recheck via `retrieve_fn`, then `verify_fn`).
+
+    Writes `script.beat_flags` = [{index, status, reason}] where status is
+    "supported" (source re-attached) or "unverified" (amber). Leaves `script.beats`
+    untouched (text is the operator's). Idempotent for a given verdict set."""
+    indices = sorted({i for i in indices if 0 <= i < len(script.beats)})
+    items = []
+    for i in indices:
+        b = script.beats[i]
+        snips: List[Dict] = []
+        if retrieve_fn is not None:
+            tctx = retrieve_fn(b.text, key=retrieval_key, cache_dir=cache_dir)
+            snips = [{"url": s.url, "content": s.content} for s in tctx.snippets]
+        items.append(_item(i, b, snips))
+    verdicts = {v["index"]: v for v in verify_fn(items)} if items else {}
+
+    flags = list(script.beat_flags or [])
+    flags = [f for f in flags if f.get("index") not in indices]  # replace edited entries
+    for i in indices:
+        v = verdicts.get(i, {"claim_supported": False, "source": None})
+        if v.get("claim_supported"):
+            if v.get("source"):
+                script.beats[i].source = v["source"]
+            flags.append({"index": i, "status": "supported", "reason": None})
+        else:
+            flags.append({"index": i, "status": "unverified",
+                          "reason": "verify could not support this edit — add a source or reword"})
+    flags.sort(key=lambda f: f["index"])
+    script.beat_flags = flags
+    return script
+

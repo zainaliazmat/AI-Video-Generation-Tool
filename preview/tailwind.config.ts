@@ -9,10 +9,11 @@ const config: Config = {
         base: 'var(--bg-base)',
         surface: 'var(--bg-surface)',
         elevated: 'var(--bg-elevated)',
-        accent: {1: '#6366f1', 2: '#8b5cf6', 3: '#a78bfa'},
+        accent: {1: '#5e5ce6', 2: '#8b5cf6', 3: '#a78bfa'},
         ok: 'var(--green)',
         warn: 'var(--amber)',
         bad: 'var(--red)',
+        info: 'var(--blue)',
         ink: {
           DEFAULT: 'var(--text-primary)',
           secondary: 'var(--text-secondary)',
@@ -20,7 +21,7 @@ const config: Config = {
         },
       },
       backgroundImage: {
-        'grad-main': 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+        'grad-main': 'linear-gradient(135deg, #5e5ce6, #8b5cf6)',
       },
       backdropBlur: {glass: '20px'},
       backdropSaturate: {glass: '180%'},
