@@ -408,7 +408,9 @@ function StyleMemoryCard({id}: {id: string}) {
       const res = await studio.script.styleMemory(id, {op: 'style_memory_read'});
       setMem(res.styleMemory);
     } catch {
-      setMem(null); // non-fatal: the card degrades to the footnote only
+      // Non-fatal: keep whatever state we have (initial null degrades to the
+      // footnote). Nulling here would let a 409 from the single-flight guard —
+      // e.g. dev StrictMode double-mount racing two reads — blank a loaded card.
     }
   }, [id]);
 
