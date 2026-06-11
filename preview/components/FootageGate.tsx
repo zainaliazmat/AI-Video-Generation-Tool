@@ -93,7 +93,7 @@ function SceneRow({
               disabled={busy || c.selected}
               onClick={() => onPick(s.index, c.rank)}
               className={`relative overflow-hidden rounded-md border transition ${
-                c.selected ? 'border-yellow-400 ring-1 ring-yellow-400' : 'border-white/10 hover:border-white/30'
+                c.selected ? 'border-warn ring-1 ring-warn' : 'border-white/10 hover:border-white/30'
               } ${busy ? 'opacity-50' : ''}`}
               title={`rank ${c.rank}`}
             >

@@ -2,7 +2,6 @@
 and the additive-prompt / frozen-rule guards (PRD §6.1)."""
 from types import SimpleNamespace
 
-import pytest
 
 from schema import Theme
 from session import store, engine, executors
@@ -52,8 +51,9 @@ def test_style_memory_block_alters_a_prompt():
 def test_frozen_system_prompt_byte_identical_after_seam():
     """PRD risk mitigation: the additive seam must never touch the frozen SYSTEM_PROMPT."""
     from pipeline import script as script_stage
-    expected_head = "You are a faceless"  # sanity that we are reading the real prompt
-    assert script_stage.SYSTEM_PROMPT  # non-empty
+    # sanity that we are reading the real prompt (was a dead variable with a WRONG
+    # head, "You are a faceless" — the intended assertion would have failed)
+    assert script_stage.SYSTEM_PROMPT.startswith("You are a scriptwriter")
     # Build a prompt with a big style block; SYSTEM_PROMPT object is unchanged.
     before = script_stage.SYSTEM_PROMPT
     script_stage.build_user_prompt("T", evidence_block="E", extra_user_block="X" * 500)

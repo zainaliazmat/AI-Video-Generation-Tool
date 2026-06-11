@@ -77,9 +77,31 @@ def test_patch_rejects_negative_scene_index():
 
 
 def test_patch_rejects_non_replace_op():
-    spec = _spec()
     ok, err = spec_patch.validate_patch([{"op": "remove", "path": "/theme/transition"}])
     assert not ok and "replace" in err
+
+
+def test_patch_rejects_unknown_theme_key_loudly():
+    """The honesty hole (review F-3): an unknown theme leaf (e.g. caption.size,
+    which has no schema field yet, or any misspelled key) used to be accepted,
+    diffed, and silently DISCARDED by pydantic's default extra='ignore' — a green
+    patch card and an unchanged render. It must fail loudly instead."""
+    spec = _spec()
+    for path in ("/theme/caption/size",          # the deferred CaptionStyle.size ruling
+                 "/theme/caption/colour",        # misspelling of an existing key
+                 "/theme/pallete/background"):   # misspelled container
+        with pytest.raises(spec_patch.PatchError):
+            spec_patch.apply_patch(spec, [{"op": "replace", "path": path, "value": 56}])
+
+
+def test_spec_model_rejects_unknown_fields():
+    """extra='forbid' on every spec model: an unknown key anywhere in a spec dict
+    must raise, not silently vanish (the contract mirror in schema.ts is types-only,
+    so Python is the only runtime guard)."""
+    data = _spec().model_dump(by_alias=True)
+    data["theme"]["caption"]["size"] = 56
+    with pytest.raises(Exception):
+        Spec.model_validate(data)
 
 
 def test_diff_lines():
