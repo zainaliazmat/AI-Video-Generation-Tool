@@ -20,6 +20,34 @@ from pipeline.contracts import LineOffset
 SAMPLE_RATE = 24000
 SILENCE_SEC = 0.15  # gap inserted between lines
 
+DEFAULT_VOICE = "af_heart"
+
+# Curated Kokoro voices (all free, all local — there is NO paid tier, per PRD §6.2).
+# id = Kokoro voice key; lang_code drives the KPipeline (a=American, b=British).
+VOICES = [
+    {"id": "af_heart",    "name": "Heart",    "character": "Warm, default narrator",   "lang": "a"},
+    {"id": "af_bella",    "name": "Bella",    "character": "Bright, energetic",         "lang": "a"},
+    {"id": "af_nicole",   "name": "Nicole",   "character": "Soft, intimate",            "lang": "a"},
+    {"id": "af_sarah",    "name": "Sarah",    "character": "Clear, neutral",            "lang": "a"},
+    {"id": "af_sky",      "name": "Sky",      "character": "Light, youthful",           "lang": "a"},
+    {"id": "am_adam",     "name": "Adam",     "character": "Deep, steady male",         "lang": "a"},
+    {"id": "am_michael",  "name": "Michael",  "character": "Confident male",            "lang": "a"},
+    {"id": "bf_emma",     "name": "Emma",     "character": "British, composed",         "lang": "b"},
+    {"id": "bf_isabella", "name": "Isabella", "character": "British, expressive",       "lang": "b"},
+    {"id": "bm_george",   "name": "George",   "character": "British, authoritative",    "lang": "b"},
+]
+_VOICE_IDS = {v["id"] for v in VOICES}
+_LANG_BY_ID = {v["id"]: v["lang"] for v in VOICES}
+
+
+def lang_for_voice(voice: str) -> str:
+    """American 'a' / British 'b' KPipeline lang_code for a voice id (default 'a')."""
+    return _LANG_BY_ID.get(voice, "a")
+
+
+def is_valid_voice(voice: str) -> bool:
+    return voice in _VOICE_IDS
+
 
 def compute_offsets(lines, durations, *, gap=SILENCE_SEC) -> list[LineOffset]:
     offsets: list[LineOffset] = []
@@ -32,19 +60,23 @@ def compute_offsets(lines, durations, *, gap=SILENCE_SEC) -> list[LineOffset]:
     return offsets
 
 
-def _kokoro_synth(line: str, pipeline) -> np.ndarray:
+def _kokoro_synth(line: str, pipeline, *, voice=DEFAULT_VOICE, speed=1) -> np.ndarray:
     chunks = []
-    for _, _, audio in pipeline(line, voice="af_heart", speed=1):
+    for _, _, audio in pipeline(line, voice=voice, speed=speed):
         chunks.append(np.asarray(audio, dtype=np.float32))
     return np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.float32)
 
 
-def synthesize(lines, out_path, *, synth=None, pipeline=None) -> list[LineOffset]:
+def synthesize(lines, out_path, *, synth=None, pipeline=None,
+               voice=DEFAULT_VOICE, speed=1) -> list[LineOffset]:
+    """Synthesize a continuous voiceover. `voice` selects the Kokoro voice (PRD §6.2
+    Voice gate); `speed` is the 0.8x-1.2x rate. `synth`/`pipeline` are injectable so
+    tests run offline. A new voice/speed picks the matching lang_code pipeline."""
     if synth is None:
         if pipeline is None:
             from kokoro import KPipeline
-            pipeline = KPipeline(lang_code="a")
-        synth = lambda line: _kokoro_synth(line, pipeline)
+            pipeline = KPipeline(lang_code=lang_for_voice(voice))
+        synth = lambda line: _kokoro_synth(line, pipeline, voice=voice, speed=speed)
 
     audios = [synth(line) for line in lines]
     durations = [len(a) / SAMPLE_RATE for a in audios]

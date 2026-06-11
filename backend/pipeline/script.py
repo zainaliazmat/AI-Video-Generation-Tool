@@ -80,7 +80,12 @@ VERIFY_SYSTEM_PROMPT = (
 MAX_RETRIES = 1  # one retry on an invalid reply, then fail loudly (6.1 v1)
 
 
-def build_user_prompt(topic: str, evidence_block: str | None = None) -> str:
+def build_user_prompt(topic: str, evidence_block: str | None = None,
+                      extra_user_block: str | None = None) -> str:
+    # extra_user_block is the Studio v2 additive seam (style memory + regenerate
+    # feedback). It is appended to the USER message only — the frozen SYSTEM_PROMPT
+    # and the grounding rules above are never rewritten.
+    tail = f"\n\n{extra_user_block.strip()}" if extra_user_block and extra_user_block.strip() else ""
     if evidence_block:
         return (
             f"Topic: {topic}\n\n"
@@ -96,10 +101,10 @@ def build_user_prompt(topic: str, evidence_block: str | None = None) -> str:
             "stat, bold claim, direct question) — the most striking TRUE fact framed to stop the "
             "scroll, never invented.\n"
             "- Each fact/stat must add NEW information — do not restate the fact used in the hook.\n\n"
-            f"SOURCES:\n{evidence_block}\n\n"
+            f"SOURCES:\n{evidence_block}{tail}\n\n"
             "Return the JSON object now."
         )
-    return f"Topic: {topic}\nReturn the JSON object now."
+    return f"Topic: {topic}{tail}\nReturn the JSON object now."
 
 
 def _parse_with_retry(do_call) -> BeatsScript:
@@ -118,14 +123,16 @@ def _parse_with_retry(do_call) -> BeatsScript:
 
 def generate_script(
     topic: str, *, provider: str | None = None, client=None, model: str | None = None,
-    evidence_block: str | None = None,
+    evidence_block: str | None = None, extra_user_block: str | None = None,
 ) -> BeatsScript:
     """Pure LLM generation. `evidence_block` (optional) injects retrieved grounding
-    sources into the prompt; `generate_grounded_script` is the grounded entry point."""
+    sources into the prompt; `generate_grounded_script` is the grounded entry point.
+    `extra_user_block` is the Studio v2 additive seam (style memory + feedback)."""
     provider = provider or get_env("LLM_PROVIDER", "deepseek")
     if provider == "deepseek":
         return _generate_openai_compatible(
             topic, client=client, model=model, evidence_block=evidence_block,
+            extra_user_block=extra_user_block,
             default_model="deepseek-v4-flash",
             api_key_env="DEEPSEEK_API_KEY",
             base_url=get_env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
@@ -134,17 +141,19 @@ def generate_script(
     if provider == "ollama":
         return _generate_openai_compatible(
             topic, client=client, model=model, evidence_block=evidence_block,
+            extra_user_block=extra_user_block,
             default_model="llama3.1",
             api_key_env=None,
             base_url=get_env("OLLAMA_BASE_URL", "http://localhost:11434") + "/v1",
             model_env="OLLAMA_MODEL",
         )
     if provider == "anthropic":
-        return _generate_anthropic(topic, client=client, model=model, evidence_block=evidence_block)
+        return _generate_anthropic(topic, client=client, model=model,
+                                   evidence_block=evidence_block, extra_user_block=extra_user_block)
     raise ValueError(f"Unknown LLM_PROVIDER: {provider!r}")
 
 
-def _generate_openai_compatible(topic, *, client, model, default_model, api_key_env, base_url, model_env, evidence_block=None) -> BeatsScript:
+def _generate_openai_compatible(topic, *, client, model, default_model, api_key_env, base_url, model_env, evidence_block=None, extra_user_block=None) -> BeatsScript:
     if client is None:
         from openai import OpenAI
         api_key = require_env(api_key_env) if api_key_env else "ollama"
@@ -156,7 +165,7 @@ def _generate_openai_compatible(topic, *, client, model, default_model, api_key_
             model=model,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": build_user_prompt(topic, evidence_block)},
+                {"role": "user", "content": build_user_prompt(topic, evidence_block, extra_user_block)},
             ],
             response_format={"type": "json_object"},
             temperature=0.8,
@@ -166,7 +175,7 @@ def _generate_openai_compatible(topic, *, client, model, default_model, api_key_
     return _parse_with_retry(do_call)
 
 
-def _generate_anthropic(topic, *, client, model, evidence_block=None) -> BeatsScript:
+def _generate_anthropic(topic, *, client, model, evidence_block=None, extra_user_block=None) -> BeatsScript:
     if client is None:
         import anthropic
         client = anthropic.Anthropic(api_key=require_env("ANTHROPIC_API_KEY"))
@@ -177,7 +186,7 @@ def _generate_anthropic(topic, *, client, model, evidence_block=None) -> BeatsSc
             model=model,
             max_tokens=1024,
             system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": build_user_prompt(topic, evidence_block)}],
+            messages=[{"role": "user", "content": build_user_prompt(topic, evidence_block, extra_user_block)}],
         )
         return msg.content[0].text
 
@@ -195,6 +204,7 @@ def generate_grounded_script(
     cache_dir=None,
     verify: bool = True,
     verify_fn=None,
+    extra_user_block: str | None = None,
 ) -> BeatsScript:
     """Retrieval-grounded generation (3.1) + hook selection (3.2) + verification (3.3).
 
@@ -202,11 +212,13 @@ def generate_grounded_script(
     enforce that any citation is a URL we actually retrieved, pick the strongest
     hook, then (default-on, `verify=False` to skip for reach-only runs) verify each
     claim is actually supported. `retrieve_fn`/`verify_fn` are injectable so this
-    runs fully offline in tests; the LLM provider stays DeepSeek."""
+    runs fully offline in tests; the LLM provider stays DeepSeek. `extra_user_block`
+    is the Studio v2 additive seam (style memory + regenerate feedback)."""
     retrieve_fn = retrieve_fn or retrieval.retrieve
     ctx = retrieve_fn(topic, key=retrieval_key, cache_dir=cache_dir)
     script = generate_script(
-        topic, provider=provider, client=client, model=model, evidence_block=ctx.prompt_block()
+        topic, provider=provider, client=client, model=model, evidence_block=ctx.prompt_block(),
+        extra_user_block=extra_user_block,
     )
     _select_hook(script, ctx)
     _enforce_grounding(script, ctx)

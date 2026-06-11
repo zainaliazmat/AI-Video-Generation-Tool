@@ -70,6 +70,10 @@ remotion/public/assets/enum-gate-*.wav
 # the generated TTS voiceover — the voice stage rewrites it every run; only its
 # path string is referenced in specs, never the binary. Same class as the gate wavs.
 remotion/public/assets/voiceover.wav
+# project-scoped voiceovers (studio voice gate, suffixed by project id) — same class
+remotion/public/assets/voiceover_auto-*.wav
+# studio voice-gate preview clips (generated per voice on demand) — same class
+remotion/public/assets/voice_preview_*.wav
 
 # local repro / bakeoff scratch specs (throwaway debugging fixtures)
 bakeoff-*.json
@@ -77,3 +81,6 @@ repro-*.json
 
 # HITL session store (runtime state)
 backend/.sessions/
+
+# project library store (Phase 5 session=project runtime state, per-project dirs)
+/projects/

@@ -32,6 +32,10 @@ class EngineContext:
     voiceover_path: Path
     spec_out: Path
     sources_out: Path
+    # Studio v2 seams (defaulted so existing construction is unchanged):
+    voice: str = "af_heart"            # Voice gate selection (Kokoro voice id)
+    speed: float = 1.0                 # Voice gate speed (0.8x-1.2x)
+    extra_user_block: str = ""         # Script gate regenerate-with-feedback + style memory
 
 
 def run_script(ctx: EngineContext, inputs: dict) -> dict:
@@ -39,8 +43,13 @@ def run_script(ctx: EngineContext, inputs: dict) -> dict:
         script_result = script_stage.generate_grounded_script(topic, cache_dir=RETRIEVAL_CACHE)
         plan = recipe_stage.plan(script_result, theme=theme, manifests=catalog)
     `inputs` is unused — script is the source stage with no upstream deps.
+    `ctx.extra_user_block` (Studio v2) injects style memory + regenerate feedback as
+    an additive USER-prompt block; empty by default → byte-identical to a plain run.
     """
-    script = script_stage.generate_grounded_script(ctx.topic, cache_dir=ctx.cache_dir)
+    # Pass extra_user_block ONLY when set, so the default call is byte-identical to
+    # the pre-Studio-v2 signature (keeps existing stage stubs valid).
+    kw = {"extra_user_block": ctx.extra_user_block} if ctx.extra_user_block else {}
+    script = script_stage.generate_grounded_script(ctx.topic, cache_dir=ctx.cache_dir, **kw)
     plan = recipe_stage.plan(script, theme=ctx.theme, manifests=ctx.catalog)
     return {"script": script, "plan": plan}
 
@@ -53,7 +62,14 @@ def run_voice(ctx: EngineContext, inputs: dict) -> list:
     """
     script = inputs["script"]["script"]
     lines = [b.text for b in script.beats]
-    return tts_stage.synthesize(lines, ctx.voiceover_path)
+    # Pass voice/speed ONLY when non-default so existing voice-stage stubs (which
+    # patch tts_stage.synthesize with a 2-arg lambda) stay valid.
+    kw = {}
+    if ctx.voice and ctx.voice != tts_stage.DEFAULT_VOICE:
+        kw["voice"] = ctx.voice
+    if ctx.speed and ctx.speed != 1.0:
+        kw["speed"] = ctx.speed
+    return tts_stage.synthesize(lines, ctx.voiceover_path, **kw)
 
 
 def run_timing(ctx: EngineContext, inputs: dict) -> list:
