@@ -51,8 +51,13 @@ export async function POST(req: Request, {params}: {params: Promise<{id: string}
       if (!Array.isArray(body.patch)) return Response.json({error: 'apply needs patch[]'}, {status: 400});
       apply = true;
       args = ['--sid', id, '--op', 'apply', '--patch-json', JSON.stringify(body.patch)];
+    } else if (body?.op === 'revert') {
+      // F-5 LIFO undo — changes spec.json, so it shares the apply path's copyAssets.
+      if (!Number.isInteger(body.seq)) return Response.json({error: 'revert needs seq:number'}, {status: 400});
+      apply = true;
+      args = ['--sid', id, '--op', 'revert', '--seq', String(body.seq)];
     } else {
-      return Response.json({error: 'op must be chat|apply'}, {status: 400});
+      return Response.json({error: 'op must be chat|apply|revert'}, {status: 400});
     }
 
     const {code, json} = await spawnJson('session_assemble.py', args, 120_000);

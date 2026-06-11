@@ -159,12 +159,58 @@ def approve(sid: str, *, edits=None, guidance=None) -> dict:
                             "guidance": len(mem.get("guidance", []))}}
 
 
+# ---- F-6: style-memory manager (the PRD's "caps + manager UI (pin/delete)") ----
+# Memory is repo-level (cross-video by design); sid rides along for response symmetry.
+
+def _memory_doc(mem) -> dict:
+    return {"styleMemory": {
+        "examples": [{"index": i, "before": e["before"], "after": e["after"],
+                      "pinned": bool(e.get("pinned"))}
+                     for i, e in enumerate(mem.get("examples", []))],
+        "guidance": [{"index": i, "text": g["text"], "pinned": bool(g.get("pinned"))}
+                     for i, g in enumerate(mem.get("guidance", []))],
+        "caps": {"examples": style_memory.MAX_EXAMPLES,
+                 "guidance": style_memory.MAX_GUIDANCE}}}
+
+
+def _check_memory_target(mem, *, kind: str, index: int) -> None:
+    """Fail loud: the underlying pin/delete helpers silently no-op on a bad kind or
+    out-of-range index — that must not leak through the CLI as a quiet success."""
+    if kind not in ("example", "guidance"):
+        raise ValueError(f"kind must be 'example' or 'guidance', got {kind!r}")
+    items = mem.get("examples" if kind == "example" else "guidance", [])
+    if not (0 <= index < len(items)):
+        raise IndexError(f"no {kind} at index {index} (have {len(items)})")
+
+
+def style_memory_read(sid: str) -> dict:
+    mem = style_memory.load(job_ctx.STYLE_MEMORY_PATH)
+    return {"ok": True, "sid": sid, **_memory_doc(mem)}
+
+
+def style_memory_pin(sid: str, *, kind: str, index: int, value: bool = True) -> dict:
+    mem = style_memory.load(job_ctx.STYLE_MEMORY_PATH)
+    _check_memory_target(mem, kind=kind, index=index)
+    style_memory.pin(mem, kind=kind, index=index, value=value)
+    style_memory.save(job_ctx.STYLE_MEMORY_PATH, mem)
+    return {"ok": True, "sid": sid, **_memory_doc(mem)}
+
+
+def style_memory_delete(sid: str, *, kind: str, index: int) -> dict:
+    mem = style_memory.load(job_ctx.STYLE_MEMORY_PATH)
+    _check_memory_target(mem, kind=kind, index=index)
+    style_memory.delete(mem, kind=kind, index=index)
+    style_memory.save(job_ctx.STYLE_MEMORY_PATH, mem)
+    return {"ok": True, "sid": sid, **_memory_doc(mem)}
+
+
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--sid", required=True)
     ap.add_argument("--op", required=True,
-                    choices=["read", "edit_beat", "drop_beat", "regenerate", "approve"])
+                    choices=["read", "edit_beat", "drop_beat", "regenerate", "approve",
+                             "style_memory_read", "style_memory_pin", "style_memory_delete"])
     ap.add_argument("--index", type=int)
     ap.add_argument("--text")
     ap.add_argument("--data-json")
@@ -172,10 +218,22 @@ if __name__ == "__main__":
     ap.add_argument("--feedback", default="")
     ap.add_argument("--edits-json")
     ap.add_argument("--guidance-json")
+    ap.add_argument("--kind")                      # style_memory_*: example | guidance
+    ap.add_argument("--value", default="true")     # style_memory_pin: true | false
     args = ap.parse_args()
     try:
         if args.op == "read":
             res = read(args.sid)
+        elif args.op == "style_memory_read":
+            res = style_memory_read(args.sid)
+        elif args.op in ("style_memory_pin", "style_memory_delete"):
+            if args.kind is None or args.index is None:
+                raise ValueError(f"--kind and --index are required for {args.op}")
+            if args.op == "style_memory_pin":
+                res = style_memory_pin(args.sid, kind=args.kind, index=args.index,
+                                       value=args.value.lower() != "false")
+            else:
+                res = style_memory_delete(args.sid, kind=args.kind, index=args.index)
         elif args.op == "edit_beat":
             if args.index is None:
                 raise ValueError("--index is required for edit_beat")

@@ -64,25 +64,26 @@ async function parseEdit(req: Request, id: string): Promise<ParsedEdit> {
 }
 
 export async function POST(req: Request, {params}: {params: Promise<{id: string}>}) {
-  const {id} = await params;
-
+  // Claim the single-flight flag BEFORE the first await (params/body): checking it,
+  // then awaiting, then setting it lets two concurrent edits both pass the guard
+  // (the TOCTOU the script/voice/timing/assemble routes already close).
   if (editing) {
     return Response.json({error: 'an edit is already in progress'}, {status: 409});
   }
-
-  let parsed: ParsedEdit;
-  try {
-    parsed = await parseEdit(req, id);
-  } catch (e) {
-    return Response.json({error: e instanceof Error ? e.message : 'bad request'}, {status: 400});
-  }
-  if (parsed.error || !parsed.args) {
-    if (parsed.cleanupDir) await rm(parsed.cleanupDir, {recursive: true, force: true}).catch(() => {});
-    return Response.json({error: parsed.error ?? 'bad request'}, {status: 400});
-  }
-
   editing = true;
+
+  let parsed: ParsedEdit | undefined;
   try {
+    const {id} = await params;
+    try {
+      parsed = await parseEdit(req, id);
+    } catch (e) {
+      return Response.json({error: e instanceof Error ? e.message : 'bad request'}, {status: 400});
+    }
+    if (parsed.error || !parsed.args) {
+      return Response.json({error: parsed.error ?? 'bad request'}, {status: 400});
+    }
+
     // a first-time pick/re_query downloads a (multi-MB) clip — allow well beyond the 60s default
     const {code, json} = await spawnJson('session_edit.py', parsed.args, 180_000);
     if (code !== 0 || json?.ok === false) {
@@ -94,6 +95,6 @@ export async function POST(req: Request, {params}: {params: Promise<{id: string}
     return Response.json({error: e instanceof Error ? e.message : 'edit failed'}, {status: 500});
   } finally {
     editing = false;
-    if (parsed.cleanupDir) await rm(parsed.cleanupDir, {recursive: true, force: true}).catch(() => {});
+    if (parsed?.cleanupDir) await rm(parsed.cleanupDir, {recursive: true, force: true}).catch(() => {});
   }
 }

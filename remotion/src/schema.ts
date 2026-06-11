@@ -102,6 +102,10 @@ export interface CaptionStyle {
   strokeColor: string;
   /** 0 = top, 1 = bottom */
   positionY: number;
+  /** caption font size in px; absent/null -> Math.round(height * 0.045), the
+   * pre-migration derivation (legacy specs render byte-identically).
+   * MIRROR of backend/schema.py CaptionStyle.size — change both or neither. */
+  size?: number | null;
 }
 
 /** Resolved look of a video, separate from templates so any template re-themes

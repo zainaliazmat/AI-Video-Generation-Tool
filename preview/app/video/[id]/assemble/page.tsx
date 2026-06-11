@@ -158,6 +158,28 @@ export default function AssembleGatePage() {
     setMessages((prev) => prev.filter((m) => m.id !== msgId));
   }
 
+  // F-5: LIFO undo — only the newest un-reverted patch (gate.revertableSeq) is offered.
+  const [reverting, setReverting] = useState(false);
+  async function revertLatest(seq: number) {
+    setReverting(true);
+    try {
+      await studio.assemble.revert(id, seq);
+      toast.success(`Reverted patch #${seq}`);
+      notifySpecChanged();
+      await loadGate();
+      try {
+        const project = await studio.project(id);
+        setSpec(project.spec);
+      } catch {
+        /* non-fatal: the gate summary already refreshed */
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'failed to revert');
+    } finally {
+      setReverting(false);
+    }
+  }
+
   const palette: string[] = Array.isArray((gate?.theme as any)?.palette)
     ? ((gate!.theme as any).palette as unknown[]).map((c) => String(c))
     : [];
@@ -262,7 +284,9 @@ export default function AssembleGatePage() {
                           </div>
 
                           <div className="mt-2.5 flex flex-wrap gap-1.5">
-                            <Badge tone="green">valid · zod + pydantic</Badge>
+                            {/* honest label: chat patches are validated by the path
+                                whitelist + pydantic (apply-time); zod never sees them */}
+                            <Badge tone="green">valid · whitelist + pydantic</Badge>
                             <Badge tone="green">audio math untouched</Badge>
                           </div>
 
@@ -405,6 +429,54 @@ export default function AssembleGatePage() {
                   </div>
                 ))}
               </div>
+            </div>
+
+            {/* F-5: applied-patch history (persisted event log; survives navigation).
+                Revert is LIFO undo — only the newest un-reverted patch gets the button. */}
+            <div className="content-card p-4">
+              <div className="mb-2.5 flex items-center justify-between">
+                <Eyebrow>History</Eyebrow>
+                <span className="font-mono text-[10px] text-ink-muted">spec v{gate.version}</span>
+              </div>
+              {gate.history.length === 0 ? (
+                <p className="font-ui text-[12px] text-ink-muted">
+                  No patches applied yet — v1 is the pipeline’s own assemble.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {gate.history.map((h) => (
+                    <div
+                      key={h.seq}
+                      className={`rounded-[var(--radius-md)] bg-white/[0.03] px-2.5 py-2 ${h.reverted ? 'opacity-50' : ''}`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-[10px] text-ink-muted">#{h.seq}</span>
+                        {h.kind === 'revert' ? (
+                          <Badge tone="dim">revert of #{h.revertsSeq}</Badge>
+                        ) : h.reverted ? (
+                          <Badge tone="dim">reverted</Badge>
+                        ) : (
+                          <Badge tone="green">applied</Badge>
+                        )}
+                        {h.seq === gate.revertableSeq ? (
+                          <button
+                            onClick={() => revertLatest(h.seq)}
+                            disabled={reverting}
+                            className="ml-auto rounded-full bg-white/[0.07] px-3 py-1 font-ui text-[11px] font-semibold text-ink transition hover:bg-white/[0.12] disabled:opacity-50"
+                          >
+                            {reverting ? 'Reverting…' : 'Revert'}
+                          </button>
+                        ) : null}
+                      </div>
+                      <div className="mt-1.5 space-y-0.5">
+                        {h.diff.map((line, i) => (
+                          <DiffRow key={i} line={line} />
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>

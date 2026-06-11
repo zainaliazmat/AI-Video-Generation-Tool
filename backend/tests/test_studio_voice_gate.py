@@ -1,5 +1,4 @@
 """Studio v2 — Voice gate backend: voice threading, voice catalog, sidecar persist."""
-from pathlib import Path
 
 from schema import Theme
 from pipeline import tts as tts_stage

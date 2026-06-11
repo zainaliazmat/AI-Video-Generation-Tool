@@ -56,6 +56,9 @@ def build_state(sid: str) -> dict:
             scenes.append({
                 "index": i, "template": sc.get("template"), "needsFootage": needs_footage,
                 "beatText": beat_text.get(i),
+                # F-10: the scene span lets the gate surface "loops ×N" on a bound
+                # clip shorter than the scene (pool rows already carry duration).
+                "durationInFrames": sc.get("durationInFrames"),
                 "candidates": candidates,
                 "provenance": (None if p is None else {
                     "source": p["source"], "query": p["query"], "rank": p["rank"],

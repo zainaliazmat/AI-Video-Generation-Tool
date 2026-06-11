@@ -3,7 +3,7 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {useParams} from 'next/navigation';
 import {toast} from 'sonner';
-import {studio, type ScriptGate, type ScriptBeat} from '@/lib/studio';
+import {studio, type ScriptGate, type ScriptBeat, type StyleMemoryDoc} from '@/lib/studio';
 import {GateHeader, TintedButton} from '@/components/GateHeader';
 import {Eyebrow, Badge} from '@/components/ui';
 import {notifySpecChanged} from '@/components/PreviewRail';
@@ -390,16 +390,111 @@ export default function ScriptGatePage() {
             </div>
           </div>
 
-          {/* Style memory */}
-          <div className="content-card p-4">
-            <Eyebrow className="mb-1.5">Style memory</Eyebrow>
-            <p className="font-ui text-[12px] leading-relaxed text-ink-muted">
-              Saved as few-shot examples and prompt guidance that seed future scripts. DeepSeek is
-              hosted and stateless — it doesn't learn from chats; this memory is how it gets better
-              next time.
-            </p>
-          </div>
+          {/* Style memory — F-6: the manager surface (list / pin / delete). Memory
+              grows on Approve; pinned entries are never FIFO-evicted. */}
+          <StyleMemoryCard id={id} />
         </div>
+      ) : null}
+    </div>
+  );
+}
+
+function StyleMemoryCard({id}: {id: string}) {
+  const [mem, setMem] = useState<StyleMemoryDoc | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const loadMem = useCallback(async () => {
+    try {
+      const res = await studio.script.styleMemory(id, {op: 'style_memory_read'});
+      setMem(res.styleMemory);
+    } catch {
+      // Non-fatal: keep whatever state we have (initial null degrades to the
+      // footnote). Nulling here would let a 409 from the single-flight guard —
+      // e.g. dev StrictMode double-mount racing two reads — blank a loaded card.
+    }
+  }, [id]);
+
+  useEffect(() => {
+    loadMem();
+  }, [loadMem]);
+
+  async function run(body: Parameters<typeof studio.script.styleMemory>[1]) {
+    setBusy(true);
+    try {
+      const res = await studio.script.styleMemory(id, body);
+      setMem(res.styleMemory);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'style memory op failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const PinButton = ({kind, index, pinned}: {kind: 'example' | 'guidance'; index: number; pinned: boolean}) => (
+    <button
+      onClick={() => run({op: 'style_memory_pin', kind, index, value: !pinned})}
+      disabled={busy}
+      title={pinned ? 'Unpin (FIFO can evict again)' : 'Pin (never FIFO-evicted)'}
+      className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold transition disabled:opacity-40 ${
+        pinned ? 'bg-accent-1/20 text-accent-1' : 'bg-white/[0.06] text-ink-muted hover:text-ink'
+      }`}
+    >
+      {pinned ? 'pinned' : 'pin'}
+    </button>
+  );
+
+  const DeleteButton = ({kind, index}: {kind: 'example' | 'guidance'; index: number}) => (
+    <button
+      onClick={() => run({op: 'style_memory_delete', kind, index})}
+      disabled={busy}
+      title="Delete this entry"
+      className="rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold text-ink-muted transition hover:bg-white/[0.06] hover:text-warn disabled:opacity-40"
+    >
+      ×
+    </button>
+  );
+
+  return (
+    <div className="content-card p-4">
+      <div className="mb-1.5 flex items-center justify-between">
+        <Eyebrow>Style memory</Eyebrow>
+        {mem ? (
+          <span className="font-mono text-[10px] text-ink-muted">
+            {mem.guidance.length}/{mem.caps.guidance} guidance · {mem.examples.length}/{mem.caps.examples} examples
+          </span>
+        ) : null}
+      </div>
+      <p className="font-ui text-[12px] leading-relaxed text-ink-muted">
+        Saved as few-shot examples and prompt guidance that seed future scripts. DeepSeek is
+        hosted and stateless — it doesn't learn from chats; this memory is how it gets better
+        next time.
+      </p>
+
+      {mem && (mem.guidance.length > 0 || mem.examples.length > 0) ? (
+        <div className="mt-3 space-y-2">
+          {mem.guidance.map((g) => (
+            <div key={`g${g.index}`} className="flex items-center gap-2 rounded-[var(--radius-md)] bg-white/[0.03] px-2.5 py-1.5">
+              <span className="min-w-0 flex-1 truncate font-ui text-[12px] text-ink-secondary" title={g.text}>
+                {g.text}
+              </span>
+              <PinButton kind="guidance" index={g.index} pinned={g.pinned} />
+              <DeleteButton kind="guidance" index={g.index} />
+            </div>
+          ))}
+          {mem.examples.map((e) => (
+            <div key={`e${e.index}`} className="flex items-center gap-2 rounded-[var(--radius-md)] bg-white/[0.03] px-2.5 py-1.5">
+              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-ink-secondary" title={`${e.before} → ${e.after}`}>
+                <span className="text-ink-muted line-through">{e.before}</span>
+                <span className="text-ink-muted"> → </span>
+                {e.after}
+              </span>
+              <PinButton kind="example" index={e.index} pinned={e.pinned} />
+              <DeleteButton kind="example" index={e.index} />
+            </div>
+          ))}
+        </div>
+      ) : mem ? (
+        <p className="mt-2 font-ui text-[11px] text-ink-muted">Empty — entries appear after your first Approve.</p>
       ) : null}
     </div>
   );

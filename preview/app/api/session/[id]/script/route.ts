@@ -51,8 +51,18 @@ export async function POST(req: Request, {params}: {params: Promise<{id: string}
       args.push('--op', 'approve');
       if (Array.isArray(body.edits)) args.push('--edits-json', JSON.stringify(body.edits));
       if (Array.isArray(body.guidance)) args.push('--guidance-json', JSON.stringify(body.guidance));
+    } else if (op === 'style_memory_read') {
+      // F-6 manager — read is routed through POST so it shares the single-flight
+      // guard with pin/delete (they mutate the same file).
+      args.push('--op', 'style_memory_read');
+    } else if (op === 'style_memory_pin' || op === 'style_memory_delete') {
+      if ((body.kind !== 'example' && body.kind !== 'guidance') || typeof body.index !== 'number') {
+        return Response.json({error: `${op} needs kind:'example'|'guidance' and index:number`}, {status: 400});
+      }
+      args.push('--op', op, '--kind', body.kind, '--index', String(body.index));
+      if (op === 'style_memory_pin') args.push('--value', body.value === false ? 'false' : 'true');
     } else {
-      return Response.json({error: 'op must be edit_beat|drop_beat|regenerate|approve'}, {status: 400});
+      return Response.json({error: 'op must be edit_beat|drop_beat|regenerate|approve|style_memory_*'}, {status: 400});
     }
 
     // edit_beat / regenerate re-run downstream (TTS, whisper, footage) — allow time.

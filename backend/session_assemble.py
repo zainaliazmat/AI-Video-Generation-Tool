@@ -3,15 +3,17 @@
 Chat-to-spec-patch: plain English -> a whitelist-validated spec.json patch -> apply
 + re-render. Frames are never edited; spec.json is the sole contract.
 
-  read  — current theme + per-scene template/clip/transition summary for the gate.
-  chat  — one LLM call proposing a patch for the user's message; validated locally,
-          returned as {ops, reply, diff, valid}. One bounded retry on invalid output.
-  apply — apply a (client-confirmed) patch to the assemble output + re-materialize spec.
+  read   — theme + per-scene summary + patch history + derived spec version.
+  chat   — one LLM call proposing a patch for the user's message; validated locally,
+           returned as {ops, reply, diff, valid}. One bounded retry on invalid output.
+  apply  — apply a (client-confirmed) patch to the assemble output + re-materialize spec.
+  revert — F-5 LIFO undo: revert the newest un-reverted applied patch by seq.
 
 Usage:
   python backend/session_assemble.py --sid <id> --op read
   python backend/session_assemble.py --sid <id> --op chat --message "dark ember theme"
   python backend/session_assemble.py --sid <id> --op apply --patch-json '[{"op":"replace",...}]'
+  python backend/session_assemble.py --sid <id> --op revert --seq 3
 """
 from __future__ import annotations
 
@@ -48,6 +50,21 @@ def _summary(spec) -> dict:
     }
 
 
+def _history(conn, sid: str) -> dict:
+    """F-5: the applied-patch event log + the derived spec version for the gate UI.
+    Only the newest un-reverted patch is revertable (LIFO undo)."""
+    rows = store.get_spec_patches(conn, sid)
+    unreverted = [r["seq"] for r in rows if r["kind"] == "patch" and not r["reverted"]]
+    return {
+        "version": store.spec_version(conn, sid),
+        "revertableSeq": unreverted[-1] if unreverted else None,
+        "history": [{
+            "seq": r["seq"], "kind": r["kind"], "diff": json.loads(r["diff_json"]),
+            "reverted": bool(r["reverted"]), "revertsSeq": r["reverts_seq"],
+            "createdAt": r["created_at"]} for r in rows],
+    }
+
+
 def read(sid: str) -> dict:
     ctx = job_ctx.build_ctx(topic=_topic_for(sid), sid=sid)
     sess = api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)
@@ -55,7 +72,8 @@ def read(sid: str) -> dict:
         spec = sess.engine._load_output("assemble")
         if spec is None:
             raise RuntimeError("assemble stage has not completed")
-        return {"ok": True, "sid": sid, **_summary(spec)}
+        return {"ok": True, "sid": sid, **_summary(spec),
+                **_history(sess.engine.conn, sid)}
     finally:
         api.close(sess)
 
@@ -117,7 +135,21 @@ def apply(sid: str, *, patch) -> dict:
         spec_before = sess.engine._load_output("assemble")
         diff = spec_patch.diff_lines(spec_before, patch) if spec_before else []
         api.edit(sess, "assemble", {"patch": patch})
-        return {"ok": True, "sid": sid, "applied": True, "diff": diff}
+        return {"ok": True, "sid": sid, "applied": True, "diff": diff,
+                **_history(sess.engine.conn, sid)}
+    finally:
+        api.close(sess)
+
+
+def revert(sid: str, *, seq: int) -> dict:
+    """F-5: undo the newest un-reverted patch (LIFO). The engine validates the seq
+    and applies the inverse ops through the normal whitelist machinery."""
+    ctx = job_ctx.build_ctx(topic=_topic_for(sid), sid=sid)
+    sess = api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)
+    try:
+        api.edit(sess, "assemble", {"revert": seq})
+        return {"ok": True, "sid": sid, "reverted": seq,
+                **_history(sess.engine.conn, sid)}
     finally:
         api.close(sess)
 
@@ -126,9 +158,10 @@ if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--sid", required=True)
-    ap.add_argument("--op", required=True, choices=["read", "chat", "apply"])
+    ap.add_argument("--op", required=True, choices=["read", "chat", "apply", "revert"])
     ap.add_argument("--message")
     ap.add_argument("--patch-json")
+    ap.add_argument("--seq", type=int)
     args = ap.parse_args()
     try:
         if args.op == "read":
@@ -137,6 +170,10 @@ if __name__ == "__main__":
             if not args.message:
                 raise ValueError("--message is required for chat")
             res = chat(args.sid, message=args.message)
+        elif args.op == "revert":
+            if args.seq is None:
+                raise ValueError("--seq is required for revert")
+            res = revert(args.sid, seq=args.seq)
         else:  # apply
             if not args.patch_json:
                 raise ValueError("--patch-json is required for apply")

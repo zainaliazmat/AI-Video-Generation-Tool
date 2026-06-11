@@ -121,7 +121,7 @@ def run_footage(ctx: EngineContext, inputs: dict) -> dict:
     offsets = inputs["voice"]
     reqs = _footage_requests(ctx, plan, offsets)
     clips = footage_stage.fetch_footage(reqs, ctx.assets_dir, fps=ctx.fps)
-    selected_query = {c.index: c.query for c in clips}
+    chosen = {c.index: (c.query, c.rank) for c in clips}
     candidates = {}
     for r in reqs:
         # Best-effort (see docstring): a missing key / search failure -> empty pool.
@@ -132,14 +132,15 @@ def run_footage(ctx: EngineContext, inputs: dict) -> dict:
         except Exception:
             rows = []
         for row in rows:
-            # APPROXIMATE initial selection: mark rank-1 of the matching query. No row is
-            # marked when fetch_footage's K-floor picked rank>1 (rank-1 too short) OR when
-            # it broadened a whiffing query to the title (the pool is the specific query,
-            # the clip came from the broadened one). The Clip doesn't expose which candidate
-            # it chose. Exact tracking is deferred to A.6; the gate's pick/re_query ops set
-            # `selected` precisely on edit.
-            row["selected"] = 1 if (row["query"] == selected_query.get(r.index)
-                                    and row["rank"] == 1) else 0
+            # EXACT initial selection: mark the row matching the clip's real (query, rank)
+            # from A.2a provenance — so a K-floor displacement to rank>1 rings the clip
+            # that was actually bound, not rank-1. No row is marked when fetch_footage
+            # broadened a whiffing query to the title (the pool is the specific query,
+            # the clip came from the broadened one) or for legacy clips with rank=None.
+            # The gate's pick/re_query ops still set `selected` precisely on edit.
+            q, rank = chosen.get(r.index, (None, None))
+            row["selected"] = 1 if (row["query"] == q and rank is not None
+                                    and row["rank"] == rank) else 0
             row["clip_path"] = None
         candidates[r.index] = rows
     return {"clips": clips, "candidates": candidates}
