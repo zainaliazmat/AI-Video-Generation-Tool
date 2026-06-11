@@ -5,6 +5,13 @@
   "author": "core",
   "apiVersion": "1",
   "kind": "scene",
+  "description": "Image-as-hero enumeration — items reveal one-by-one in sync with narration.",
+  "tags": [
+    "enumeration",
+    "list",
+    "images",
+    "sync"
+  ],
   "consumes": "enumeration",
   "inputSchema": {
     "type": "object",

@@ -5,6 +5,12 @@
   "author": "core",
   "apiVersion": "1",
   "kind": "outro",
+  "description": "Closing call-to-action hero card with CTA pop.",
+  "tags": [
+    "outro",
+    "cta",
+    "hero"
+  ],
   "inputSchema": {
     "type": "object",
     "properties": {

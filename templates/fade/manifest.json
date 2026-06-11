@@ -5,6 +5,8 @@
   "author": "core",
   "apiVersion": "1",
   "kind": "transition",
+  "description": "Cross-fade transition between scenes.",
+  "tags": ["transition", "fade"],
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,

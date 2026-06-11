@@ -5,6 +5,8 @@
   "author": "core",
   "apiVersion": "1",
   "kind": "transition",
+  "description": "Directional slide transition between scenes.",
+  "tags": ["transition", "slide"],
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,

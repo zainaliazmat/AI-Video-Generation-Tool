@@ -5,6 +5,12 @@
   "author": "core",
   "apiVersion": "1",
   "kind": "stat",
+  "description": "Statistic hero card with count-up number animation.",
+  "tags": [
+    "stat",
+    "number",
+    "hero"
+  ],
   "inputSchema": {
     "type": "object",
     "properties": {
