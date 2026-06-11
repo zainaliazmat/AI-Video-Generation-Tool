@@ -15,6 +15,7 @@ export type GateScene = {
   index: number;
   template: string | null;
   needsFootage: boolean;
+  durationInFrames: number | null; // F-10: scene span, for the loop ×N estimate
   candidates: Candidate[];
   provenance: Provenance | null;
 };
@@ -78,11 +79,27 @@ function SceneRow({
     onRequery(s.index, q);
   };
 
+  // F-10: the autopilot's K-floor protects against heavy looping, but Re-query binds
+  // rank 1 unconditionally ("you're the rerank") — so when the bound pool row is
+  // shorter than the scene, say honestly how many times it will repeat.
+  const sel = s.candidates.find((c) => c.selected);
+  const loopCount =
+    sel?.durationFrames && s.durationInFrames && sel.durationFrames < s.durationInFrames
+      ? Math.ceil(s.durationInFrames / sel.durationFrames)
+      : null;
+
   return (
     <div>
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <div className="font-ui text-[12px] text-ink-secondary">Scene {s.index + 1}</div>
-        {s.provenance ? <ProvenanceBadges p={s.provenance} /> : null}
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          {loopCount ? (
+            <span title="This clip is shorter than the scene; it will repeat (measure-then-loop, never trim).">
+              <Badge tone="dim">loops ≈×{loopCount}</Badge>
+            </span>
+          ) : null}
+          {s.provenance ? <ProvenanceBadges p={s.provenance} /> : null}
+        </div>
       </div>
 
       {s.candidates.length > 0 ? (

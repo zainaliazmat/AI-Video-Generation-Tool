@@ -135,9 +135,14 @@ def test_build_state_shape(tmp_path, monkeypatch):
     assert cand and {"rank", "thumbUrl", "durationFrames", "selected"} <= cand[0].keys()
     assert any(c["selected"] for c in cand)           # exactly the auto pick is selected
     assert foot["provenance"]["source"] == "auto"
+    # F-10: every scene carries its span so the gate can show the loop ×N estimate
+    # on a bound clip shorter than the scene (the pool rows already carry duration).
+    spec = json.loads((tmp_path / "projects" / sid / "spec.json").read_text())
+    assert foot["durationInFrames"] == spec["scenes"][foot["index"]]["durationInFrames"]
     # a non-footage scene reports needsFootage False + empty pool
     nonfoot = next(s for s in scenes if not s["needsFootage"])
     assert nonfoot["candidates"] == []
+    assert nonfoot["durationInFrames"] == spec["scenes"][nonfoot["index"]]["durationInFrames"]
 
 
 def test_build_state_bad_sid_raises(tmp_path, monkeypatch):
