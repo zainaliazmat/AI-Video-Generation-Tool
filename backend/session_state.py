@@ -18,6 +18,19 @@ from session import store, job_ctx
 from pipeline import projects as projects_mod
 
 
+def _beat_text_by_index(conn, sid: str) -> dict:
+    """{scene_index: beat_text} from the persisted script stage (1 beat = 1 scene).
+    Best-effort: returns {} if the script stage / JSON is missing."""
+    row = store.get_stage(conn, sid, "script")
+    if row is None or row["output_json"] is None:
+        return {}
+    try:
+        beats = json.loads(row["output_json"])["script"]["beats"]
+        return {i: b.get("text") for i, b in enumerate(beats)}
+    except (ValueError, KeyError, TypeError):
+        return {}
+
+
 def build_state(sid: str) -> dict:
     conn = store.connect(job_ctx.SESSIONS_DB)
     try:
@@ -28,6 +41,7 @@ def build_state(sid: str) -> dict:
         spec_path = projects_mod.project_spec_path(job_ctx.REPO_ROOT, sid)
         spec = json.loads(spec_path.read_text(encoding="utf-8"))
         prov = store.get_media_provenance(conn, sid)
+        beat_text = _beat_text_by_index(conn, sid)   # Studio v2: show the beat beside each clip
         scenes = []
         for i, sc in enumerate(spec.get("scenes", [])):
             media = (sc.get("templateProps") or {}).get("media")
@@ -36,11 +50,12 @@ def build_state(sid: str) -> dict:
             if needs_footage:
                 for r in store.get_footage_candidates(conn, sid, scene_index=i):
                     candidates.append({
-                        "rank": r["rank"], "thumbUrl": r["thumb_url"],
+                        "rank": r["rank"], "thumbUrl": r["thumb_url"], "query": r["query"],
                         "durationFrames": r["duration_frames"], "selected": bool(r["selected"])})
             p = prov.get(i)
             scenes.append({
                 "index": i, "template": sc.get("template"), "needsFootage": needs_footage,
+                "beatText": beat_text.get(i),
                 "candidates": candidates,
                 "provenance": (None if p is None else {
                     "source": p["source"], "query": p["query"], "rank": p["rank"],

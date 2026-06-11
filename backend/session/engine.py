@@ -122,16 +122,121 @@ class Engine:
 
     def edit(self, stage, op):
         """Apply a stage-specific edit, persist the new stage output, invalidate
-        downstream, and re-derive the stale stages. A.1 implements the footage ops."""
-        if stage != "footage":
-            raise NotImplementedError(f"edit not implemented for stage {stage!r} (A.1 = footage)")
-        self._edit_footage(op)
-        self.invalidate("footage")
-        for st in stages.downstream("footage"):
+        downstream, and re-derive the stale stages. Studio v2 adds script + assemble
+        edits on top of A.1's footage ops."""
+        handlers = {
+            "footage": self._edit_footage,
+            "script": self._edit_script,
+            "timing": self._edit_timing,
+            "assemble": self._edit_assemble,
+        }
+        handler = handlers.get(stage)
+        if handler is None:
+            raise NotImplementedError(f"edit not implemented for stage {stage!r}")
+        handler(op)
+        self.invalidate(stage)
+        for st in stages.downstream(stage):
             if st == "render":
                 continue
             self.advance(st)
         self.materialize_spec()
+
+    def _edit_script(self, op):
+        """Studio v2 Script gate edit. Mutate the beats (text / data) or drop a beat,
+        run verify-on-edit (FLAG amber, never auto-drop a human's words), re-derive the
+        recipe plan from the edited beats, and persist. edit() then re-runs the whole
+        downstream pipeline (voice → timing → footage → assemble) per the §7 matrix.
+
+        verify_fn / retrieve_fn ride IN the op dict (in-process callables the CLI/API
+        builds) so verify-on-edit stays offline-injectable for tests."""
+        from pipeline import recipe as recipe_stage
+        from pipeline import verify as verify_stage
+
+        bundle = self._load_output("script")
+        if bundle is None:
+            raise RuntimeError("cannot edit script: script stage has not completed")
+        script = bundle["script"]
+        kind = op["op"]
+        edited = []
+
+        if kind == "edit_beat":
+            i = op["index"]
+            if not (0 <= i < len(script.beats)):
+                raise IndexError(f"beat index {i} out of range (0..{len(script.beats)-1})")
+            if op.get("text") is not None:
+                script.beats[i].text = str(op["text"]).strip()
+            if "data" in op:                       # may set OR clear (None demotes a stat)
+                script.beats[i].data = op["data"]
+            edited = [i]
+        elif kind == "drop_beat":
+            i = op["index"]
+            if not (0 <= i < len(script.beats)):
+                raise IndexError(f"beat index {i} out of range (0..{len(script.beats)-1})")
+            if len(script.beats) <= 1:
+                raise ValueError("cannot drop the last remaining beat")
+            script.beats.pop(i)
+            new_flags = []
+            for f in (script.beat_flags or []):
+                if f["index"] == i:
+                    continue
+                new_flags.append({**f, "index": f["index"] - 1} if f["index"] > i else f)
+            script.beat_flags = new_flags
+        else:
+            raise ValueError(f"unknown script op {kind!r}")
+
+        vfn = op.get("verify_fn")
+        if edited and vfn is not None:
+            verify_stage.verify_edited_beats(
+                script, edited, verify_fn=vfn, retrieve_fn=op.get("retrieve_fn"),
+                retrieval_key=op.get("retrieval_key"), cache_dir=self.ctx.cache_dir)
+
+        # the slot/template of a beat depends on its data, so re-derive the plan
+        plan = recipe_stage.plan(script, theme=self.ctx.theme, manifests=self.ctx.catalog)
+        new_bundle = {"script": script, "plan": plan}
+        to_json, _ = CODECS["script"]
+        store.upsert_stage(
+            self.conn, self.sid, "script", status="done",
+            input_hash=store.get_stage(self.conn, self.sid, "script")["input_hash"],
+            output_json=json.dumps(to_json(new_bundle), default=str), now=_now())
+
+    def _edit_timing(self, op):
+        """Studio v2 Timing 'fix a word' (PRD §6.3) — correct a mis-transcribed caption
+        TOKEN only. Edits the WordTiming.text at `index`; start/end frames are NEVER
+        shifted (timing stays pinned to the audio). edit() then re-derives assemble,
+        which rebuilds captions from the patched words (same frames, new text)."""
+        if op["op"] != "fix_word":
+            raise ValueError(f"unknown timing op {op['op']!r}")
+        words = self._load_output("timing")
+        if words is None:
+            raise RuntimeError("cannot edit timing: timing stage has not completed")
+        i = op["index"]
+        if not (0 <= i < len(words)):
+            raise IndexError(f"word index {i} out of range (0..{len(words)-1})")
+        new_text = str(op["text"]).strip()
+        if not new_text:
+            raise ValueError("fix_word text must be non-empty")
+        words[i].text = new_text                         # text only; frames untouched
+        to_json, _ = CODECS["timing"]
+        store.upsert_stage(
+            self.conn, self.sid, "timing", status="done",
+            input_hash=store.get_stage(self.conn, self.sid, "timing")["input_hash"],
+            output_json=json.dumps(to_json(words), default=str), now=_now())
+
+    def _edit_assemble(self, op):
+        """Studio v2 Assemble gate edit — apply a whitelist-validated spec.json patch
+        to the persisted assemble output (theme / template / templateProps /
+        transition only; never timing / captions / beat count). edit() then
+        materializes spec.json. See pipeline.spec_patch for the validator."""
+        from pipeline import spec_patch
+        spec = self._load_output("assemble")
+        if spec is None:
+            raise RuntimeError("cannot edit assemble: assemble stage has not completed")
+        patched = spec_patch.apply_patch(spec, op["patch"])  # raises on whitelist violation
+        to_json, _ = CODECS["assemble"]
+        store.upsert_stage(
+            self.conn, self.sid, "assemble", status="done",
+            input_hash=store.get_stage(self.conn, self.sid, "assemble")["input_hash"],
+            output_json=json.dumps(to_json(patched), default=str), now=_now())
 
     def _edit_footage(self, op):
         from pipeline import footage as footage_stage
