@@ -15,7 +15,7 @@ import pytest
 
 from manifest import Manifest
 from pipeline.content import BeatsScript
-from pipeline.recipe import plan, PlannedScene, ScenePlan
+from pipeline.recipe import plan
 from schema import Theme
 
 

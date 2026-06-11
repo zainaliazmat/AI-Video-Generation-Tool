@@ -77,7 +77,6 @@ def test_patch_rejects_negative_scene_index():
 
 
 def test_patch_rejects_non_replace_op():
-    spec = _spec()
     ok, err = spec_patch.validate_patch([{"op": "remove", "path": "/theme/transition"}])
     assert not ok and "replace" in err
 

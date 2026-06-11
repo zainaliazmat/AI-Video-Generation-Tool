@@ -70,10 +70,6 @@ class ScenePlan:
     title: str
     scenes: List[PlannedScene]
 
-    @property
-    def footage_scenes(self) -> List[PlannedScene]:
-        return [s for s in self.scenes if s.needs_footage]
-
 
 def _is_stat(beat: Beat) -> bool:
     """value-shaped data → stat. Requires BOTH value and label (the stat

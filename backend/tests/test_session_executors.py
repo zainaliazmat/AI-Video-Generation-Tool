@@ -1,9 +1,8 @@
 """HITL A.1 — executors wrap the existing stage fns behind run(ctx, inputs)->output.
 Tested with fakes so no provider/network is hit (mirrors the existing E2E fakes)."""
-from pathlib import Path
 from types import SimpleNamespace
 
-from pipeline.contracts import LineOffset, WordTiming, Clip
+from pipeline.contracts import LineOffset
 from pipeline.content import Beat, BeatsScript
 from pipeline.recipe import plan as recipe_plan, ScenePlan, PlannedScene
 from schema import Theme
