@@ -3,12 +3,12 @@
     "DurationFrames": {
       "additionalProperties": false,
       "properties": {
-        "min": {
-          "title": "Min",
-          "type": "integer"
-        },
         "max": {
           "title": "Max",
+          "type": "integer"
+        },
+        "min": {
+          "title": "Min",
           "type": "integer"
         }
       },
@@ -22,56 +22,28 @@
   },
   "additionalProperties": false,
   "properties": {
-    "id": {
-      "title": "Id",
-      "type": "string"
-    },
-    "name": {
-      "title": "Name",
-      "type": "string"
-    },
-    "version": {
-      "title": "Version",
-      "type": "string"
-    },
-    "author": {
-      "title": "Author",
-      "type": "string"
-    },
     "apiVersion": {
       "title": "Apiversion",
       "type": "string"
     },
-    "kind": {
-      "enum": [
-        "hook",
-        "scene",
-        "stat",
-        "lower-third",
-        "transition",
-        "overlay",
-        "outro"
+    "assets": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
       ],
-      "title": "Kind",
+      "default": null,
+      "title": "Assets"
+    },
+    "author": {
+      "title": "Author",
       "type": "string"
-    },
-    "inputSchema": {
-      "additionalProperties": true,
-      "title": "Inputschema",
-      "type": "object"
-    },
-    "sampleProps": {
-      "additionalProperties": true,
-      "title": "Sampleprops",
-      "type": "object"
-    },
-    "durationFrames": {
-      "$ref": "#/$defs/DurationFrames"
-    },
-    "rendersOwnText": {
-      "default": false,
-      "title": "Rendersowntext",
-      "type": "boolean"
     },
     "consumes": {
       "anyOf": [
@@ -97,6 +69,69 @@
       "default": null,
       "title": "Description"
     },
+    "durationFrames": {
+      "$ref": "#/$defs/DurationFrames"
+    },
+    "homepage": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Homepage"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "inputSchema": {
+      "additionalProperties": true,
+      "title": "Inputschema",
+      "type": "object"
+    },
+    "kind": {
+      "enum": [
+        "hook",
+        "scene",
+        "stat",
+        "lower-third",
+        "transition",
+        "overlay",
+        "outro"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "license": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "License"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "rendersOwnText": {
+      "default": false,
+      "title": "Rendersowntext",
+      "type": "boolean"
+    },
+    "sampleProps": {
+      "additionalProperties": true,
+      "title": "Sampleprops",
+      "type": "object"
+    },
     "tags": {
       "anyOf": [
         {
@@ -112,44 +147,9 @@
       "default": null,
       "title": "Tags"
     },
-    "license": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "License"
-    },
-    "homepage": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Homepage"
-    },
-    "assets": {
-      "anyOf": [
-        {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Assets"
+    "version": {
+      "title": "Version",
+      "type": "string"
     }
   },
   "required": [
