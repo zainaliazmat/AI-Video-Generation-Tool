@@ -10,7 +10,7 @@ import pathlib
 import pytest
 from pydantic import ValidationError
 
-from manifest import Manifest
+from manifest import DurationFrames, Manifest
 from pipeline.validate import load_catalog
 
 _TEMPLATES_DIR = pathlib.Path(__file__).resolve().parents[2] / "templates"
@@ -100,7 +100,7 @@ def test_enumeration_manifest_loads_with_capability():
     assert m.consumes == "enumeration"
 
 
-def test_v11_fields_parse_and_default_none():
+def test_v11_fields_parse_all_present():
     m = Manifest.model_validate({
         **_valid(),
         "description": "Word-cascade opening title.",
@@ -136,3 +136,7 @@ def test_unknown_duration_frames_field_rejected():
     bad["durationFrames"] = {"min": 30, "max": 120, "step": 1}
     with pytest.raises(ValidationError):
         Manifest.model_validate(bad)
+
+    # DurationFrames is strict standalone too, not just via the envelope path.
+    with pytest.raises(ValidationError):
+        DurationFrames.model_validate({"min": 1, "max": 5, "step": 1})
