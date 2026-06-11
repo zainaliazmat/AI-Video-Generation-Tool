@@ -144,3 +144,78 @@ def test_engine_assemble_edit_applies_patch_and_materializes(tmp_path, monkeypat
     assert out.theme.palette.background == "#1d1009"
     assert (tmp_path / "spec.json").exists()          # materialized
     conn.close()
+
+
+# ---- F-5: patch history + derived spec version + revert ----
+
+def _session_with_assemble(tmp_path, monkeypatch):
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="T", now="t0")
+    store.upsert_stage(conn, "s1", "assemble", status="done", input_hash="h",
+                       output_json=json.dumps(codecs.spec_to_json(_spec())), now="t0")
+    monkeypatch.setattr("pipeline.validate.validate_spec", lambda spec, catalog: None)
+    return conn, engine.Engine(conn, _ctx(tmp_path), session_id="s1")
+
+
+def test_store_spec_patch_history_roundtrip(tmp_path):
+    """spec_patches is an append-only event log; version is DERIVED (1 + row count),
+    so no sessions-table migration and the rail chip can never drift from history."""
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="T", now="t0")
+    assert store.spec_version(conn, "s1") == 1            # fresh session = v1
+    store.append_spec_patch(
+        conn, "s1", kind="patch",
+        patch=[{"op": "replace", "path": "/theme/transition", "value": "slide"}],
+        diff=[{"path": "theme.transition", "before": "fade", "after": "slide"}],
+        now="t1")
+    rows = store.get_spec_patches(conn, "s1")
+    assert len(rows) == 1
+    assert rows[0]["seq"] == 1 and rows[0]["kind"] == "patch" and not rows[0]["reverted"]
+    assert json.loads(rows[0]["diff_json"])[0]["before"] == "fade"
+    assert store.spec_version(conn, "s1") == 2
+    conn.close()
+
+
+def test_engine_assemble_edit_records_history(tmp_path, monkeypatch):
+    conn, eng = _session_with_assemble(tmp_path, monkeypatch)
+    eng.edit("assemble", {"patch": [
+        {"op": "replace", "path": "/theme/palette/background", "value": "#1d1009"}]})
+    rows = store.get_spec_patches(conn, "s1")
+    assert len(rows) == 1 and rows[0]["kind"] == "patch"
+    diff = json.loads(rows[0]["diff_json"])
+    assert diff == [{"path": "theme.palette.background",
+                     "before": "#000000", "after": "#1d1009"}]
+    assert store.spec_version(conn, "s1") == 2
+    conn.close()
+
+
+def test_engine_assemble_revert_restores_and_logs(tmp_path, monkeypatch):
+    """Revert = LIFO undo: inverse ops built from the stored diff's before-values,
+    applied through the SAME whitelist + invariant machinery as any patch."""
+    conn, eng = _session_with_assemble(tmp_path, monkeypatch)
+    eng.edit("assemble", {"patch": [
+        {"op": "replace", "path": "/theme/palette/background", "value": "#1d1009"}]})
+    eng.edit("assemble", {"revert": 1})
+
+    out = eng._load_output("assemble")
+    assert out.theme.palette.background == "#000000"      # restored to the before value
+    rows = store.get_spec_patches(conn, "s1")
+    assert len(rows) == 2
+    assert rows[0]["reverted"] == 1                       # the undone patch is marked
+    assert rows[1]["kind"] == "revert" and rows[1]["reverts_seq"] == 1
+    assert store.spec_version(conn, "s1") == 3            # a revert is itself an edit
+    assert (tmp_path / "spec.json").exists()              # re-materialized
+    conn.close()
+
+
+def test_engine_assemble_revert_rejects_non_latest(tmp_path, monkeypatch):
+    """Only the NEWEST un-reverted patch can be undone (a mid-stack revert could
+    produce a spec state that never existed). Walk the stack back instead."""
+    conn, eng = _session_with_assemble(tmp_path, monkeypatch)
+    eng.edit("assemble", {"patch": [
+        {"op": "replace", "path": "/theme/palette/background", "value": "#1d1009"}]})
+    eng.edit("assemble", {"patch": [
+        {"op": "replace", "path": "/theme/transition", "value": "slide"}]})
+    with pytest.raises(Exception, match="newest"):
+        eng.edit("assemble", {"revert": 1})
+    conn.close()

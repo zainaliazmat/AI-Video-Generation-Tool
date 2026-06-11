@@ -226,17 +226,51 @@ class Engine:
         """Studio v2 Assemble gate edit — apply a whitelist-validated spec.json patch
         to the persisted assemble output (theme / template / templateProps /
         transition only; never timing / captions / beat count). edit() then
-        materializes spec.json. See pipeline.spec_patch for the validator."""
+        materializes spec.json. See pipeline.spec_patch for the validator.
+
+        F-5: every applied patch is appended to the spec_patches event log (with its
+        diff at apply time), and {"revert": seq} undoes the NEWEST un-reverted patch
+        by applying the inverse ops built from that stored diff — through the same
+        whitelist + invariant machinery, so a revert can never do what a patch
+        couldn't. The spec version shown in the rail is derived from this log."""
         from pipeline import spec_patch
         spec = self._load_output("assemble")
         if spec is None:
             raise RuntimeError("cannot edit assemble: assemble stage has not completed")
-        patched = spec_patch.apply_patch(spec, op["patch"])  # raises on whitelist violation
+
+        if "revert" in op:
+            target_seq = int(op["revert"])
+            rows = [r for r in store.get_spec_patches(self.conn, self.sid)
+                    if r["kind"] == "patch" and not r["reverted"]]
+            if not rows:
+                raise ValueError("nothing to revert: no un-reverted patches in history")
+            newest = rows[-1]
+            if newest["seq"] != target_seq:
+                raise ValueError(
+                    f"only the newest un-reverted patch (seq {newest['seq']}) can be "
+                    f"reverted; walk the stack back one step at a time")
+            # Inverse ops: the RAW pointer paths from the stored patch (lossless —
+            # diff paths are dotted for display) zipped with the diff's before-values
+            # (diff_lines iterates ops in order, so index i lines up with op i).
+            applied = json.loads(newest["patch_json"])
+            befores = json.loads(newest["diff_json"])
+            inverse = [{"op": "replace", "path": o["path"], "value": d["before"]}
+                       for o, d in zip(applied, befores)]
+            patch, kind, reverts_seq = inverse, "revert", target_seq
+        else:
+            patch, kind, reverts_seq = op["patch"], "patch", None
+
+        diff = spec_patch.diff_lines(spec, patch)
+        patched = spec_patch.apply_patch(spec, patch)  # raises on whitelist violation
         to_json, _ = CODECS["assemble"]
         store.upsert_stage(
             self.conn, self.sid, "assemble", status="done",
             input_hash=store.get_stage(self.conn, self.sid, "assemble")["input_hash"],
             output_json=json.dumps(to_json(patched), default=str), now=_now())
+        store.append_spec_patch(self.conn, self.sid, kind=kind, patch=patch, diff=diff,
+                                now=_now(), reverts_seq=reverts_seq)
+        if reverts_seq is not None:
+            store.mark_patch_reverted(self.conn, self.sid, seq=reverts_seq)
 
     def _edit_footage(self, op):
         from pipeline import footage as footage_stage

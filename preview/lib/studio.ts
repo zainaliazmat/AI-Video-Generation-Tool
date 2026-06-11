@@ -40,7 +40,11 @@ export type TimingGate = {ok: boolean; sid: string; words: TimingWord[]; lines: 
 export type PatchOp = {op: 'replace'; path: string; value: unknown};
 export type DiffLine = {path: string; before: unknown; after: unknown};
 export type AssembleScene = {index: number; template: string | null; hasMedia: boolean; transition: string | null};
-export type AssembleGate = {ok: boolean; sid: string; theme: Record<string, unknown>; scenes: AssembleScene[]};
+// F-5: the applied-patch event log. version is derived server-side (1 + history rows);
+// revertableSeq is the only seq the LIFO undo will accept (newest un-reverted patch).
+export type HistoryEntry = {seq: number; kind: 'patch' | 'revert'; diff: DiffLine[]; reverted: boolean; revertsSeq: number | null; createdAt: string};
+export type AssembleHistory = {version: number; revertableSeq: number | null; history: HistoryEntry[]};
+export type AssembleGate = {ok: boolean; sid: string; theme: Record<string, unknown>; scenes: AssembleScene[]} & AssembleHistory;
 export type ChatResult = {ok: boolean; ops: PatchOp[]; reply: string; diff: DiffLine[]; valid: boolean};
 
 async function j<T>(res: Response): Promise<T> {
@@ -70,7 +74,9 @@ export const studio = {
     chat: (id: string, message: string) =>
       fetch(`/api/session/${id}/assemble`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({op: 'chat', message})}).then(j<ChatResult>),
     apply: (id: string, patch: PatchOp[]) =>
-      fetch(`/api/session/${id}/assemble`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({op: 'apply', patch})}).then(j<{ok: boolean; diff: DiffLine[]}>),
+      fetch(`/api/session/${id}/assemble`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({op: 'apply', patch})}).then(j<{ok: boolean; diff: DiffLine[]} & AssembleHistory>),
+    revert: (id: string, seq: number) =>
+      fetch(`/api/session/${id}/assemble`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({op: 'revert', seq})}).then(j<{ok: boolean; reverted: number} & AssembleHistory>),
   },
   footage: {
     state: (id: string) => fetch(`/api/session/${id}/state`).then(j<any>),
