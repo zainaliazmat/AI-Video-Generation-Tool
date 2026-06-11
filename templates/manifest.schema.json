@@ -1,0 +1,168 @@
+{
+  "$defs": {
+    "DurationFrames": {
+      "additionalProperties": false,
+      "properties": {
+        "min": {
+          "title": "Min",
+          "type": "integer"
+        },
+        "max": {
+          "title": "Max",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ],
+      "title": "DurationFrames",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    },
+    "author": {
+      "title": "Author",
+      "type": "string"
+    },
+    "apiVersion": {
+      "title": "Apiversion",
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "hook",
+        "scene",
+        "stat",
+        "lower-third",
+        "transition",
+        "overlay",
+        "outro"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "inputSchema": {
+      "additionalProperties": true,
+      "title": "Inputschema",
+      "type": "object"
+    },
+    "sampleProps": {
+      "additionalProperties": true,
+      "title": "Sampleprops",
+      "type": "object"
+    },
+    "durationFrames": {
+      "$ref": "#/$defs/DurationFrames"
+    },
+    "rendersOwnText": {
+      "default": false,
+      "title": "Rendersowntext",
+      "type": "boolean"
+    },
+    "consumes": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Consumes"
+    },
+    "description": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Description"
+    },
+    "tags": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Tags"
+    },
+    "license": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "License"
+    },
+    "homepage": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Homepage"
+    },
+    "assets": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Assets"
+    }
+  },
+  "required": [
+    "id",
+    "name",
+    "version",
+    "author",
+    "apiVersion",
+    "kind",
+    "inputSchema",
+    "sampleProps",
+    "durationFrames"
+  ],
+  "title": "Manifest",
+  "type": "object"
+}
