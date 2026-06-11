@@ -11,7 +11,7 @@ import type {Spec} from '@remotion-src/schema';
  * duration/fps/dimensions DIRECTLY (it does not run calculateMetadata); we read
  * them from spec.meta and forward the spec through inputProps.
  */
-export function VideoPlayer({spec}: {spec: Spec}) {
+export function VideoPlayer({spec, controls = true}: {spec: Spec; controls?: boolean}) {
   const playerRef = useRef<PlayerRef>(null);
   const {fps, width, height, durationInFrames} = spec.meta;
 
@@ -28,9 +28,9 @@ export function VideoPlayer({spec}: {spec: Spec}) {
       compositionWidth={width}
       compositionHeight={height}
       style={{width: '100%', display: 'block'}}
-      controls
-      clickToPlay
-      spaceKeyToPlayOrPause
+      controls={controls}
+      clickToPlay={controls}
+      spaceKeyToPlayOrPause={controls}
     />
   );
 }
