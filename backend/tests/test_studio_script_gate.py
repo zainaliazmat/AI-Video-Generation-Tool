@@ -36,6 +36,43 @@ def test_style_memory_pin_survives_fifo():
     assert len(mem["examples"]) <= style_memory.MAX_EXAMPLES + 1
 
 
+def test_style_memory_manager_ops(tmp_path, monkeypatch):
+    """F-6: the PRD's 'caps + manager UI (pin/delete)' finally gets a surface —
+    list/pin/delete CLI ops over the repo-level style memory, persisted to disk."""
+    import pytest
+    import session_script as scli
+    sm_path = tmp_path / "style_memory.json"
+    monkeypatch.setattr("session.job_ctx.STYLE_MEMORY_PATH", sm_path)
+    mem = {"examples": [], "guidance": []}
+    style_memory.record_edit(mem, before="b0", after="a0")
+    style_memory.record_guidance(mem, "punchier verbs")
+    style_memory.save(sm_path, mem)
+
+    out = scli.style_memory_read("s1")
+    assert out["ok"]
+    assert out["styleMemory"]["examples"][0] == {
+        "index": 0, "before": "b0", "after": "a0", "pinned": False}
+    assert out["styleMemory"]["guidance"][0] == {
+        "index": 0, "text": "punchier verbs", "pinned": False}
+    assert out["styleMemory"]["caps"] == {
+        "examples": style_memory.MAX_EXAMPLES, "guidance": style_memory.MAX_GUIDANCE}
+
+    out = scli.style_memory_pin("s1", kind="guidance", index=0, value=True)
+    assert out["styleMemory"]["guidance"][0]["pinned"] is True
+    assert style_memory.load(sm_path)["guidance"][0]["pinned"]   # persisted
+
+    out = scli.style_memory_delete("s1", kind="example", index=0)
+    assert out["styleMemory"]["examples"] == []
+    assert style_memory.load(sm_path)["examples"] == []          # persisted
+
+    # fail-loud (house style): the silent no-op of the underlying helpers must not
+    # leak through the CLI — a bad kind/index is an error, not a quiet success.
+    with pytest.raises(ValueError):
+        scli.style_memory_pin("s1", kind="nope", index=0)
+    with pytest.raises(IndexError):
+        scli.style_memory_delete("s1", kind="guidance", index=5)
+
+
 def test_style_memory_block_alters_a_prompt():
     from pipeline import script as script_stage
     mem = {"examples": [{"before": "Magma is hot.", "after": "Magma burns at 1250C."}],

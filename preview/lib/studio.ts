@@ -53,11 +53,20 @@ async function j<T>(res: Response): Promise<T> {
   return data as T;
 }
 
+// F-6: the style-memory manager doc (repo-level, cross-video by design).
+export type StyleMemoryDoc = {
+  examples: {index: number; before: string; after: string; pinned: boolean}[];
+  guidance: {index: number; text: string; pinned: boolean}[];
+  caps: {examples: number; guidance: number};
+};
+
 export const studio = {
   script: {
     read: (id: string) => fetch(`/api/session/${id}/script`).then(j<ScriptGate>),
     op: (id: string, body: Record<string, unknown>) =>
       fetch(`/api/session/${id}/script`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)}).then(j<ScriptGate & {regenerated?: boolean; approved?: boolean}>),
+    styleMemory: (id: string, body: {op: 'style_memory_read'} | {op: 'style_memory_pin'; kind: 'example' | 'guidance'; index: number; value: boolean} | {op: 'style_memory_delete'; kind: 'example' | 'guidance'; index: number}) =>
+      fetch(`/api/session/${id}/script`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)}).then(j<{ok: boolean; styleMemory: StyleMemoryDoc}>),
   },
   voice: {
     list: (id: string) => fetch(`/api/session/${id}/voice`).then(j<VoiceGate>),
