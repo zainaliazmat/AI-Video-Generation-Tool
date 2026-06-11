@@ -284,7 +284,9 @@ export default function AssembleGatePage() {
                           </div>
 
                           <div className="mt-2.5 flex flex-wrap gap-1.5">
-                            <Badge tone="green">valid · zod + pydantic</Badge>
+                            {/* honest label: chat patches are validated by the path
+                                whitelist + pydantic (apply-time); zod never sees them */}
+                            <Badge tone="green">valid · whitelist + pydantic</Badge>
                             <Badge tone="green">audio math untouched</Badge>
                           </div>
 

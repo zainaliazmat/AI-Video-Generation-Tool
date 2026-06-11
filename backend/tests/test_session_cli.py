@@ -92,6 +92,31 @@ def test_job_ctx_paths_match_main():
     assert ctx.catalog  # templates loaded
 
 
+def test_session_meta_reports_version_and_validity(tmp_path, monkeypatch):
+    """F-7: the rail pills must be bound to a REAL check. session_meta runs
+    Spec.model_validate (contract mirror) + validate_spec (zod-derived per-template
+    JSON-Schema) server-side and reports the derived spec version."""
+    conn, ctx, sid = _seed_session(tmp_path, monkeypatch)
+    conn.close()
+    import session_meta as sm
+    monkeypatch.setattr("session.job_ctx.SESSIONS_DB", tmp_path / "s.db")
+    monkeypatch.setattr("session.job_ctx.REPO_ROOT", tmp_path)
+
+    out = sm.build_meta(sid)
+    assert out["ok"] is True and out["sid"] == sid
+    assert out["specVersion"] == 1                      # no assemble patches yet
+    assert out["pydanticValid"] is True
+    assert out["templatesValid"] is True
+
+    # Corrupt the materialized spec -> the pydantic pill must go red, not lie green.
+    spec_path = projects_mod.project_spec_path(tmp_path, sid)
+    doc = json.loads(spec_path.read_text())
+    doc["scenes"][0]["startFrame"] = "not-a-number"
+    spec_path.write_text(json.dumps(doc))
+    out = sm.build_meta(sid)
+    assert out["pydanticValid"] is False
+
+
 def test_build_state_shape(tmp_path, monkeypatch):
     conn, ctx, sid = _seed_session(tmp_path, monkeypatch)
     conn.close()
