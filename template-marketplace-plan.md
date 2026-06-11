@@ -492,3 +492,20 @@ Motion clips grow: (e) update flow — catalog newer version → Update button �
 - **VERDICT:** ENG + DESIGN CLEARED — plan LOCKED; §15 (eng) + §16 (design) amendments normative; all §14 decisions ruled. §16.15's four engine deltas ride the M0 re-grounding into the task plan. Ready to implement when the M0 build slot opens (after Studio-v2 merge gates clear + re-grounding per §15.12).
 
 NO UNRESOLVED DECISIONS
+
+---
+
+## 17. M0 re-grounding addendum (2026-06-12) — verified against `development` tip (713e353, = branch base)
+
+Per §15.12: every §1 on-disk claim and every §15/§16 load-bearing code fact re-verified against the current tree (54 files / 23 commits past the 69339ca grounding: Studio-v2 gates PR #18 + PRs #22–25). Four parallel read-only verification passes. **Verdict: the plan's ground truth held.** Deltas and resolved conditionals:
+
+1. **§15.9 root-spec conditional → RESOLVED: REAL.** `remotion/scripts/copy-spec.mjs:13-15` still reads root `spec.json` (sample fallback) and `backend/main.py` still writes root `SPEC_OUT`. The M2 uninstall reference scan MUST include root `spec.json` (when present) alongside `projects/*/spec.json`.
+2. **§1.4 transition guard is silent, not loud.** Scenes and layers get the `MissingTemplate` placeholder (`Video.tsx:91,209`); a missing/unknown *transition* template degrades to a hard cut with no placeholder (`Video.tsx:108-114`). §15.9/§16.10 consequence copy must say: *scenes/overlays show the placeholder; transitions fall back to hard cuts; editing/assembling/re-rendering fails loudly either way* (backend `_require` hard-fails all kinds, `validate.py:49-55`).
+3. **§15.8 first-alphabetical claim HOLDS — via `load_catalog`'s sorted glob** (`validate.py:36`), not via an explicit sort in `_template_for_capability` (`recipe.py:106-115` iterates dict order). The stage-3 consumes-collision reject remains the real guard; no code change to recipe.
+4. **§15.6 dot-folder invisibility: holds for the actual staging layout, hardened anyway.** `templates/.staging/<run-id>/<id>/` is invisible to build-registry/gen-manifests/gen-previews because `.staging/` has no direct `manifest.json` (scanners check direct children only), and tsconfig `**` globs don't match dot-directories. T3 adds an explicit leading-dot skip to `discover()` alongside the `.installing` sentinel skip (one line, removes the foot-gun).
+5. **`extra="forbid"` confirmed absent today** (`backend/manifest.py` — Pydantic v2 default `extra="ignore"`); M1 adds it per §15.13. No TS↔Py drift test exists today; M1's generated `templates/manifest.schema.json` + drift test is exactly the missing third validator.
+6. **§16 surfaces all confirmed**: `--glass-border-active`, `.content-card`, `.glass`, Badge (6 tones), Button `primary/ghost/danger` all exist post-§7.3-ratification (globals.css changes were additive; wireframe was re-synced post-ratification per D18). The D19 focus-ring gap is real: no `:focus-visible` on FilterPill/TemplateCard/TemplateDrawer controls today. `gen-previews` already has `--check` (no `--only/--force` — M2 adds). Render-route donor verified at the claimed lines (flag :18, SSE :66-161, disconnect-kills via `cancel()` :145-150). No `/api/templates/*` routes exist. Studio-v2 added **zero** new consumers of the template registry (`preview/lib/studio.ts` reads `scenes[].template` display-only).
+7. **License backfill honesty**: the repo has no LICENSE file; §4.2 requires `license` only for non-core authors. M1 backfills `description`/`tags` on the 8 core manifests and **omits `license` on core** rather than fabricate an SPDX id — operator may supply one later.
+8. **§16.15's four engine deltas** are carried into the merged task plan as explicit M2 scope (consumed by M4): SSE keep-alive-on-disconnect mode, last-error file beside the install lock, stage-3 semver-≥-with-confirm (+1 fixture, §12 = 29), widened state endpoint (installed-ids + uncommitted-ness + last-error).
+
+Ordered build plan: `docs/superpowers/plans/2026-06-12-template-marketplace-build.md` (M1 → M2 → (M3 ∥ M5) → M4; lane-conflict note on `templates/scripts/`).
