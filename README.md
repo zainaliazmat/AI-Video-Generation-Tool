@@ -60,9 +60,18 @@ python3.12 -m venv backend/.venv
 backend/.venv/bin/pip install -r backend/requirements.txt
 
 # 3. Renderer + preview (Node)
-( cd remotion && npm install )
-( cd preview  && npm install )
+( cd templates && npm install )   # required first: remotion's typecheck reaches into ../templates (zod lives there)
+( cd remotion  && npm install )
+( cd preview   && npm install )
 ```
+
+> **Setup constraints worth knowing:**
+> - The preview app spawns the backend via `backend/.venv/bin/python` (hardcoded
+>   in `preview/app/api/_spawn.ts`) — create the venv at exactly that path or the
+>   API routes 500.
+> - `next build` fetches DM Sans/DM Mono from Google Fonts at build time
+>   (`next/font`) — offline/air-gapped builds fail; `npm run dev` and typecheck
+>   are unaffected.
 
 ## Usage
 
