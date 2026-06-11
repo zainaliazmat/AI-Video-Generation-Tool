@@ -116,6 +116,11 @@ class CaptionStyle(BaseModel):
     highlightColor: str = "#FFE600"     # color of the word currently spoken
     strokeColor: str = "#000000"
     positionY: float = 0.78             # 0 = top, 1 = bottom
+    # Caption font size in px. None -> the renderer keeps its legacy derivation
+    # round(height * 0.045) (~86px at 1920), so pre-migration specs render
+    # byte-identically. MIRROR of remotion/src/schema.ts CaptionStyle.size
+    # (resolved in caption-size.ts) — change both or neither.
+    size: Optional[int] = Field(default=None, gt=0)
 
 
 class Theme(BaseModel):

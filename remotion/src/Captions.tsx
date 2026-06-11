@@ -9,6 +9,7 @@ import {
 import {loadFont} from '@remotion/google-fonts/Inter';
 import type {Caption, CaptionStyle} from './schema';
 import {isFrameSuppressed, type FrameRange} from './captions-suppress';
+import {resolveCaptionFontSize} from './caption-size';
 
 // Load Inter ONCE at module top-level. loadFont auto-manages delayRender, so the
 // render blocks until glyphs are ready — no fallback-font flash, no manual
@@ -127,7 +128,7 @@ export const Captions: React.FC<{
     extrapolateRight: 'clamp',
   });
 
-  const fontSize = Math.round(height * 0.045); // ~86px at 1920
+  const fontSize = resolveCaptionFontSize(style.size, height); // absent -> ~86px at 1920
   const strokeWidth = Math.max(2, Math.round(fontSize * 0.09));
 
   return (
