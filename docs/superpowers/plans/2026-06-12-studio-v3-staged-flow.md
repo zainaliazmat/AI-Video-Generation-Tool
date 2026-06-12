@@ -1293,3 +1293,20 @@ Maps: PRD §9.M7, D3. **Gate: operator pixel/motion review — nothing merges be
 - **VERDICT:** ENG + DESIGN CLEARED — plan locked; M1 builds on `studio-v3-staged-flow` off `development` (M7 eyes-on remains the standing pixel gate).
 
 NO UNRESOLVED DECISIONS
+
+---
+
+## M1 BUILD AMENDMENTS (2026-06-13 — ruled during the build; M2–M7 expansions must honor these)
+
+M1 shipped on `studio-v3-staged-flow` (Tasks 1–10, ~30 commits): 392 backend tests green, `tsc` ×3 clean, vitest green (preview 23, remotion 104), live curl E2E PASS on the real pipeline (`gate_flow_e2e.sh`, sid `v3-99188d4c…`: start → script gate → approve ×3 incl. voice-carry → assemble awaiting; double-approve → clean error). Deviations from the plan's prescribed code, each ruled and test-pinned:
+
+1. **`gatekeeper.edit` dispatches by the OWNING GATE'S STATE, not blast-radius emptiness alone** (amends Task 6's prescribed body). The plan's form broke two of its own rulings: a timing/footage edit at the AWAITING scenes gate deferred with no payment path (approve("scenes") sees no stale gates → assemble stage stale forever, spec.json lagging), and an edit at a STALE gate flipped it to awaiting (two open gates). Final dispatch: gate row missing+stage ran → v2 path; STALE → ValueError naming the reopened gate (M6 view-only backstop); APPROVED or REOPENED (awaiting WITH approved_at) → §4.1 defer+reopen (or OV-11 free when nothing downstream ran); TRUE FRONTIER (awaiting, no stamp) → instant via `rederive_stale()` (re-derives only ran-stages — never advances past a gate) + explicit materialize for assemble. All 8 arms test-pinned. The reopened-vs-frontier discriminator is `approved_at` on an awaiting gate.
+2. **Gated regenerate sealed (OV-1 completion).** `session_script.py`'s regenerate was a residual side door (would advance a gated session past its gates). `gatekeeper.regenerate(stage)` re-runs the stage NOW (gate page needs the fresh output) then routes downstream by the same dispatch as edit; `api.regenerate` gained the same gate-rows seam as `api.edit`. set_voice also gained the stale view-only guard (holistic-review catch: it could mint a second awaiting gate).
+3. **`preview_reopen` was forward-ported into Task 6** (edit() depends on it); plan-Task-8 became tests-only. Implementation is plan-verbatim.
+4. **`main.py` bootstraps the Project Library at RUN START** (stub meta {id, topic, createdAt}; `write_meta` overwrites on success). Final artifacts byte-identical (golden tests pin sources.json + the sidecar builder). New user-visible artifact: a failed/in-flight run leaves a stub project — this is exactly what M6's hub "building" / "draft — script failed" cards consume (ruling 8/13). M6-T11 must handle title-less stub metas in the Library list.
+5. **`/state` returns a partial payload pre-spec** (`{sid, scenes: [], gates, autoRun}`) instead of 404 for gated sessions at the script/voice gates; full payload unchanged once spec.json exists. M6 gate pages can poll /state at ANY gate. (Holistic-review catch.)
+6. **SSE single-flight registry lives in `preview/lib/sessionFlight.ts`** — ONE Map genuinely shared by start+approve routes (Next.js route modules can't export extra symbols; two per-file Maps would have broken ruling 4A silently).
+7. **CLI details:** `--flag true|false` is a string per the plan contract (not store_true); failed-stage events are only emitted for a stage that was RUNNING (pre-stage validation errors like double-approve produce NO bogus failed card — design-ruling-5 scope); sid-first event prints before any ctx/engine work.
+8. **Engine note for M5:** `rederive_stale()` relies on STAGE_ORDER being topological (commented in code); the §4.1 payment emits real per-stage events through it. M5's post-advance auto-fill hook and overrides-into-inputs seam land in `advance()`/engine context exactly as planned — nothing in M1 moved those seams.
+
+**M1 STATUS: DONE — exit gate green (suite/tsc/E2E), per-task two-stage reviews + holistic cross-task review CLEARED.**
