@@ -28,16 +28,19 @@ import {
   cpSync,
 } from 'node:fs';
 import {resolve, join, dirname, basename, sep} from 'node:path';
-import {execFileSync} from 'node:child_process';
 import {createRequire} from 'node:module';
 import {isDeepStrictEqual} from 'node:util';
 
 import {
   TEMPLATES_DIR,
-  SCRIPTS_DIR,
   STAGING_DIR,
   InstallError,
 } from './install-paths.mjs';
+
+// Shared default runner for gen-manifests — defined ONCE in install-runners.mjs
+// (I-2) so this stage's fallback and install.mjs's _defaultRunners.genManifests
+// are the SAME function object (no byte-duplication, no lockstep-comment drift).
+import {genManifestsRunner} from './install-runners.mjs';
 
 const _require = createRequire(import.meta.url);
 
@@ -570,14 +573,10 @@ export function _stageCompat(manifest) {
 // Stage 5 — schema (§6.5 / §15.13)
 // ---------------------------------------------------------------------------
 
-/** Default runner for gen-manifests in stage 5. */
+// Default runner for gen-manifests in stage 5 — the SAME genManifestsRunner
+// object install.mjs's _defaultRunners.genManifests points at (I-2: one source).
 const _defaultRunners = {
-  genManifests: (scanDir) =>
-    execFileSync(
-      join(TEMPLATES_DIR, 'node_modules', '.bin', 'tsx'),
-      [join(SCRIPTS_DIR, 'gen-manifests.ts'), '--dir', scanDir],
-      {stdio: 'pipe'},
-    ),
+  genManifests: genManifestsRunner,
 };
 
 /**
@@ -597,7 +596,7 @@ const _defaultRunners = {
  * @param {string} runDir
  * @param {object} runners
  */
-export function _stageSchema(tplDir, manifest, runDir, runners) {
+export async function _stageSchema(tplDir, manifest, runDir, runners) {
   const effectiveRunners = {..._defaultRunners, ...runners};
   const hasSchemaFile = existsSync(join(tplDir, 'schema.ts')) || existsSync(join(tplDir, 'schema.js'));
 
@@ -608,9 +607,12 @@ export function _stageSchema(tplDir, manifest, runDir, runners) {
     const shippedInputSchema = JSON.parse(JSON.stringify(manifest.inputSchema));
 
     // Regenerate inputSchema by running gen-manifests against runDir
-    // (runDir is the scan root — its only child is the template dir)
+    // (runDir is the scan root — its only child is the template dir).
+    // MUST await: genManifests is now async (I-1); the re-read below depends on
+    // gen-manifests having finished writing manifest.json. A bare call would
+    // race the re-read against the still-pending write.
     try {
-      effectiveRunners.genManifests(runDir);
+      await effectiveRunners.genManifests(runDir);
     } catch (e) {
       throw new InstallError('schema', `gen-manifests failed during schema regen: ${e.message}`);
     }
@@ -683,7 +685,7 @@ export async function _runValidation(srcZipOrDir, opts = {}) {
     _stageCompat(manifest);
 
     // Stage 5: schema
-    _stageSchema(tplDir, manifest, runDir, opts.runners ?? {});
+    await _stageSchema(tplDir, manifest, runDir, opts.runners ?? {});
 
     return {runDir, tplDir, manifest, existing};
   } catch (err) {

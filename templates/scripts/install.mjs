@@ -41,6 +41,9 @@ import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 
+// Shared (async, non-blocking) default runners — single source of truth (I-1/I-2).
+import {defaultRunners as _sharedDefaultRunners} from './install-runners.mjs';
+
 // ---------------------------------------------------------------------------
 // Re-export path constants + InstallError from shared module (backward compat)
 // ---------------------------------------------------------------------------
@@ -432,53 +435,19 @@ export function scanReferences(id) {
 // ---------------------------------------------------------------------------
 
 /**
- * Default runner implementations for the four heavy pipeline stages.
+ * Default runner implementations for the heavy pipeline stages.
  *
- * These are replaceable per-call via opts.runners so that the test suite can
- * stub heavy stages (tsc / preview / copyAssets) while still running the REAL
- * buildRegistry so registry assertions work.
+ * Defined ONCE in install-runners.mjs (I-2) and re-exported here so the public
+ * surface (`import {_defaultRunners} from './install.mjs'`) is unchanged. All
+ * five runners are async/non-blocking (I-1) so install() inside an M4 SSE route
+ * can keep emitting keep-alive frames while tsc/preview run.
  *
- * tsc runner note: `npx tsc --noEmit` in remotion/ uses remotion/tsconfig.json
- * which includes `../templates/**‌/*.tsx` via glob — so the freshly renamed
- * templates/<id> is typechecked by file glob even though it isn't in the
- * registry yet (tsc globs files, it doesn't need the registry).
+ * Replaceable per-call via opts.runners so the test suite can stub heavy stages
+ * (tsc / preview / copyAssets) while still running the REAL buildRegistry so
+ * registry assertions work. The genManifests entry is the SAME function object
+ * that install-stages.mjs's _stageSchema falls back to — no byte-duplication.
  */
-export const _defaultRunners = {
-  tsc: () => {
-    try {
-      execFileSync('npx', ['tsc', '--noEmit'], {cwd: REMOTION_DIR, stdio: 'pipe'});
-    } catch (err) {
-      // Capture stderr/stdout so the InstallError message contains the TS error.
-      const out = Buffer.concat([
-        err.stdout instanceof Buffer ? err.stdout : Buffer.from(err.stdout ?? ''),
-        err.stderr instanceof Buffer ? err.stderr : Buffer.from(err.stderr ?? ''),
-      ]).toString('utf8');
-      const excerpt = out.split('\n').slice(0, 30).join('\n');
-      throw Object.assign(new Error(excerpt || err.message), {_tscOriginal: true});
-    }
-  },
-  buildRegistry: () =>
-    execFileSync('node', [join(SCRIPTS_DIR, 'build-registry.mjs')], {stdio: 'pipe'}),
-  // genManifests is used by _stageSchema (stage 5) via _runValidation's runners.
-  // Included here so that test stubs composed from _defaultRunners carry a valid
-  // genManifests entry and don't accidentally shadow the stage's own default with
-  // undefined when a stub omits this key.
-  // NOTE: this definition must stay in lockstep with install-stages.mjs's copy.
-  genManifests: (scanDir) =>
-    execFileSync(
-      join(TEMPLATES_DIR, 'node_modules', '.bin', 'tsx'),
-      [join(SCRIPTS_DIR, 'gen-manifests.ts'), '--dir', scanDir],
-      {stdio: 'pipe'},
-    ),
-  genPreviews: (id) =>
-    execFileSync(
-      'node',
-      [join(REPO_ROOT, 'remotion', 'scripts', 'gen-previews.mjs'), '--only', id, '--force'],
-      {stdio: 'pipe'},
-    ),
-  copyAssets: () =>
-    execFileSync('node', [join(REPO_ROOT, 'preview', 'scripts', 'copy-assets.mjs')], {stdio: 'pipe'}),
-};
+export const _defaultRunners = _sharedDefaultRunners;
 
 // ---------------------------------------------------------------------------
 // Ship-assets helper (§15.2)
@@ -883,7 +852,6 @@ export async function doctor(srcZipOrDir, opts = {}) {
     const runId = `doctor-${process.pid}`;
     snap = _snapshotForUpdate(id, runId);
 
-    let installSucceeded = false;
     try {
       // Write sentinel and rename into place
       writeFileSync(join(tplDir, '.installing'), 'installing');
@@ -914,8 +882,6 @@ export async function doctor(srcZipOrDir, opts = {}) {
       } catch (err) {
         throw new InstallError('preview', err.message || String(err));
       }
-
-      installSucceeded = true;
     } finally {
       // UNCONDITIONAL rollback — doctor NEVER leaves residue
       const installDir = join(TEMPLATES_DIR, id);
@@ -929,7 +895,10 @@ export async function doctor(srcZipOrDir, opts = {}) {
       try { await runners.copyAssets(); } catch { /* best-effort */ }
     }
 
-    // Only reaches here if no throw inside the try above
+    // Only reaches here if no throw inside the try above.
+    // NOTE: doctor() intentionally does NOT clearLastError() on success (unlike
+    // install()/uninstall()) — it's a dry-run that installs nothing, so it must
+    // not erase a real prior install failure's post-mortem record. Leave as-is.
     return {ok: true, id, version: manifest.version, kind: manifest.kind};
   } catch (e) {
     _writeLastError({op: 'doctor', id, stage: e.stage ?? 'doctor', message: e.message});

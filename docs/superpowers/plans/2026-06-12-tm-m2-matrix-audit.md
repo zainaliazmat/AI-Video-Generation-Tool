@@ -72,7 +72,7 @@ The remotion suite (`cd remotion && npx vitest run`) runs the last two.
 | 21 | entry-count cap (2001 entries) | COVERED | `stage 1 unpack > 2001 entries → InstallError stage=unpack containing entries` | install.test.mjs | STUBBED |
 | 22 | decompressed-size cap (201 MB zeros) | COVERED | `stage 1 unpack > one 201MB zeros entry → InstallError stage=unpack containing decompressed` | install.test.mjs | STUBBED |
 | 23 | asset-bearing render proof (component displays shipped asset via resolver) | COVERED | `E2E: valid-scene full install + uninstall > install with default runners → mp4+jpg rendered, dot.png shipped+mirrored…` (RENDER_ASSETS_DIR + preview/public mirror both verified) | install.e2e.test.mjs | REAL |
-| 24 | enumeration-backfill identical-render check | DEFERRED-BY-DESIGN | No unit test — identical-render comparison requires a REAL render output baseline. Deferred to **M3** (the same milestone as deterministic-zip). | — | M3 |
+| 24 | enumeration-backfill identical-render check | COVERED | Eyes-on render gate, proven in M2 (Task 2 Step 5): `~/Downloads/tm-m2-gate/enum-before.png` and `enum-after.png` are sha256-identical (`6c5e18de744524d8b2120a9abce4e3b972d6a61fcc5ba98792e0321a4c01917c`) → the render is byte-unchanged after the assets-prop backfill. Not a unit test — a real before/after render comparison. | — | REAL (render gate) |
 | 25 | concurrent install → 409 | COVERED | `install orchestration (§15.2) > T8 concurrent 409: second install while first holds lock → stage=lock` | install.test.mjs | STUBBED (gate-based) |
 | 26 | uninstall cleans the preview mirror | COVERED | `E2E: valid-scene full install + uninstall` (mp4+jpg gone, RENDER_ASSETS_DIR gone verified) | install.e2e.test.mjs | REAL |
 | 27 | route error trio (non-zip, oversize, unknown catalogId) | DEFERRED-BY-DESIGN | M4 API routes scope — install route does not exist yet. Deferred to **M4**. | — | M4 |
@@ -141,18 +141,19 @@ All 92 pass as of this commit.
 
 ## 7. M2 coverage verdict
 
-**26 of 29 M2-scoped §12 matrix rows are covered by existing tests in the installer suite.**
+**26 of the 29 M2-scoped §12/§15.14/§16.4 matrix rows are covered; 3 are deferred to named later milestones.**
 
-The 3 intentionally deferred rows are:
+26 covered + 3 deferred = 29. The split is exact (no double-counting).
+
+The 3 deferred rows are:
 
 | Row | Deferred to | Reason |
 |-----|------------|--------|
-| enumeration-backfill identical-render check (§15.14 row 24) | M3 | Requires a real render output baseline and diff tooling; the resolver unit tests in the remotion suite cover the contract, but the pixel-identical check needs the marketplace build pipeline |
 | route error trio: non-zip, oversize, unknown catalogId (§15.14 row 27) | M4 | API routes do not exist yet; this is a network/route test, not an engine test |
-| deterministic-zip double-build hash stability (§15.14 row 28) | M3 | `build-marketplace-index.mjs` is M3 scope; determinism test requires that script |
+| deterministic-zip double-build hash stability (§15.14 row 28) | M3 | `build-marketplace-index.mjs` is M3 scope; the determinism test requires that script |
 | scaffold-passes-doctor CI test (§15.14 row 29) | M5 | Scaffold generator is M5 scope |
 
-Note: §15.14 lists 4 items in the "deferred" column (rows 24, 27, 28, 29), not 3 — the §12 total remains at 29 because rows 24 and 29 belong to the same "enumeration-backfill + scaffold" cluster originally counted as separate entries. Counting precisely from the spec text: 26 M2-scoped rows covered, 3 deferred to named milestones (M3 ×2, M4 ×1, M5 ×1 counting the scaffold item separately = 4 deferred items in 3 milestone buckets).
+The enumeration-backfill identical-render check (row 24) is **NOT** in this deferred list — it was proven IN M2 by the eyes-on render gate (Task 2 Step 5): the before/after PNGs are sha256-identical (`6c5e18de…01917c`), so it counts toward the 26 covered. (An earlier draft of this audit mis-filed it as M3-deferred alongside deterministic-zip; corrected here.)
 
 **Total installer-suite test count: 92 (all passing).**
 
