@@ -94,6 +94,76 @@ def _reapprove(sess, states, on_stage):
         store.upsert_gate_state(sess.conn, sess.id, g, restored, now=_now())
 
 
+def preview_reopen(sess, gate):
+    """Read-only blast radius for the §4.1 amber sheet: which stages would
+    re-run and which gates go stale. Scene-level pin survival detail lands in
+    M5 (overrides tables know the pins); M6 composes the sheet copy."""
+    from session import stages as stages_mod
+    owned = [s for s, g in gates.GATE_FOR_STAGE.items() if g == gate]
+    down = set()
+    for s in owned:
+        down.update(d for d in stages_mod.downstream(s) if d != "render")
+    ran = [s for s in stages_mod.STAGE_ORDER
+           if s in down and store.get_stage(sess.conn, sess.id, s) is not None]
+    states = store.get_gate_states(sess.conn, sess.id)
+    return {"gate": gate,
+            "reruns": ran,
+            "staleGates": [g for g in gates.downstream_gates(gate) if g in states]}
+
+
+def edit(sess, stage, op):
+    """A gated edit. At an approved gate this is the §4.1 reopen: apply WITHOUT
+    re-deriving (edits accumulate; Re-approve pays); when the blast radius is
+    EMPTY (nothing downstream has run — ruling OV-11) it's plain v2 behavior,
+    no sheet, no Re-approve. Voice edits route to set_voice (ruling OV-13 —
+    voice is regenerate-shaped, engine.edit has no voice handler). The
+    blast-radius sheet's Confirm is what calls this; Cancel never reaches
+    the backend."""
+    if stage == "voice":
+        return set_voice(sess, voice=op["voice"], speed=op.get("speed", 1.0))
+    gate = gates.GATE_FOR_STAGE[stage]
+    states = store.get_gate_states(sess.conn, sess.id)
+    if states.get(gate) is None:
+        # 1A corollary: a stage may have run inside an earlier segment before
+        # its own gate row exists (assemble at the scenes gate) — that's a
+        # frontier edit, not an error
+        if store.get_stage(sess.conn, sess.id, stage) is None:
+            raise ValueError(f"gate {gate!r} has not been reached; nothing to edit")
+        sess.engine.edit(stage, op)
+        return view(sess)
+    if not preview_reopen(sess, gate)["reruns"]:    # OV-11: empty blast radius
+        sess.engine.edit(stage, op, rederive=False) # frontier: apply, no reopen, no rederive
+        if stage == "assemble":                     # assemble edits must keep spec.json current
+            sess.engine.materialize_spec()
+        return view(sess)
+    sess.engine.edit(stage, op, rederive=False)     # reopen: defer
+    _reopen(sess, gate)
+    return view(sess)
+
+
+def set_voice(sess, *, voice, speed=1.0):
+    """Deferred voice/speed change at a reopened Voice gate. Voice has no edit
+    handler (it's regenerate-shaped) — mirror api.regenerate's first half
+    (backend/session/api.py:50-65) without the re-derive."""
+    from pipeline import projects as projects_mod
+    from session import job_ctx
+    projects_mod.write_voice(job_ctx.REPO_ROOT, sess.id, voice=voice, speed=speed)
+    row = store.get_stage(sess.conn, sess.id, "voice")
+    store.upsert_stage(sess.conn, sess.id, "voice", status="stale", input_hash=None,
+                       output_json=row["output_json"] if row else None, now=_now())
+    sess.engine.invalidate("voice")
+    _reopen(sess, "voice")
+    return view(sess)
+
+
+def _reopen(sess, gate):
+    store.upsert_gate_state(sess.conn, sess.id, gate, "awaiting_approval", now=_now())
+    states = store.get_gate_states(sess.conn, sess.id)
+    for g in gates.downstream_gates(gate):
+        if g in states:                             # only gates already reached
+            store.upsert_gate_state(sess.conn, sess.id, g, "stale", now=_now())
+
+
 def start(sess, *, auto_run=False, on_stage=None):
     """Entry from Generate: run to the script gate — or straight through on
     auto-run (PRD §4: approve everything with defaults; same code path)."""

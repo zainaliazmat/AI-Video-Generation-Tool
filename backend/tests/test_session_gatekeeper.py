@@ -1,4 +1,4 @@
-"""Studio v3 gatekeeper — Task 4 + Task 5 tests."""
+"""Studio v3 gatekeeper — Task 4, Task 5, and Task 6 tests."""
 from __future__ import annotations
 
 import pytest
@@ -135,3 +135,88 @@ def test_approve_resumes_after_crash_mid_segment(tmp_path, monkeypatch):
     g = store.get_gate_states(sess.conn, sess.id)
     assert g["scenes"]["state"] == "awaiting_approval"
     assert calls["voice"] == 1                        # cache hit — not re-run
+
+
+# ---------------------------------------------------------------------------
+# Task 6: gatekeeper.edit — §4.1 reopen + Re-approve + deferred voice change
+# ---------------------------------------------------------------------------
+
+def test_gated_edit_reopens_and_defers(tmp_path, monkeypatch):
+    calls = _fakes(monkeypatch)
+    sess = _at_assemble_gate(tmp_path, monkeypatch)    # 3 approvals done
+    before = dict(calls)
+    gatekeeper.edit(sess, "script", _edit_beat_op(0, "Edited line."))
+    g = store.get_gate_states(sess.conn, sess.id)
+    assert g["script"]["state"] == "awaiting_approval"      # reopened
+    assert g["voice"]["state"] == "stale" and g["voice"]["approved_at"]
+    assert g["scenes"]["state"] == "stale"
+    assert g["assemble"]["state"] == "stale" and not g["assemble"]["approved_at"]
+    assert calls == before                                   # nothing re-derived
+
+
+def test_second_edit_accumulates_without_confirm_state_change(tmp_path, monkeypatch):
+    calls = _fakes(monkeypatch)
+    sess = _at_assemble_gate(tmp_path, monkeypatch)
+    gatekeeper.edit(sess, "script", _edit_beat_op(0, "Edit one."))
+    snapshot = store.get_gate_states(sess.conn, sess.id)
+    gatekeeper.edit(sess, "script", _edit_beat_op(1, "Edit two."))
+    assert {k: v["state"] for k, v in store.get_gate_states(sess.conn, sess.id).items()} \
+        == {k: v["state"] for k, v in snapshot.items()}
+
+
+def test_reapprove_pays_once_and_restores(tmp_path, monkeypatch):
+    calls = _fakes(monkeypatch)
+    sess = _at_assemble_gate(tmp_path, monkeypatch)
+    gatekeeper.edit(sess, "script", _edit_beat_op(0, "Edit one."))
+    gatekeeper.edit(sess, "script", _edit_beat_op(1, "Edit two."))
+    before = dict(calls)
+    gatekeeper.approve(sess, "script")                       # Re-approve
+    g = store.get_gate_states(sess.conn, sess.id)
+    assert g["script"]["state"] == "approved"
+    assert g["voice"]["state"] == "approved"                 # prior approval stands
+    assert g["scenes"]["state"] == "approved"
+    assert g["assemble"]["state"] == "awaiting_approval"     # frontier restored
+    assert calls["voice"] == before["voice"] + 1             # ONE payment for two edits
+
+
+def test_frontier_edit_stays_v2(tmp_path, monkeypatch):
+    calls = _fakes(monkeypatch)
+    sess = _started(tmp_path, monkeypatch)               # script gate awaiting
+    gatekeeper.edit(sess, "script", _edit_beat_op(0, "Pre-approval edit."))
+    g = store.get_gate_states(sess.conn, sess.id)
+    assert g["script"]["state"] == "awaiting_approval"  # no reopen drama
+    assert store.get_stage(sess.conn, sess.id, "voice") is None
+
+
+def test_empty_blast_radius_edit_skips_reopen(tmp_path, monkeypatch):
+    # ruling OV-11: script approved, voice gate awaiting (empty segment,
+    # nothing downstream RAN) — the edit is free, no reopen, no Re-approve
+    calls = _fakes(monkeypatch)
+    sess = _started(tmp_path, monkeypatch)
+    gatekeeper.approve(sess, "script")                   # voice awaiting
+    gatekeeper.edit(sess, "script", _edit_beat_op(0, "Still free."))
+    g = store.get_gate_states(sess.conn, sess.id)
+    assert g["script"]["state"] == "approved"            # NOT reopened
+    assert g["voice"]["state"] == "awaiting_approval"    # NOT stale
+
+
+def test_set_voice_defers_like_an_edit(tmp_path, monkeypatch):
+    calls = _fakes(monkeypatch)
+    sess = _at_assemble_gate(tmp_path, monkeypatch)
+    # Prevent set_voice from writing to the real repo filesystem
+    write_voice_calls = []
+    monkeypatch.setattr(
+        "pipeline.projects.write_voice",
+        lambda repo_root, sid, *, voice, speed: write_voice_calls.append((repo_root, sid, voice, speed)),
+    )
+    before = dict(calls)
+    gatekeeper.set_voice(sess, voice="af_bella", speed=1.1)
+    g = store.get_gate_states(sess.conn, sess.id)
+    assert g["voice"]["state"] == "awaiting_approval"
+    assert g["scenes"]["state"] == "stale"
+    assert store.get_stage(sess.conn, sess.id, "voice")["status"] == "stale"
+    assert calls == before
+    # write_voice was called with the right args
+    assert len(write_voice_calls) == 1
+    _repo_root, _sid, voice_arg, speed_arg = write_voice_calls[0]
+    assert voice_arg == "af_bella" and speed_arg == 1.1
