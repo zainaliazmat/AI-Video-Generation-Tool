@@ -149,6 +149,10 @@ def edit(sess, stage, op):
         reopened = next(
             (g for g in gates.GATE_ORDER
              if states.get(g, {}).get("state") == "awaiting_approval"), None)
+        if reopened is None:
+            raise RuntimeError(
+                f"gate {gate!r} is stale but no gate is awaiting_approval "
+                f"in {sorted(states)!r} — gate-state invariant violated")
         raise ValueError(
             f"gate {gate!r} is stale (view-only) — re-approve gate {reopened!r} first")
     if row["state"] == "approved" or row["approved_at"]:
