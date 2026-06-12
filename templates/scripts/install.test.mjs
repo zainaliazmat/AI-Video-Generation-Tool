@@ -1,11 +1,13 @@
-import {mkdirSync, writeFileSync, rmSync, existsSync} from 'node:fs';
+import {mkdirSync, writeFileSync, rmSync, existsSync, cpSync, readdirSync} from 'node:fs';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {beforeEach, describe, expect, it} from 'vitest';
+import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {
   InstallError, listInstalled, installedState, clearLastError, scanReferences,
   _acquireLock, _releaseLock, _writeLastError, _sweepStale,
+  _runValidation, STAGING_DIR, TEMPLATES_DIR, SUPPORTED_API_VERSION,
 } from './install.mjs';
+import {zipFixture, zipRaw} from './fixtures/helpers.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const templatesDir = resolve(__dirname, '..');
@@ -132,5 +134,325 @@ describe('reference scan (§15.9/§17.1)', () => {
     try {
       expect(() => scanReferences('anything')).not.toThrow();
     } finally { rmSync(proj, {recursive: true, force: true}); }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Validation pipeline (_runValidation) — stages 1–5
+// ---------------------------------------------------------------------------
+
+const FIX = join(__dirname, 'fixtures', 'valid-scene');
+
+/** Assert that a promise rejects with an InstallError at the expected stage. */
+const expectStage = async (promise, stage, msgPart) => {
+  const err = await promise.then(() => null, (e) => e);
+  expect(err, 'expected a rejection').toBeTruthy();
+  expect(err.stage).toBe(stage);
+  if (msgPart) expect(err.message).toContain(msgPart);
+};
+
+/** After each describe block that runs _runValidation, assert no stale run dirs linger. */
+function assertNoRunDirs() {
+  if (!existsSync(STAGING_DIR)) return;
+  const runDirs = readdirSync(STAGING_DIR, {withFileTypes: true})
+    .filter((e) => e.isDirectory() && e.name.startsWith('run-'))
+    .map((e) => e.name);
+  expect(runDirs, 'stale run dirs in .staging — self-clean contract broken').toEqual([]);
+}
+
+// ---------------------------------------------------------------------------
+// Stage 1: unpack
+// ---------------------------------------------------------------------------
+describe('stage 1 unpack', () => {
+  afterEach(assertNoRunDirs);
+
+  it('zip-slip entry with .. path → InstallError stage=unpack containing ..', async () => {
+    // Use zipRaw: AdmZip normalizes '../evil.txt' to 'evil.txt' at write time;
+    // Python's zipfile preserves the raw entry name so the validator sees '..'
+    const zip = zipRaw([['fixture-card/manifest.json', '{}'], ['../evil.txt', 'bad']]);
+    await expectStage(_runValidation(zip), 'unpack', '..');
+  });
+
+  it('zip entry with absolute /etc/evil path → InstallError stage=unpack', async () => {
+    // Use zipRaw so the leading '/' is preserved in the stored entry name
+    const zip = zipRaw([['fixture-card/manifest.json', '{}'], ['/etc/evil', 'bad']]);
+    await expectStage(_runValidation(zip), 'unpack');
+  });
+
+  it('two top-level folders → InstallError stage=unpack containing top-level', async () => {
+    const AdmZip = (await import('adm-zip')).default;
+    const zip = new AdmZip();
+    zip.addFile('alpha/manifest.json', Buffer.from('{}'));
+    zip.addFile('beta/manifest.json', Buffer.from('{}'));
+    const {mkdtempSync} = await import('node:fs');
+    const {tmpdir} = await import('node:os');
+    const out = join(mkdtempSync(join(tmpdir(), 'fixzip-')), 'two.zip');
+    zip.writeZip(out);
+    await expectStage(_runValidation(out), 'unpack', 'top-level');
+  });
+
+  it('2001 entries → InstallError stage=unpack containing entries', async () => {
+    const AdmZip = (await import('adm-zip')).default;
+    const zip = new AdmZip();
+    // Need 2001 entries all under one top-level folder
+    for (let i = 0; i < 2001; i++) {
+      zip.addFile(`fixture-card/pad-${i}.txt`, Buffer.from('x'));
+    }
+    const {mkdtempSync} = await import('node:fs');
+    const {tmpdir} = await import('node:os');
+    const out = join(mkdtempSync(join(tmpdir(), 'fixzip-')), 'big.zip');
+    zip.writeZip(out);
+    await expectStage(_runValidation(out), 'unpack', 'entries');
+  });
+
+  it('one 201MB zeros entry → InstallError stage=unpack containing decompressed', async () => {
+    const AdmZip = (await import('adm-zip')).default;
+    const zip = new AdmZip();
+    // 201 MB of zeros
+    zip.addFile('fixture-card/bomb.bin', Buffer.alloc(201 * 1024 * 1024));
+    const {mkdtempSync} = await import('node:fs');
+    const {tmpdir} = await import('node:os');
+    const out = join(mkdtempSync(join(tmpdir(), 'fixzip-')), 'bomb.zip');
+    zip.writeZip(out);
+    await expectStage(_runValidation(out), 'unpack', 'decompressed');
+  });
+
+  it('plain text file (not a zip) → InstallError stage=unpack', async () => {
+    const {mkdtempSync, writeFileSync: wf} = await import('node:fs');
+    const {tmpdir} = await import('node:os');
+    const out = join(mkdtempSync(join(tmpdir(), 'fixzip-')), 'fake.zip');
+    wf(out, 'this is not a zip');
+    await expectStage(_runValidation(out), 'unpack');
+  });
+
+  it('directory source validates in place — returns manifest id fixture-card', async () => {
+    const result = await _runValidation(FIX);
+    expect(result.manifest.id).toBe('fixture-card');
+    // cleanup the run dir
+    rmSync(result.runDir, {recursive: true, force: true});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stage 2: envelope
+// ---------------------------------------------------------------------------
+describe('stage 2 envelope', () => {
+  afterEach(assertNoRunDirs);
+
+  it('missing required field kind → InstallError stage=envelope containing kind', async () => {
+    const zip = zipFixture(FIX, {mutateManifest: (m) => { delete m.kind; return m; }});
+    await expectStage(_runValidation(zip), 'envelope', 'kind');
+  });
+
+  it('unknown field surprise:true → InstallError stage=envelope containing surprise', async () => {
+    const zip = zipFixture(FIX, {mutateManifest: (m) => { m.surprise = true; return m; }});
+    await expectStage(_runValidation(zip), 'envelope', 'surprise');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Contract (§15.13 / §4.4)
+// ---------------------------------------------------------------------------
+describe('contract checks (§15.13)', () => {
+  afterEach(assertNoRunDirs);
+
+  it('missing license for non-core → InstallError stage=contract containing license', async () => {
+    const zip = zipFixture(FIX, {mutateManifest: (m) => { delete m.license; return m; }});
+    await expectStage(_runValidation(zip), 'contract', 'license');
+  });
+
+  it('assets ship without CREDITS.json → InstallError stage=contract containing CREDITS', async () => {
+    // Copy fixture to tmp, remove CREDITS.json, then zip
+    const {mkdtempSync} = await import('node:fs');
+    const {tmpdir} = await import('node:os');
+    const tmp = mkdtempSync(join(tmpdir(), 'fix-nocredits-'));
+    cpSync(FIX, tmp, {recursive: true});
+    rmSync(join(tmp, 'assets', 'CREDITS.json'), {force: true});
+    const zip = zipFixture(tmp);
+    rmSync(tmp, {recursive: true, force: true});
+    await expectStage(_runValidation(zip), 'contract', 'CREDITS');
+  });
+
+  it('undeclared asset file in assets/ → InstallError stage=contract containing the filename', async () => {
+    const zip = zipFixture(FIX, {extraEntries: [['fixture-card/assets/sneaky.bin', 'bad']]});
+    await expectStage(_runValidation(zip), 'contract', 'sneaky.bin');
+  });
+
+  it('declared ghost asset not present in package → InstallError stage=contract containing ghost.png', async () => {
+    const zip = zipFixture(FIX, {mutateManifest: (m) => {
+      m.assets = [...(m.assets ?? []), 'assets/ghost.png'];
+      return m;
+    }});
+    await expectStage(_runValidation(zip), 'contract', 'ghost.png');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stage 3: id
+// ---------------------------------------------------------------------------
+describe('stage 3 id', () => {
+  afterEach(assertNoRunDirs);
+
+  it('top folder name differs from manifest id → InstallError stage=id containing folder', async () => {
+    const zip = zipFixture(FIX, {topName: 'other-name'}); // manifest id still fixture-card
+    await expectStage(_runValidation(zip), 'id', 'folder');
+  });
+
+  it('id with invalid chars (Bad_ID) → InstallError stage=id', async () => {
+    const zip = zipFixture(FIX, {topName: 'Bad_ID', mutateManifest: (m) => { m.id = 'Bad_ID'; return m; }});
+    await expectStage(_runValidation(zip), 'id');
+  });
+
+  it('reserved id "scripts" → InstallError stage=id containing reserved', async () => {
+    const zip = zipFixture(FIX, {topName: 'scripts', mutateManifest: (m) => { m.id = 'scripts'; return m; }});
+    await expectStage(_runValidation(zip), 'id', 'reserved');
+  });
+
+  it('collision with existing "hook" (no update) → InstallError stage=id', async () => {
+    const zip = zipFixture(FIX, {topName: 'hook', mutateManifest: (m) => { m.id = 'hook'; return m; }});
+    await expectStage(_runValidation(zip), 'id');
+  });
+
+  it('update on core template → InstallError stage=id containing core', async () => {
+    const zip = zipFixture(FIX, {
+      topName: 'hook',
+      mutateManifest: (m) => { m.id = 'hook'; m.version = '99.0.0'; return m; },
+    });
+    await expectStage(_runValidation(zip, {update: true}), 'id', 'core');
+  });
+
+  it('manifest-less disk dir collision: rejects without update and with update', async () => {
+    const ghostDir = join(TEMPLATES_DIR, 'zzz-ghost-dir');
+    mkdirSync(ghostDir, {recursive: true});
+    try {
+      const zip1 = zipFixture(FIX, {topName: 'zzz-ghost-dir', mutateManifest: (m) => { m.id = 'zzz-ghost-dir'; return m; }});
+      const zip2 = zipFixture(FIX, {topName: 'zzz-ghost-dir', mutateManifest: (m) => { m.id = 'zzz-ghost-dir'; return m; }});
+      await expectStage(_runValidation(zip1), 'id');
+      await expectStage(_runValidation(zip2, {update: true}), 'id');
+    } finally {
+      rmSync(ghostDir, {recursive: true, force: true});
+    }
+  });
+
+  it('consumes "enumeration" conflicts → InstallError stage=id containing consumes', async () => {
+    const zip = zipFixture(FIX, {mutateManifest: (m) => { m.consumes = 'enumeration'; return m; }});
+    await expectStage(_runValidation(zip), 'id', 'consumes');
+  });
+
+  it('consumes conflict with overrideCapability:true → passes (cleanup runDir)', async () => {
+    const zip = zipFixture(FIX, {mutateManifest: (m) => { m.consumes = 'enumeration'; return m; }});
+    const result = await _runValidation(zip, {overrideCapability: true});
+    rmSync(result.runDir, {recursive: true, force: true});
+  });
+
+  describe('update ladder (§15.3)', () => {
+    const installedDir = join(TEMPLATES_DIR, 'fixture-card');
+    beforeEach(() => { cpSync(FIX, installedDir, {recursive: true}); });
+    afterEach(() => { rmSync(installedDir, {recursive: true, force: true}); });
+
+    it('version 1.1.0 with update:true → passes, returns existing 1.0.0', async () => {
+      const zip = zipFixture(FIX, {mutateManifest: (m) => { m.version = '1.1.0'; return m; }});
+      const result = await _runValidation(zip, {update: true});
+      expect(result.existing).toBeTruthy();
+      expect(result.existing.version).toBe('1.0.0');
+      rmSync(result.runDir, {recursive: true, force: true});
+    });
+
+    it('version 0.9.0 with update → InstallError stage=id containing downgrade', async () => {
+      const zip = zipFixture(FIX, {mutateManifest: (m) => { m.version = '0.9.0'; return m; }});
+      await expectStage(_runValidation(zip, {update: true, confirmReplace: true}), 'id', 'downgrade');
+    });
+
+    it('same version update only → InstallError stage=id containing confirm', async () => {
+      const zip = zipFixture(FIX); // version 1.0.0 == installed
+      await expectStage(_runValidation(zip, {update: true}), 'id', 'confirm');
+    });
+
+    it('same version update+confirmReplace → passes', async () => {
+      const zip = zipFixture(FIX); // version 1.0.0
+      const result = await _runValidation(zip, {update: true, confirmReplace: true});
+      expect(result.manifest.version).toBe('1.0.0');
+      rmSync(result.runDir, {recursive: true, force: true});
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stage 4: compat
+// ---------------------------------------------------------------------------
+describe('stage 4 compat', () => {
+  afterEach(assertNoRunDirs);
+
+  it('apiVersion "2" → InstallError stage=compat containing apiVersion', async () => {
+    const zip = zipFixture(FIX, {mutateManifest: (m) => { m.apiVersion = '2'; return m; }});
+    await expectStage(_runValidation(zip), 'compat', 'apiVersion');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stage 5: schema
+// ---------------------------------------------------------------------------
+describe('stage 5 schema', () => {
+  afterEach(assertNoRunDirs);
+
+  it('stale inputSchema (bogus property injected) → InstallError stage=schema containing stale', async () => {
+    const zip = zipFixture(FIX, {mutateManifest: (m) => {
+      m.inputSchema = {...m.inputSchema, bogus: 'injected'};
+      return m;
+    }});
+    await expectStage(_runValidation(zip), 'schema', 'stale');
+  });
+
+  it('sampleProps do not satisfy inputSchema → InstallError stage=schema containing sampleProps', async () => {
+    const zip = zipFixture(FIX, {mutateManifest: (m) => {
+      m.sampleProps = {wrong: true};
+      return m;
+    }});
+    await expectStage(_runValidation(zip), 'schema', 'sampleProps');
+  });
+
+  it('transition kind (no schema.ts) — regen skipped, sampleProps validated, passes', async () => {
+    // Build a tmp fixture dir for a transition (no schema.ts)
+    const {mkdtempSync} = await import('node:fs');
+    const {tmpdir} = await import('node:os');
+    const tmpFix = mkdtempSync(join(tmpdir(), 'fix-transition-'));
+    const presentationTsx = `import React from 'react';
+import {AbsoluteFill} from 'remotion';
+import type {TransitionPresentation, TransitionPresentationComponentProps} from '@remotion/transitions';
+
+type P = Record<string, unknown>;
+const Presentation: React.FC<TransitionPresentationComponentProps<P>> = ({children, presentationProgress, presentationDirection}) => {
+  const reveal = presentationDirection === 'entering' ? presentationProgress : 1;
+  return (
+    <AbsoluteFill style={{clipPath: presentationDirection === 'entering' ? \`inset(0 \${(1 - reveal) * 100}% 0 0)\` : undefined}}>
+      {children}
+    </AbsoluteFill>
+  );
+};
+const factory = (_props?: P): TransitionPresentation<P> => ({component: Presentation, props: {}});
+export default factory;
+`;
+    writeFileSync(join(tmpFix, 'presentation.tsx'), presentationTsx);
+    writeFileSync(join(tmpFix, 'manifest.json'), JSON.stringify({
+      id: 'fixture-wipe',
+      name: 'Fixture Wipe',
+      version: '1.0.0',
+      author: 'fixture-author',
+      apiVersion: '1',
+      kind: 'transition',
+      description: 'Transition fixture.',
+      tags: ['fixture'],
+      license: 'MIT',
+      inputSchema: {'type': 'object', 'additionalProperties': false},
+      sampleProps: {},
+      durationFrames: {min: 10, max: 40},
+    }, null, 2) + '\n');
+    try {
+      const result = await _runValidation(tmpFix);
+      expect(result.manifest.kind).toBe('transition');
+      rmSync(result.runDir, {recursive: true, force: true});
+    } finally {
+      rmSync(tmpFix, {recursive: true, force: true});
+    }
   });
 });
