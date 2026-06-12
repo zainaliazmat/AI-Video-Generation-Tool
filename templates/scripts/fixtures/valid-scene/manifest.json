@@ -1,0 +1,35 @@
+{
+  "id": "fixture-card",
+  "name": "Fixture Card",
+  "version": "1.0.0",
+  "author": "fixture-author",
+  "apiVersion": "1",
+  "kind": "scene",
+  "description": "Asset-bearing install fixture.",
+  "tags": [
+    "fixture"
+  ],
+  "license": "MIT",
+  "assets": [
+    "assets/dot.png"
+  ],
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "label": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "label"
+    ],
+    "additionalProperties": false
+  },
+  "sampleProps": {
+    "label": "FIXTURE"
+  },
+  "durationFrames": {
+    "min": 30,
+    "max": 120
+  }
+}
