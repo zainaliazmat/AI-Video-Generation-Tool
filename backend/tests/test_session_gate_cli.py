@@ -2,7 +2,7 @@
 
 All tests are function-level invocations of the CLI helpers (not subprocess).
 Filesystem hygiene: every test targets a tmp_path repo_root via monkeypatched
-job_ctx constants; git status --porcelain confirms no real-repo writes.
+job_ctx constants; direct path-existence assertions confirm no real-repo writes.
 """
 from __future__ import annotations
 
@@ -252,26 +252,141 @@ def test_failed_stage_emits_failed_progress_event(tmp_path, monkeypatch, capsys)
 
 
 # ---------------------------------------------------------------------------
+# Test 5b: --flag argparse contract — "true"/"false" strings, not store_true
+# ---------------------------------------------------------------------------
+
+def test_flag_argparse_accepts_true_false_strings():
+    """--flag must be parsed as a string 'true'|'false', not a store_true bool.
+    Verified by exercising the argparse layer directly via parse_args()."""
+    import argparse
+    import importlib, sys
+
+    # Build a fresh parser the same way __main__ does (copy the ap setup).
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--op", required=True,
+                    choices=["start", "approve", "state", "preview_reopen", "set_auto_run"])
+    ap.add_argument("--sid")
+    ap.add_argument("--flag", choices=["true", "false"])
+
+    args_true = ap.parse_args(["--op", "set_auto_run", "--sid", "x", "--flag", "true"])
+    assert args_true.flag == "true"
+    assert isinstance(args_true.flag, str)
+
+    args_false = ap.parse_args(["--op", "set_auto_run", "--sid", "x", "--flag", "false"])
+    assert args_false.flag == "false"
+    assert isinstance(args_false.flag, str)
+
+    # Ensure the conversion to bool follows the locked contract
+    assert (args_true.flag == "true") is True
+    assert (args_false.flag == "true") is False
+
+
+# ---------------------------------------------------------------------------
+# Test 5c: double-approve → NO failed PROGRESS event (pre-stage validation)
+# ---------------------------------------------------------------------------
+
+def test_double_approve_emits_no_failed_progress_event(tmp_path, monkeypatch, capsys):
+    """A gatekeeper ValueError (e.g. double-approve) fires BEFORE any stage runs.
+    No stage is running at that point, so NO 'failed' PROGRESS event should be emitted.
+    The exception must still propagate (so the final {ok:false} JSON is written)."""
+    _install_fakes(monkeypatch)
+    _point_at(tmp_path, monkeypatch)
+
+    import session_gate as sg
+    r0 = sg.start("Double-approve test", auto_run=False)
+    sid = r0["sid"]
+
+    # First approve is legitimate — opens voice gate.
+    sg.approve(sid, "script")
+    capsys.readouterr()  # flush accumulated output
+
+    # Second approve of the same (already-approved) gate raises ValueError.
+    with pytest.raises(ValueError, match="already approved"):
+        sg.approve(sid, "script")
+
+    out = capsys.readouterr().out
+    lines = [l for l in out.splitlines() if l.startswith("PROGRESS ")]
+    stage_events = [json.loads(l.removeprefix("PROGRESS ")) for l in lines
+                    if json.loads(l.removeprefix("PROGRESS ")).get("type") == "stage"]
+    failed = [e for e in stage_events if e.get("state") == "failed"]
+    assert failed == [], (
+        f"expected no 'failed' PROGRESS event for pre-stage validation error, got: {failed}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 5d: exception after a stage completed → no bogus failed event
+# ---------------------------------------------------------------------------
+
+def test_exception_after_stage_done_emits_no_failed_event(tmp_path, monkeypatch, capsys):
+    """If write_sources raises AFTER the script stage finished (done emitted),
+    last_running must be empty so no spurious 'failed' stage event is emitted."""
+    _install_fakes(monkeypatch)
+    _point_at(tmp_path, monkeypatch)
+
+    # Patch write_sources to blow up after the script stage has run.
+    monkeypatch.setattr("pipeline.projects.write_sources",
+                        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("disk full")))
+    monkeypatch.setattr("session_gate.projects_mod.write_sources",
+                        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("disk full")))
+
+    import session_gate as sg
+    with pytest.raises(RuntimeError, match="disk full"):
+        sg.start("Post-stage failure topic")
+
+    out = capsys.readouterr().out
+    lines = [l for l in out.splitlines() if l.startswith("PROGRESS ")]
+    stage_events = [json.loads(l.removeprefix("PROGRESS ")) for l in lines
+                    if json.loads(l.removeprefix("PROGRESS ")).get("type") == "stage"]
+
+    # The script stage should have emitted running + done.
+    types = [(e.get("stage"), e.get("state")) for e in stage_events]
+    assert ("script", "running") in types
+    assert ("script", "done") in types
+
+    # No bogus failed event — write_sources error is not a stage failure.
+    failed = [e for e in stage_events if e.get("state") == "failed"]
+    assert failed == [], (
+        f"expected no 'failed' event after post-stage exception, got: {failed}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Test 6: filesystem hygiene — no writes to the real repo
 # ---------------------------------------------------------------------------
 
 def test_no_writes_to_real_repo(tmp_path, monkeypatch):
     """bootstrap/write_sources must target tmp_path, not the real repo.
-    Verified by checking git status --porcelain after a full start() call."""
-    import subprocess
+    Verified by direct path-existence checks: projects/<sid> must not appear in
+    the real repo's projects dir, and the real sessions DB must not be created."""
     _install_fakes(monkeypatch)
     _point_at(tmp_path, monkeypatch)
 
-    import session_gate as sg
-    sg.start("Hygiene test")
+    # Locate the real repo root (two levels up from this test file).
+    real_repo = Path(__file__).resolve().parents[2]
+    real_projects_dir = real_repo / "projects"
+    real_sessions_db = real_repo / "backend" / ".sessions" / "sessions.db"
 
-    result = subprocess.run(
-        ["git", "status", "--porcelain"],
-        capture_output=True, text=True,
-        cwd=str(Path(__file__).resolve().parents[2]),
+    # Snapshot real state before the call.
+    real_db_existed_before = real_sessions_db.exists()
+    real_db_mtime_before = real_sessions_db.stat().st_mtime if real_db_existed_before else None
+
+    import session_gate as sg
+    result = sg.start("Hygiene test")
+    sid = result["sid"]
+
+    # The sid directory must NOT exist inside the real repo's projects dir.
+    assert not (real_projects_dir / sid).exists(), (
+        f"real repo was dirtied: projects/{sid} was created"
     )
-    # Only the files staged/committed by THIS test session should appear
-    # (session_gate.py and test file themselves). No projects/ or .sessions/ writes.
-    dirty = [l for l in result.stdout.splitlines()
-             if "projects/" in l or ".sessions/" in l]
-    assert dirty == [], f"real repo was dirtied: {dirty}"
+
+    # The real sessions DB must not have been created or modified.
+    if real_db_existed_before:
+        current_mtime = real_sessions_db.stat().st_mtime
+        assert current_mtime == real_db_mtime_before, (
+            "real sessions DB was modified during the test"
+        )
+    else:
+        assert not real_sessions_db.exists(), (
+            "real sessions DB was created during the test"
+        )

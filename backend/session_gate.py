@@ -74,6 +74,8 @@ def start(topic: str, *, auto_run: bool = False) -> dict:
         if state == "running":
             last_running.clear()
             last_running.append(stage)
+        elif state == "done":
+            last_running.clear()
         _on_stage(stage, state, elapsed)
 
     ctx = job_ctx.build_ctx(topic=topic, sid=sid)
@@ -83,10 +85,11 @@ def start(topic: str, *, auto_run: bool = False) -> dict:
         try:
             view = api.gate_start(sess, auto_run=auto_run, on_stage=on_stage)
         except Exception as exc:
-            stage = last_running[0] if last_running else "unknown"
-            payload: dict = {"type": "stage", "stage": stage, "state": "failed",
-                             "error": str(exc)}
-            print(f"PROGRESS {json.dumps(payload)}", flush=True)
+            if last_running:
+                stage = last_running[0]
+                payload: dict = {"type": "stage", "stage": stage, "state": "failed",
+                                 "error": str(exc)}
+                print(f"PROGRESS {json.dumps(payload)}", flush=True)
             raise
         script_bundle = sess.engine._load_output("script")
         projects_mod.write_sources(job_ctx.REPO_ROOT, sid, script_bundle["script"])
@@ -111,6 +114,8 @@ def approve(sid: str, gate: str, *, voice: str | None = None, speed: float = 1.0
         if state == "running":
             last_running.clear()
             last_running.append(stage)
+        elif state == "done":
+            last_running.clear()
         _on_stage(stage, state, elapsed)
 
     sess = _resume(sid)
@@ -118,10 +123,11 @@ def approve(sid: str, gate: str, *, voice: str | None = None, speed: float = 1.0
         try:
             view = api.gate_approve(sess, gate, on_stage=on_stage)
         except Exception as exc:
-            stage = last_running[0] if last_running else gate
-            payload: dict = {"type": "stage", "stage": stage, "state": "failed",
-                             "error": str(exc)}
-            print(f"PROGRESS {json.dumps(payload)}", flush=True)
+            if last_running:
+                stage = last_running[0]
+                payload: dict = {"type": "stage", "stage": stage, "state": "failed",
+                                 "error": str(exc)}
+                print(f"PROGRESS {json.dumps(payload)}", flush=True)
             raise
         return {"ok": True, "sid": sid, **view}
     finally:
@@ -174,7 +180,8 @@ if __name__ == "__main__":
     ap.add_argument("--auto-run", action="store_true", default=False)
     ap.add_argument("--voice")
     ap.add_argument("--speed", type=float, default=1.0)
-    ap.add_argument("--flag", action="store_true", default=False)
+    ap.add_argument("--flag", choices=["true", "false"],
+                    help="Boolean flag for set_auto_run (pass 'true' or 'false')")
     ap.add_argument("--target-length", type=int, default=60,
                     help="Target video length in seconds (parsed but ignored until M2)")
     args = ap.parse_args()
@@ -199,7 +206,9 @@ if __name__ == "__main__":
         else:  # set_auto_run
             if not args.sid:
                 raise ValueError("--sid is required for set_auto_run")
-            result = set_auto_run(args.sid, args.flag)
+            if args.flag not in ("true", "false"):
+                raise ValueError("--flag must be 'true' or 'false'")
+            result = set_auto_run(args.sid, args.flag == "true")
         print(json.dumps(result))
     except Exception as e:
         print(json.dumps({"ok": False, "error": str(e)}))
