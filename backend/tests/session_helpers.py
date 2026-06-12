@@ -84,9 +84,14 @@ def fakes_with_counts(monkeypatch):
     return calls
 
 
-def mk_session(tmp_path, monkeypatch, sid="s1"):
-    ctx = _full_ctx(tmp_path)
-    return api.create(tmp_path / "s.db", ctx, session_id=sid, topic="Reefs")
+def mk_session(tmp_path, monkeypatch=None, sid="s1"):
+    """Create a fresh session isolated under tmp_path/<sid>/ so two sessions in
+    the same tmp_path do not share spec_out or the database.  monkeypatch is
+    accepted but unused (fakes are installed separately via fakes_with_counts)."""
+    sid_dir = tmp_path / sid
+    sid_dir.mkdir(parents=True, exist_ok=True)
+    ctx = _full_ctx(sid_dir)
+    return api.create(sid_dir / "s.db", ctx, session_id=sid, topic="Reefs")
 
 
 def session_all_done(tmp_path, monkeypatch):

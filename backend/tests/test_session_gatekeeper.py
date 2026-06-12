@@ -252,3 +252,22 @@ def test_set_voice_defers_like_an_edit(tmp_path, monkeypatch):
     assert len(write_voice_calls) == 1
     _repo_root, _sid, voice_arg, speed_arg = write_voice_calls[0]
     assert voice_arg == "af_bella" and speed_arg == 1.1
+
+
+# ---------------------------------------------------------------------------
+# Task 7: auto-run end-to-end equals today's run (PRD §9.M1 acceptance test)
+# ---------------------------------------------------------------------------
+
+def test_auto_run_equals_run_all(tmp_path, monkeypatch):
+    _fakes(monkeypatch)
+    a = _mk_session(tmp_path, sid="gated")
+    gatekeeper.start(a, auto_run=True)
+    b = _mk_session(tmp_path, sid="classic")
+    b.engine.run_all()
+    assert a.engine.ctx.spec_out.read_text() == b.engine.ctx.spec_out.read_text()
+    g = store.get_gate_states(a.conn, a.id)
+    assert all(g[x]["state"] == "approved" for x in ("script", "voice", "scenes"))
+    assert g["assemble"]["state"] == "awaiting_approval"
+    assert store.get_session(a.conn, a.id)["auto_run"] == 1
+
+
