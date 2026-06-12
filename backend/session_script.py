@@ -80,6 +80,7 @@ def _serialize(bundle) -> dict:
         "sources": [{"url": x.url, "title": x.title} for x in (s.sources or [])],
         "verifyReport": s.verify_report or [],
         "factFloor": _floor(s.beats),
+        "bandMiss": s.band_miss,
     }
 
 

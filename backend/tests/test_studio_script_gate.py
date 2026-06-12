@@ -292,6 +292,38 @@ def test_engine_edit_beat_persists_text_and_reruns_downstream(tmp_path, monkeypa
     conn.close()
 
 
+# ---------------------------------------------------------------------------
+# M2 fix: bandMiss surfaced in _serialize (fix(v3-m2): surface bandMiss)
+# ---------------------------------------------------------------------------
+
+def _make_bundle(beats, band_miss=None):
+    from pipeline import recipe as recipe_stage
+    from schema import Theme
+    script = BeatsScript(title="T", beats=beats, band_miss=band_miss)
+    plan = recipe_stage.plan(script, theme=Theme(), manifests={})
+    return {"script": script, "plan": plan}
+
+
+def test_serialize_with_band_miss_set():
+    """A script bundle with band_miss set serializes with bandMiss carrying {"requested":[...],"got":N}."""
+    import session_script as scli
+    bundle = _make_bundle(
+        [Beat(text="hook"), Beat(text="body"), Beat(text="outro")],
+        band_miss={"requested": [22, 30], "got": 19},
+    )
+    out = scli._serialize(bundle)
+    assert out["bandMiss"] == {"requested": [22, 30], "got": 19}
+
+
+def test_serialize_without_band_miss_is_none():
+    """A script bundle without band_miss serializes with bandMiss as None (key always present)."""
+    import session_script as scli
+    bundle = _make_bundle([Beat(text="hook"), Beat(text="body"), Beat(text="outro")])
+    out = scli._serialize(bundle)
+    assert "bandMiss" in out
+    assert out["bandMiss"] is None
+
+
 def test_engine_drop_beat_shifts_flags(tmp_path, monkeypatch):
     conn = _seed_script_session(tmp_path, [Beat(text="a"), Beat(text="b"), Beat(text="c")])
     for st in ["voice", "timing", "footage", "assemble"]:
