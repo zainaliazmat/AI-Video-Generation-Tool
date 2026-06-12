@@ -150,9 +150,11 @@ Transitions hand-author `inputSchema` (no `schema.ts`; see §3).
 ### schema.ts (content kinds)
 
 Create `schema.ts` and export a zod schema named `schema`.  This is **the single
-source of truth** for your props.  The `gen-manifests` script (run automatically
-before every build/dev server start) reads `schema.ts` and regenerates the
-`inputSchema` field in `manifest.json`.
+source of truth** for your props.  The `gen-manifests` script (run by `npm run
+build` in `templates/`; run it manually with `npm run gen-manifests` after you
+edit `schema.ts`) reads `schema.ts` and regenerates the `inputSchema` field in
+`manifest.json`. It is **not** auto-run on dev-server start, so regenerate and
+re-run `doctor` after any schema change.
 
 ```typescript
 // schema.ts
@@ -379,7 +381,7 @@ Anything else fails `doctor` with:
 ```
 InstallError: imports — disallowed import "lodash" in Component.tsx — v1 templates
 may import only react, react-dom, remotion, @remotion/transitions, zod (the frozen
-surface, §15.6). Relative imports (./…, ../sdk) are allowed.
+import surface, §15.6). Relative imports (./…, ../sdk) are allowed.
 ```
 
 ### Why this rule exists
