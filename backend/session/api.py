@@ -9,6 +9,7 @@ from dataclasses import dataclass
 # alias the engine module so it doesn't clash with the Session.engine field below
 from session import store, stages
 from session import engine as _engine
+from session import gatekeeper
 
 
 @dataclass
@@ -45,6 +46,9 @@ def run_all(sess: Session):
 
 
 def edit(sess: Session, stage, op):
+    # OV-1 seam: gated sessions route through gatekeeper; ungated (v2/autopilot) are byte-identical.
+    if store.get_gate_states(sess.conn, sess.id):
+        return gatekeeper.edit(sess, stage, op)
     return sess.engine.edit(stage, op)
 
 
@@ -73,3 +77,27 @@ def media_provenance(sess: Session):
 
 def close(sess: Session):
     sess.conn.close()
+
+
+# ── v3-M1: gate wrappers (thin delegation to gatekeeper) ────────────────────
+
+def gate_start(sess: Session, *, on_stage=None):
+    return gatekeeper.start(sess, on_stage=on_stage)
+
+def gate_approve(sess: Session, gate, *, on_stage=None):
+    return gatekeeper.approve(sess, gate, on_stage=on_stage)
+
+def gate_edit(sess: Session, stage, op):
+    return gatekeeper.edit(sess, stage, op)
+
+def gate_set_voice(sess: Session, *, voice, speed=1.0):
+    return gatekeeper.set_voice(sess, voice=voice, speed=speed)
+
+def gate_view(sess: Session):
+    return gatekeeper.view(sess)
+
+def gate_set_auto_run(sess: Session, flag: bool):
+    return gatekeeper.set_auto_run_mode(sess, flag)
+
+def gate_preview_reopen(sess: Session, gate):
+    return gatekeeper.preview_reopen(sess, gate)

@@ -60,10 +60,17 @@ def preview(voice: str, *, speed: float = 1.0) -> dict:
 def apply(sid: str, *, voice: str, speed: float = 1.0) -> dict:
     if not tts_stage.is_valid_voice(voice):
         raise ValueError(f"unknown voice {voice!r}")
-    projects_mod.write_voice(job_ctx.REPO_ROOT, sid, voice=voice, speed=speed)
     ctx = job_ctx.build_ctx(topic=_topic_for(sid), sid=sid, voice=voice, speed=speed)
     sess = api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)
     try:
+        from session import store as _store, gatekeeper as _gatekeeper
+        if _store.get_gate_states(sess.conn, sess.id):
+            # Gated session (v3): defer via gatekeeper — gatekeeper.set_voice
+            # writes the voice sidecar and reopens the gate (no re-synthesis).
+            _gatekeeper.set_voice(sess, voice=voice, speed=speed)
+            return {"ok": True, "sid": sid, "voice": voice, "speed": speed}
+        # Ungated session (v2/autopilot): byte-identical original path.
+        projects_mod.write_voice(job_ctx.REPO_ROOT, sid, voice=voice, speed=speed)
         api.regenerate(sess, "voice")  # re-synth + re-time + re-derive spec
         offsets = sess.engine._load_output("voice")
         return {"ok": True, "sid": sid, "voice": voice, "speed": speed,

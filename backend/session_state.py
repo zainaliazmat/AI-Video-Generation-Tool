@@ -63,7 +63,11 @@ def build_state(sid: str) -> dict:
                 "provenance": (None if p is None else {
                     "source": p["source"], "query": p["query"], "rank": p["rank"],
                     "pexelsId": p["pexels_id"], "pexelsUrl": p["pexels_url"]})})
-        return {"sid": sid, "scenes": scenes}
+        gate_states = store.get_gate_states(conn, sid)
+        session_row = store.get_session(conn, sid)
+        return {"sid": sid, "scenes": scenes,
+                "gates": gate_states,
+                "autoRun": bool(session_row["auto_run"])}
     finally:
         conn.close()
 

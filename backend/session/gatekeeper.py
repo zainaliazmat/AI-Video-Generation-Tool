@@ -79,6 +79,14 @@ def approve(sess, gate, *, on_stage=None):
         nxt_state = store.get_gate_states(sess.conn, sess.id).get(nxt)
         if nxt_state is None or nxt_state["state"] != "approved":
             _run_segment(sess, nxt, on_stage)
+    # Auto-run cascade (PRD §4): if the flag is on, the next approvable gate is
+    # not yet approved, and there IS a next approvable gate — recurse to drive it.
+    if nxt in gates.APPROVABLE:
+        row = store.get_session(sess.conn, sess.id)
+        if row["auto_run"]:
+            nxt_cur = store.get_gate_states(sess.conn, sess.id).get(nxt, {})
+            if nxt_cur.get("state") != "approved":
+                return approve(sess, nxt, on_stage=on_stage)
     return view(sess)
 
 
@@ -198,14 +206,20 @@ def _reopen(sess, gate):
             store.upsert_gate_state(sess.conn, sess.id, g, "stale", now=_now())
 
 
+def set_auto_run_mode(sess, flag: bool):
+    """Toggle auto-run mid-flow (PRD §4). Persists immediately; the cascade
+    takes effect on the NEXT approve() call (mid-flow toggle does not
+    retroactively cascade gates already approved)."""
+    store.set_auto_run(sess.conn, sess.id, flag, now=_now())
+
+
 def start(sess, *, auto_run=False, on_stage=None):
     """Entry from Generate: run to the script gate — or straight through on
     auto-run (PRD §4: approve everything with defaults; same code path)."""
-    store.set_auto_run(sess.conn, sess.id, auto_run, now=_now())
+    set_auto_run_mode(sess, auto_run)
     _run_segment(sess, "script", on_stage)
     if auto_run:
-        for gate in gates.APPROVABLE:
-            approve(sess, gate, on_stage=on_stage)
+        approve(sess, "script", on_stage=on_stage)
     return view(sess)
 
 

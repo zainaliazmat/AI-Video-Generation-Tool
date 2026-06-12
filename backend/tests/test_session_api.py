@@ -1,5 +1,6 @@
 """HITL A.1 — the programmatic Session API + resume. A session created then dropped
-mid-flow resumes: the remaining stages advance, the done ones are cache hits."""
+mid-flow resumes: the remaining stages advance, the done ones are cache hits.
+Also covers Task 9 (OV-1): gate-aware seam in api.edit and api gate wrappers."""
 import json
 from pathlib import Path
 
@@ -8,6 +9,13 @@ from pipeline.content import Beat, BeatsScript
 from pipeline.contracts import LineOffset, WordTiming, Clip
 from pipeline import validate as validate_stage
 from session import api, store, executors
+from tests.session_helpers import (
+    fakes_with_counts as _fakes_counted,
+    at_assemble_gate as _at_assemble_gate,
+    session_all_done as _session_all_done,
+    edit_beat_op as _edit_beat_op,
+    started as _started,
+)
 
 _TEMPLATES = Path(__file__).resolve().parents[2] / "templates"
 
@@ -72,3 +80,58 @@ def test_regenerate_forces_fresh_run_and_rederives(tmp_path, monkeypatch):
     assert spec["meta"]["title"] == "Reefs"
     assert store.get_stage(sess.conn, "s1", "assemble")["status"] == "done"   # re-derived
     api.close(sess)
+
+
+# ---------------------------------------------------------------------------
+# Task 9 (OV-1): gate-aware seam in api.edit
+# ---------------------------------------------------------------------------
+
+def test_api_edit_routes_gated_sessions_through_gatekeeper(tmp_path, monkeypatch):
+    calls = _fakes_counted(monkeypatch)
+    sess = _at_assemble_gate(tmp_path, monkeypatch)         # gated session
+    before = dict(calls)
+    api.edit(sess, "script", _edit_beat_op(0, "Via the old route."))
+    assert calls == before                                  # deferred, not re-derived
+    assert store.get_gate_states(sess.conn, sess.id)["script"]["state"] == "awaiting_approval"
+
+
+def test_api_edit_ungated_sessions_byte_identical(tmp_path, monkeypatch):
+    _fakes_counted(monkeypatch)
+    sess = _session_all_done(tmp_path, monkeypatch)         # no gate rows (v2/autopilot)
+    api.edit(sess, "script", _edit_beat_op(0, "Classic."))
+    assert store.get_stage(sess.conn, sess.id, "assemble")["status"] == "done"  # re-derived
+
+
+# ---------------------------------------------------------------------------
+# Task 9 (Step 1): api gate wrappers smoke test
+# ---------------------------------------------------------------------------
+
+def test_api_gate_wrappers_smoke(tmp_path, monkeypatch):
+    _fakes_counted(monkeypatch)
+    sess = _started(tmp_path, monkeypatch)          # already called gatekeeper.start
+    # gate_view returns the right shape
+    v = api.gate_view(sess)
+    assert "gates" in v and "autoRun" in v
+    assert v["gates"]["script"]["state"] == "awaiting_approval"
+    # gate_approve delegates to gatekeeper
+    api.gate_approve(sess, "script")
+    v2 = api.gate_view(sess)
+    assert v2["gates"]["script"]["state"] == "approved"
+    assert v2["gates"]["voice"]["state"] == "awaiting_approval"
+
+
+def test_api_gate_start_shows_script_awaiting(tmp_path, monkeypatch):
+    _fakes_counted(monkeypatch)
+    from tests.session_helpers import mk_session as _mk_session
+    sess = _mk_session(tmp_path, monkeypatch)
+    api.gate_start(sess)
+    v = api.gate_view(sess)
+    assert v["gates"]["script"]["state"] == "awaiting_approval"
+
+
+def test_api_gate_set_auto_run_toggles(tmp_path, monkeypatch):
+    _fakes_counted(monkeypatch)
+    sess = _started(tmp_path, monkeypatch)
+    assert not api.gate_view(sess)["autoRun"]
+    api.gate_set_auto_run(sess, True)
+    assert api.gate_view(sess)["autoRun"] is True

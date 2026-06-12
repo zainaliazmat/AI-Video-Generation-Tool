@@ -1,4 +1,4 @@
-"""Studio v3 gatekeeper — Task 4, Task 5, and Task 6 tests."""
+"""Studio v3 gatekeeper — Task 4, Task 5, Task 6, and Task 9 tests."""
 from __future__ import annotations
 
 import pytest
@@ -9,6 +9,7 @@ from tests.session_helpers import (
     mk_session as _mk_session,
     started as _started,
     at_assemble_gate as _at_assemble_gate,
+    session_all_done as _session_all_done,
     edit_beat_op as _edit_beat_op,
 )
 
@@ -292,5 +293,42 @@ def test_preview_reopen_is_readonly(tmp_path, monkeypatch):
     before = (dict(calls), store.get_gate_states(sess.conn, sess.id))
     gatekeeper.preview_reopen(sess, "script")
     assert (dict(calls), store.get_gate_states(sess.conn, sess.id)) == before
+
+
+# ---------------------------------------------------------------------------
+# Task 9: mid-flow auto-run toggle (PRD §4)
+# ---------------------------------------------------------------------------
+
+def test_auto_run_toggled_mid_flow_cascades_from_next_gate(tmp_path, monkeypatch):
+    _fakes(monkeypatch)
+    sess = _started(tmp_path, monkeypatch)            # halted at script gate
+    gatekeeper.set_auto_run_mode(sess, True)
+    gatekeeper.approve(sess, "script")                # cascades: voice → scenes
+    g = store.get_gate_states(sess.conn, sess.id)
+    assert all(g[x]["state"] == "approved" for x in ("script", "voice", "scenes"))
+    assert g["assemble"]["state"] == "awaiting_approval"
+
+
+def test_set_auto_run_mode_persists_flag(tmp_path, monkeypatch):
+    _fakes(monkeypatch)
+    sess = _started(tmp_path, monkeypatch)
+    assert store.get_session(sess.conn, sess.id)["auto_run"] == 0
+    gatekeeper.set_auto_run_mode(sess, True)
+    assert store.get_session(sess.conn, sess.id)["auto_run"] == 1
+    gatekeeper.set_auto_run_mode(sess, False)
+    assert store.get_session(sess.conn, sess.id)["auto_run"] == 0
+
+
+def test_auto_run_off_does_not_cascade(tmp_path, monkeypatch):
+    # Toggling auto_run off mid-flow leaves approve behaving like before
+    _fakes(monkeypatch)
+    sess = _started(tmp_path, monkeypatch)
+    gatekeeper.set_auto_run_mode(sess, False)
+    gatekeeper.approve(sess, "script")
+    g = store.get_gate_states(sess.conn, sess.id)
+    assert g["script"]["state"] == "approved"
+    assert g["voice"]["state"] == "awaiting_approval"
+    # scenes not open yet
+    assert "scenes" not in g
 
 
