@@ -104,7 +104,7 @@ export function TemplateCard({item, installState, onOpen, onInstall, onDismissEr
         onClick={onOpen}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
-        className="group relative block w-full overflow-hidden bg-black"
+        className="focus-ring group relative block w-full overflow-hidden bg-black"
         style={{aspectRatio: '9/16', maxHeight: '240px'}}
         tabIndex={0}
         aria-label={`Open ${item.name} details`}
@@ -143,7 +143,7 @@ export function TemplateCard({item, installState, onOpen, onInstall, onDismissEr
             <button
               type="button"
               onClick={onOpen}
-              className="block truncate font-ui text-[13px] font-medium text-ink hover:underline"
+              className="focus-ring block truncate rounded-sm font-ui text-[13px] font-medium text-ink hover:underline"
             >
               {item.name}
             </button>
@@ -256,14 +256,14 @@ function CardFoot({
               <button
                 type="button"
                 onClick={() => onInstall(item)}
-                className="font-ui text-[11.5px] font-medium text-ink"
+                className="focus-ring rounded-sm font-ui text-[11.5px] font-medium text-ink"
               >
                 Retry
               </button>
               <button
                 type="button"
                 onClick={onDismissError}
-                className="font-ui text-[11.5px] font-medium text-ink-muted"
+                className="focus-ring rounded-sm font-ui text-[11.5px] font-medium text-ink-muted"
               >
                 Dismiss
               </button>
@@ -288,7 +288,7 @@ function CardFoot({
         <button
           type="button"
           onClick={() => onInstall(item, {update: true})}
-          className="mt-auto w-full rounded-[8px] border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.04)] px-0 py-2 font-ui text-[12.5px] font-medium text-ink transition-colors hover:bg-[rgba(255,255,255,0.07)]"
+          className="focus-ring mt-auto w-full rounded-[8px] border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.04)] px-0 py-2 font-ui text-[12.5px] font-medium text-ink transition-colors hover:bg-[rgba(255,255,255,0.07)]"
         >
           Update to {item.catalogVersion}
         </button>
@@ -306,7 +306,7 @@ function CardFoot({
     <button
       type="button"
       onClick={() => onInstall(item)}
-      className="install-btn mt-auto w-full rounded-[8px] border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.04)] px-0 py-2 font-ui text-[12.5px] font-medium text-ink transition-colors hover:bg-[rgba(255,255,255,0.07)]"
+      className="focus-ring install-btn mt-auto w-full rounded-[8px] border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.04)] px-0 py-2 font-ui text-[12.5px] font-medium text-ink transition-colors hover:bg-[rgba(255,255,255,0.07)]"
     >
       Install
     </button>

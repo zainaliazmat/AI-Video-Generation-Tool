@@ -160,6 +160,8 @@ export function TemplateGallery({
   // Drag overlay (lg-gated)
   const [dragDepth, setDragDepth] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Tab bar ref for ArrowKey navigation (§16.13 tablist)
+  const tabBarRef = useRef<HTMLDivElement>(null);
 
   const installedIdsSet = useMemo(() => new Set(galleryBag.installedIds), [galleryBag.installedIds]);
 
@@ -183,6 +185,28 @@ export function TemplateGallery({
       setKind('all');
     },
     [],
+  );
+
+  // §16.13 tablist: ArrowLeft/Right move focus + activate tab; no focus loss on switch.
+  const handleTabKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLButtonElement>, current: Tab) => {
+      const TABS: Tab[] = ['installed', 'marketplace'];
+      const idx = TABS.indexOf(current);
+      let next: Tab | null = null;
+      if (e.key === 'ArrowRight') {
+        next = TABS[(idx + 1) % TABS.length];
+      } else if (e.key === 'ArrowLeft') {
+        next = TABS[(idx - 1 + TABS.length) % TABS.length];
+      }
+      if (next) {
+        e.preventDefault();
+        handleTabChange(next);
+        // Move DOM focus to the newly activated tab button
+        const btn = tabBarRef.current?.querySelector<HTMLButtonElement>(`[data-tab="${next}"]`);
+        btn?.focus();
+      }
+    },
+    [handleTabChange],
   );
 
   // Reset kind when query changes and selected kind disappears from the new kind list
@@ -325,9 +349,11 @@ export function TemplateGallery({
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
-      {/* Whole-page drag overlay (≥lg only) */}
+      {/* Whole-page drag overlay (≥lg only) — mouse-only path; aria-hidden so SR
+          doesn't announce it. The "⇪ Install from .zip" button is the keyboard path. */}
       {dragActive && (
         <div
+          aria-hidden="true"
           className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center"
           style={{background: 'rgba(8,12,24,0.82)', backdropFilter: 'blur(6px)'}}
         >
@@ -376,13 +402,23 @@ export function TemplateGallery({
 
       {/* Controls row: segmented tabs + search + ghost install button */}
       <div className="mt-7 flex flex-wrap items-center gap-3">
-        {/* Segmented tab bar */}
-        <div className="glass flex rounded-full p-[3px]">
+        {/* Segmented tab bar — §16.13 tablist pattern */}
+        <div
+          ref={tabBarRef}
+          role="tablist"
+          aria-label="Template tabs"
+          className="glass flex rounded-full p-[3px]"
+        >
           <button
+            role="tab"
             type="button"
+            data-tab="installed"
+            aria-selected={tab === 'installed'}
+            tabIndex={tab === 'installed' ? 0 : -1}
             onClick={() => handleTabChange('installed')}
+            onKeyDown={(e) => handleTabKeyDown(e, 'installed')}
             className={cn(
-              'rounded-full px-4 py-[7px] font-ui text-[12.5px] font-medium transition-colors duration-150',
+              'focus-ring rounded-full px-4 py-[7px] font-ui text-[12.5px] font-medium transition-colors duration-150',
               tab === 'installed'
                 ? 'bg-white/[0.12] text-ink'
                 : 'text-ink-secondary hover:text-ink',
@@ -392,10 +428,15 @@ export function TemplateGallery({
             <span className="ml-[5px] font-mono text-[10.5px] opacity-65">{installedCount}</span>
           </button>
           <button
+            role="tab"
             type="button"
+            data-tab="marketplace"
+            aria-selected={tab === 'marketplace'}
+            tabIndex={tab === 'marketplace' ? 0 : -1}
             onClick={() => handleTabChange('marketplace')}
+            onKeyDown={(e) => handleTabKeyDown(e, 'marketplace')}
             className={cn(
-              'rounded-full px-4 py-[7px] font-ui text-[12.5px] font-medium transition-colors duration-150',
+              'focus-ring rounded-full px-4 py-[7px] font-ui text-[12.5px] font-medium transition-colors duration-150',
               tab === 'marketplace'
                 ? 'bg-white/[0.12] text-ink'
                 : 'text-ink-secondary hover:text-ink',
@@ -414,16 +455,17 @@ export function TemplateGallery({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search name, tags, kind, author"
-            className="w-full bg-transparent font-ui text-[13px] text-ink placeholder:text-ink-muted focus:outline-none"
+            className="focus-ring w-full rounded-full bg-transparent font-ui text-[13px] text-ink placeholder:text-ink-muted"
             aria-label="Search templates"
           />
         </div>
 
-        {/* Ghost install from zip button */}
+        {/* Ghost install from zip button — keyboard/SR path for install; drag overlay is mouse-only */}
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
-          className="glass glass-hover inline-flex items-center gap-[7px] rounded-full px-[15px] py-2 font-ui text-[12.5px] font-medium text-ink"
+          aria-label="Install template from .zip file"
+          className="focus-ring glass glass-hover inline-flex items-center gap-[7px] rounded-full px-[15px] py-2 font-ui text-[12.5px] font-medium text-ink"
         >
           ⇪ Install from .zip
         </button>
@@ -501,8 +543,9 @@ function KindPill({label, active, onClick}: {label: string; active: boolean; onC
     <button
       type="button"
       onClick={onClick}
+      aria-pressed={active}
       className={cn(
-        'rounded-full border px-3.5 py-1.5 font-ui text-[12.5px] font-medium capitalize transition-colors duration-150',
+        'focus-ring rounded-full border px-3.5 py-1.5 font-ui text-[12.5px] font-medium capitalize transition-colors duration-150',
         active
           ? 'border-transparent bg-white/[0.12] text-ink'
           : 'border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.04)] text-ink-secondary hover:bg-[rgba(255,255,255,0.07)]',
@@ -546,7 +589,7 @@ function ZeroResult({
               <button
                 type="button"
                 onClick={onSwitchTab}
-                className="text-[#a78bfa] hover:underline"
+                className="focus-ring rounded-sm text-[#a78bfa] hover:underline"
               >
                 {otherTabMatches} match{otherTabMatches !== 1 ? 'es' : ''} in {otherTabLabel} →
               </button>
@@ -556,7 +599,7 @@ function ZeroResult({
           <button
             type="button"
             onClick={onClearSearch}
-            className="text-ink-muted hover:underline"
+            className="focus-ring rounded-sm text-ink-muted hover:underline"
           >
             Clear search
           </button>
