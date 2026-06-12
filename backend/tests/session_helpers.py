@@ -6,6 +6,9 @@ fakes_with_counts   -- install pipeline fakes + call-counting wrappers
 mk_session          -- create a fresh session with the full engine context
 session_all_done    -- create a session and run all stages to completion
 edit_beat_op        -- build a script edit op that passes verify inline
+started             -- mk_session + gatekeeper.start(); halted at script gate
+at_assemble_gate    -- started + approve(script) + approve(voice) + approve(scenes);
+                       halted at the assemble gate (Tasks 6-8 reuse this)
 """
 from __future__ import annotations
 
@@ -15,7 +18,7 @@ from schema import Theme
 from pipeline.content import Beat, BeatsScript
 from pipeline.contracts import LineOffset, WordTiming, Clip
 from pipeline import validate as validate_stage
-from session import engine, executors, api
+from session import engine, executors, api, gatekeeper
 
 _TEMPLATES = Path(__file__).resolve().parents[2] / "templates"
 
@@ -100,3 +103,26 @@ def edit_beat_op(index, text):
         "text": text,
         "verify_fn": lambda claims: [{**c, "supported": True} for c in claims],
     }
+
+
+def started(tmp_path, monkeypatch, sid="s1"):
+    """mk_session + gatekeeper.start(); session halted at the script gate.
+
+    Reused by Tasks 5–8: any test that needs a session at the first
+    human checkpoint calls this instead of inlining the two lines."""
+    sess = mk_session(tmp_path, monkeypatch, sid=sid)
+    gatekeeper.start(sess)
+    return sess
+
+
+def at_assemble_gate(tmp_path, monkeypatch, sid="s1"):
+    """started + approve(script) + approve(voice) + approve(scenes).
+
+    Session is halted at the assemble gate (the terminal gate). Reused by
+    Tasks 6–8 for tests that need a fully-approved, spec-materialized
+    session ready for render or editing."""
+    sess = started(tmp_path, monkeypatch, sid=sid)
+    gatekeeper.approve(sess, "script")
+    gatekeeper.approve(sess, "voice")
+    gatekeeper.approve(sess, "scenes")
+    return sess

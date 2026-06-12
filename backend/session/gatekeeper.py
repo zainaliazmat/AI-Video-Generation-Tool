@@ -34,10 +34,53 @@ def _run_segment(sess, gate, on_stage=None):
 
 
 def approve(sess, gate, *, on_stage=None):
-    """Approve a gate: run the next gate's segment (if any), then open that gate.
+    """Approve a gate and auto-start the next segment (PRD §4: no separate
+    'continue' click). On a reopened gate this is Re-approve: pay the
+    accumulated edits with ONE rederive, then restore downstream gates.
 
-    Task 5 — not implemented yet; stubbed so auto_run=True in start() is honest."""
-    raise NotImplementedError("approve() arrives in Task 5")
+    Two ruled guards:
+    - OV-2: a STALE gate is never the approve target — the Re-approve belongs
+      to the gate that reopened; the error names it.
+    - 7A: approved gate + missing next-gate row = crash mid-segment; approve
+      is idempotent-forward and re-enters the segment (done stages no-op via
+      the input-hash cache) instead of raising."""
+    if gate not in gates.APPROVABLE:
+        raise ValueError(f"gate {gate!r} is not approvable (assemble's action is Render)")
+    states = store.get_gate_states(sess.conn, sess.id)
+    cur = states.get(gate)
+    if cur is None:
+        raise ValueError(f"gate {gate!r} is not open yet")
+    if cur["state"] == "stale":
+        reopened = next((g for g in gates.GATE_ORDER
+                         if states.get(g, {}).get("state") == "awaiting_approval"), "?")
+        raise ValueError(
+            f"gate {gate!r} is stale — re-approve gate {reopened!r} first")
+    nxt = gates.next_gate(gate)
+    if cur["state"] == "approved":
+        if nxt is not None and nxt not in states:
+            _run_segment(sess, nxt, on_stage)          # 7A crash recovery
+            return view(sess)
+        raise ValueError(f"gate {gate!r} is already approved")
+    if any(s["state"] == "stale" for s in states.values()):
+        _reapprove(sess, states, on_stage)
+    store.upsert_gate_state(sess.conn, sess.id, gate, "approved", now=_now())
+    if nxt is not None:
+        nxt_state = store.get_gate_states(sess.conn, sess.id).get(nxt)
+        if nxt_state is None or nxt_state["state"] != "approved":
+            _run_segment(sess, nxt, on_stage)
+    return view(sess)
+
+
+def _reapprove(sess, states, on_stage):
+    """§4.1 payment: one rederive_stale pass emitting REAL per-stage events
+    (design ruling 1 — no synthetic 'rederive' card), then each stale gate
+    restores to its pre-reopen truth via approved_at."""
+    sess.engine.rederive_stale(on_stage)
+    for g, s in states.items():
+        if s["state"] != "stale":
+            continue
+        restored = "approved" if s["approved_at"] else "awaiting_approval"
+        store.upsert_gate_state(sess.conn, sess.id, g, restored, now=_now())
 
 
 def start(sess, *, auto_run=False, on_stage=None):
