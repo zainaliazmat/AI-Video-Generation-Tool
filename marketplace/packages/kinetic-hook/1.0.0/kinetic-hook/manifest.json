@@ -1,0 +1,39 @@
+{
+  "id": "kinetic-hook",
+  "name": "Kinetic Hook",
+  "version": "1.0.0",
+  "author": "acme",
+  "apiVersion": "1",
+  "kind": "hook",
+  "description": "Word-cascade opening title with an accent underline sweep.",
+  "tags": [
+    "hook",
+    "kinetic",
+    "title"
+  ],
+  "license": "MIT",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string"
+      },
+      "kicker": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title"
+    ],
+    "additionalProperties": false
+  },
+  "sampleProps": {
+    "title": "What if glass could flow?",
+    "kicker": "MATERIALS"
+  },
+  "durationFrames": {
+    "min": 30,
+    "max": 120
+  },
+  "rendersOwnText": true
+}
