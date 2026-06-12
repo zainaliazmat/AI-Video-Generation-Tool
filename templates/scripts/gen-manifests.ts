@@ -15,7 +15,10 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {zodToJsonSchema} from 'zod-to-json-schema';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const templatesDir = resolve(__dirname, '..');
+const dirFlag = process.argv.indexOf('--dir');
+const templatesDir = dirFlag !== -1 && process.argv[dirFlag + 1]
+  ? resolve(process.argv[dirFlag + 1])
+  : resolve(__dirname, '..');
 
 function entryFile(dir: string): string | null {
   for (const f of ['schema.ts', 'schema.js']) {

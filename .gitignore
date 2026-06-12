@@ -84,3 +84,6 @@ backend/.sessions/
 
 # project library store (Phase 5 session=project runtime state, per-project dirs)
 /projects/
+
+# template installer staging area (M2 installer candidate packages, mid-install sentinels)
+templates/.staging/
