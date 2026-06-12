@@ -49,24 +49,8 @@ def _log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
 
-def build_sources_sidecar(script) -> dict:
-    """The client-facing citation list derived from a grounded BeatsScript: each
-    cited (sourced) beat with its URL, plus the de-duped source list. Written next
-    to spec.json so sources surface for clients WITHOUT touching the render contract
-    (Phase 3 §5.2 — sidecar over render-contract churn)."""
-    facts = [{"text": b.text, "source": b.source} for b in script.beats if b.source]
-    sources = [{"url": s.url, "title": s.title} for s in (script.sources or [])]
-    hooks = [
-        {"text": h.text, "pattern": h.pattern, "score": h.score, "chosen": h.chosen}
-        for h in (script.hook_candidates or [])
-    ]
-    return {
-        "title": script.title,
-        "hooks": hooks,
-        "facts": facts,
-        "sources": sources,
-        "verification": script.verify_report or [],
-    }
+# Re-export for backward compat: tests import m.build_sources_sidecar directly.
+build_sources_sidecar = projects_mod.build_sources_sidecar
 
 
 def run(topic: str, fps: int = DEFAULT_FPS, on_stage=None):
@@ -92,19 +76,17 @@ def run(topic: str, fps: int = DEFAULT_FPS, on_stage=None):
         store.create_session(conn, id=sid, topic=topic, now="autopilot")
         eng = engine.Engine(conn, ctx, session_id=sid)
         emit("session", sid)
+        projects_mod.bootstrap(REPO_ROOT, sid, topic=topic)  # register in Project Library (ruling 2A)
 
         for i, key in enumerate(PIPELINE_STAGES, start=1):
             emit(key, "running")
             _log(f"[{i}/{len(PIPELINE_STAGES)}] {key}...")
             eng.advance(key)
             emit(key, "done")
-        projects_mod.project_dir(REPO_ROOT, sid).mkdir(parents=True, exist_ok=True)
         eng.materialize_spec()   # writes projects/<sid>/spec.json (ctx.spec_out)
 
         script_bundle = eng._load_output("script")
-        ctx.sources_out.write_text(  # project dir already created above
-            json.dumps(build_sources_sidecar(script_bundle["script"]), indent=2),
-            encoding="utf-8")
+        projects_mod.write_sources(REPO_ROOT, sid, script_bundle["script"])
         spec = eng._load_output("assemble")
         projects_mod.write_meta(REPO_ROOT, sid, meta={
             "id": sid,
