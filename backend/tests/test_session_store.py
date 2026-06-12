@@ -207,22 +207,41 @@ def test_delete_session_purges_all_tables_structural(tmp_path):
                             diff=[{"path": "/x", "before": None, "after": 1}], now="t0")
     store.upsert_gate_state(conn, sid, "script", "approved", now="t0")
 
+    def _session_keyed_tables(connection):
+        """Return list of (table, id_col) for every table that carries a
+        session-identity column.  Mirrors the post-delete check so both loops
+        use identical detection logic."""
+        tables = [r[0] for r in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()]
+        result = []
+        for table in tables:
+            cols = {r[1] for r in connection.execute(f"PRAGMA table_info({table})")}
+            if "session_id" in cols:
+                result.append((table, "session_id"))
+            elif table == "sessions":
+                result.append((table, "id"))
+            # else: no session-identity column — skip (e.g. a config table)
+        return result
+
+    # Pre-delete completeness check: every session-keyed table must have ≥1
+    # row for the test sid.  A future table added to the schema but forgotten
+    # in this test's population block will fail HERE, forcing the developer to
+    # also update delete_session — which is the whole point of this test.
+    for table, id_col in _session_keyed_tables(conn):
+        count = conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE {id_col}=?", (sid,)
+        ).fetchone()[0]
+        assert count >= 1, (
+            f"table '{table}' has no row for the test sid — add it to this "
+            f"test's population block AND to delete_session"
+        )
+
     store.delete_session(conn, sid)
 
-    # Enumerate all user tables from sqlite_master
-    tables = [r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-    ).fetchall()]
-
-    for table in tables:
-        # determine the session-identity column for this table
-        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
-        if "session_id" in cols:
-            id_col = "session_id"
-        elif table == "sessions":
-            id_col = "id"
-        else:
-            continue  # no session-identity column — skip (e.g. a config table)
+    # Post-delete check: zero rows must remain for the sid in every
+    # session-keyed table (same detection logic via the helper above).
+    for table, id_col in _session_keyed_tables(conn):
         count = conn.execute(
             f"SELECT COUNT(*) FROM {table} WHERE {id_col}=?", (sid,)
         ).fetchone()[0]
