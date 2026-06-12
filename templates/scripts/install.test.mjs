@@ -8,7 +8,7 @@ import {
   _acquireLock, _releaseLock, _writeLastError, _sweepStale,
   _runValidation, STAGING_DIR, TEMPLATES_DIR, RENDER_ASSETS_DIR, PREVIEWS_DIR,
   SCRIPTS_DIR, SUPPORTED_API_VERSION,
-  install, uninstall, doctor, _defaultRunners,
+  install, uninstall, doctor, _defaultRunners, packTemplate,
 } from './install.mjs';
 import {zipFixture, zipRaw} from './fixtures/helpers.mjs';
 
@@ -955,5 +955,101 @@ describe('CLI', () => {
     try { cli(['doctor']); } catch (e) { err = e; }
     expect(err).toBeTruthy();
     expect(err.status).not.toBe(0);
+  });
+
+  it('pack without dir argument exits nonzero', () => {
+    let err;
+    try { cli(['pack']); } catch (e) { err = e; }
+    expect(err).toBeTruthy();
+    expect(err.status).not.toBe(0);
+  });
+
+  it('pack usage appears in usage output', () => {
+    let err;
+    try { cli([]); } catch (e) { err = e; }
+    expect(String(err.stderr)).toContain('pack');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// packTemplate (§9.3 Task 4)
+// ---------------------------------------------------------------------------
+
+const PACK_OUT = join(templatesDir, 'dist');
+
+/** Remove the pack dist dir and any residue after each pack test. */
+async function cleanPackFixtures() {
+  rmSync(PACK_OUT, {recursive: true, force: true});
+  // Clean any fixture-card or fixture-bad-import residue from doctor
+  const ids = ['fixture-card', 'fixture-bad-import'];
+  for (const id of ids) {
+    rmSync(join(TEMPLATES_DIR, id), {recursive: true, force: true});
+    rmSync(join(RENDER_ASSETS_DIR, id), {recursive: true, force: true});
+    rmSync(join(PREVIEWS_DIR, `${id}.mp4`), {force: true});
+    rmSync(join(PREVIEWS_DIR, `${id}.jpg`), {force: true});
+  }
+  execFileSync('node', [join(__dirname, 'build-registry.mjs')], {stdio: 'pipe'});
+}
+
+describe('packTemplate (§9.3)', () => {
+  afterEach(cleanPackFixtures);
+
+  it('happy path: packs valid-scene → zip at expected path with single <id>/ top folder containing manifest.json', async () => {
+    const {runners} = stubRunners();
+    const result = await packTemplate(FIX_SRC, {runners, outDir: PACK_OUT});
+
+    // Result shape
+    expect(result).toMatchObject({id: 'fixture-card', version: '1.0.0'});
+    expect(result.zipPath).toBe(join(PACK_OUT, 'fixture-card-1.0.0.zip'));
+
+    // Zip actually exists
+    expect(existsSync(result.zipPath)).toBe(true);
+
+    // Zip unpacks to single <id>/ top folder
+    const AdmZip = (await import('adm-zip')).default;
+    const zip = new AdmZip(result.zipPath);
+    const entries = zip.getEntries().map((e) => e.entryName);
+    // All entries start with 'fixture-card/'
+    expect(entries.every((e) => e.startsWith('fixture-card/'))).toBe(true);
+    // manifest.json is present
+    expect(entries).toContain('fixture-card/manifest.json');
+    // The only top-level segment is 'fixture-card'
+    const topFolders = new Set(entries.map((e) => e.split('/')[0]));
+    expect([...topFolders]).toEqual(['fixture-card']);
+  });
+
+  it('refuses failing: bad-import fixture → REJECTS (stage=imports), NO zip written', async () => {
+    const {runners} = stubRunners();
+    const expectedZipPath = join(PACK_OUT, 'fixture-bad-import-1.0.0.zip');
+
+    let err;
+    try {
+      await packTemplate(BAD_IMPORT, {runners, outDir: PACK_OUT});
+    } catch (e) {
+      err = e;
+    }
+
+    // Must reject with the doctor's import-lint error
+    expect(err).toBeInstanceOf(InstallError);
+    expect(err.stage).toBe('imports');
+
+    // NO zip written
+    expect(existsSync(expectedZipPath)).toBe(false);
+  });
+
+  it('determinism: pack the same dir twice → byte-identical zips (Buffer.compare === 0)', async () => {
+    const {runners: r1} = stubRunners();
+    const {runners: r2} = stubRunners();
+    const out1 = join(PACK_OUT, 'run1');
+    const out2 = join(PACK_OUT, 'run2');
+    mkdirSync(out1, {recursive: true});
+    mkdirSync(out2, {recursive: true});
+
+    const res1 = await packTemplate(FIX_SRC, {runners: r1, outDir: out1});
+    const res2 = await packTemplate(FIX_SRC, {runners: r2, outDir: out2});
+
+    const buf1 = readFileSync(res1.zipPath);
+    const buf2 = readFileSync(res2.zipPath);
+    expect(Buffer.compare(buf1, buf2)).toBe(0);
   });
 });

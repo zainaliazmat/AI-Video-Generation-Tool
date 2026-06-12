@@ -8,6 +8,7 @@
     "build-registry": "node scripts/build-registry.mjs",
     "build": "npm run gen-manifests && npm run build-registry",
     "new-template": "node scripts/new-template.mjs",
+    "pack-template": "node scripts/install.mjs pack",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
   },

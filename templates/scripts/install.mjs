@@ -993,6 +993,93 @@ export async function doctor(srcZipOrDir, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// packTemplate (§9.3) — doctor-first, refuses failing templates
+// ---------------------------------------------------------------------------
+
+// Import the deterministic zip builder (used by build-marketplace-index).
+// We re-implement the same pattern inline to avoid a circular dependency and
+// to keep the builder self-contained, but we share the FIXED_MTIME constant
+// approach exactly as documented in build-marketplace-index.mjs.
+
+/** Fixed mtime stamped into every zip entry — determinism anchor (matches build-marketplace-index). */
+const PACK_FIXED_MTIME = new Date('2020-01-01T00:00:00Z');
+
+/**
+ * Walk a directory recursively and return sorted relative paths (files only).
+ * Used by packTemplate for deterministic zip construction.
+ * @param {string} baseDir
+ * @param {string} prefix
+ * @returns {Array<{relPath: string, absPath: string}>}
+ */
+function _packWalkDir(baseDir, prefix = '') {
+  const entries = readdirSync(baseDir).sort(); // sorted for determinism
+  const results = [];
+  for (const name of entries) {
+    const abs = join(baseDir, name);
+    const rel = prefix ? `${prefix}/${name}` : name;
+    const st = statSync(abs);
+    if (st.isDirectory()) {
+      results.push(..._packWalkDir(abs, rel));
+    } else {
+      results.push({relPath: rel, absPath: abs});
+    }
+  }
+  return results;
+}
+
+/**
+ * Pack a template directory into a deterministic zip after running doctor.
+ *
+ * Runs `doctor(dir, {runners})` FIRST. If doctor throws (InstallError), the
+ * error is propagated and NO zip is written (refuses to pack a failing template).
+ *
+ * On doctor OK: reads manifest.json for `id` and `version`, builds a
+ * deterministic zip (fixed mtime = 2020-01-01, sorted entries, single
+ * `<id>/` top folder) → writes `<outDir>/<id>-<version>.zip`.
+ *
+ * @param {string} dir      The `<id>/` source folder.
+ * @param {{
+ *   outDir?: string,
+ *   runners?: Partial<typeof _defaultRunners>,
+ * }} opts
+ * @returns {Promise<{zipPath: string, id: string, version: string}>}
+ */
+export async function packTemplate(dir, opts = {}) {
+  // Step 1: doctor FIRST — refuses to pack a failing template.
+  // Propagate any InstallError (no zip written if this throws).
+  await doctor(dir, {runners: opts.runners ?? {}});
+
+  // Step 2: doctor passed — read the manifest for id + version.
+  const manifestPath = join(resolve(dir), 'manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  const {id, version} = manifest;
+
+  // Step 3: build the deterministic zip using adm-zip (same approach as
+  // build-marketplace-index.mjs: walk + sorted entries + PACK_FIXED_MTIME).
+  const AdmZip = (await import('adm-zip')).default;
+  const zip = new AdmZip();
+  const files = _packWalkDir(resolve(dir)); // already sorted
+
+  for (const {relPath, absPath} of files) {
+    const entryName = `${id}/${relPath}`;
+    const content = readFileSync(absPath);
+    zip.addFile(entryName, content, '', 0o644);
+    // Force fixed mtime for byte-identical determinism across builds.
+    const entry = zip.getEntry(entryName);
+    entry.header.time = PACK_FIXED_MTIME;
+  }
+
+  // Step 4: write to outDir.
+  const outDir = opts.outDir ?? join(TEMPLATES_DIR, 'dist');
+  mkdirSync(outDir, {recursive: true});
+  const zipFileName = `${id}-${version}.zip`;
+  const zipPath = join(outDir, zipFileName);
+  writeFileSync(zipPath, zip.toBuffer());
+
+  return {zipPath, id, version};
+}
+
+// ---------------------------------------------------------------------------
 // CLI shell
 // ---------------------------------------------------------------------------
 
@@ -1000,7 +1087,7 @@ export async function doctor(srcZipOrDir, opts = {}) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [, , cmd, ...args] = process.argv;
 
-  const COMMANDS = ['install', 'uninstall', 'doctor', 'list', 'state', 'clear-last-error'];
+  const COMMANDS = ['install', 'uninstall', 'doctor', 'list', 'state', 'clear-last-error', 'pack'];
 
   function printUsage() {
     process.stderr.write(
@@ -1012,6 +1099,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         '                    Install a template from the local marketplace catalog\n' +
         '  uninstall <id>    Uninstall a template by id\n' +
         '  doctor <zip|dir>  Dry-run the full install gate without installing\n' +
+        '  pack <dir> [--out <dir>]\n' +
+        '                    Doctor-gate a template then zip it for distribution\n' +
         '  list              List installed templates\n' +
         '  state             Print full installer state as JSON\n' +
         '  clear-last-error  Remove the last-error record\n',
@@ -1120,6 +1209,30 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       const result = await doctor(src);
       console.log(`[doctor] OK: ${result.id} v${result.version} (${result.kind}) is installable`);
 
+    } else if (cmd === 'pack') {
+      const src = args.find((a) => !a.startsWith('--'));
+      if (!src) {
+        process.stderr.write('[pack] error: missing <dir> argument\n');
+        printUsage();
+        process.exit(1);
+      }
+      let outDir;
+      const outIdx = args.indexOf('--out');
+      if (outIdx !== -1) {
+        outDir = args[outIdx + 1];
+        if (!outDir || outDir.startsWith('--')) {
+          process.stderr.write('[pack] error: --out requires a <dir> argument\n');
+          process.exit(1);
+        }
+      }
+
+      process.stderr.write(
+        `[pack] running doctor on ${src} — the full gate (tsc + preview render) before packing…\n`,
+      );
+
+      const result = await packTemplate(src, {outDir});
+      console.log(`[pack] doctor OK — packed ${result.id} v${result.version} → ${result.zipPath}`);
+
     } else if (cmd === 'list') {
       const installed = listInstalled();
       if (installed.length === 0) {
@@ -1158,6 +1271,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const cmdLabel = cmd === 'install' ? 'install'
       : cmd === 'uninstall' ? 'uninstall'
       : cmd === 'doctor' ? 'doctor'
+      : cmd === 'pack' ? 'pack'
       : cmd;
     process.stderr.write(`[${cmdLabel}] FAILED at ${stage}: ${e.message}\n`);
     process.exit(1);
