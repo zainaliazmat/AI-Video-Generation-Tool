@@ -44,5 +44,12 @@
     "min": 60,
     "max": 300
   },
-  "rendersOwnText": true
+  "rendersOwnText": true,
+  "assets": [
+    "assets/sun.jpg",
+    "assets/moon.jpg",
+    "assets/planets.jpg",
+    "assets/eclipse.jpg",
+    "assets/phases.jpg"
+  ]
 }
