@@ -1,3 +1,5 @@
+import pytest
+
 from session import gates, stages
 
 
@@ -21,3 +23,13 @@ def test_next_gate_chain():
 def test_downstream_gates():
     assert gates.downstream_gates("script") == ["voice", "scenes", "assemble"]
     assert gates.downstream_gates("assemble") == []
+
+
+def test_next_gate_unknown_raises():
+    with pytest.raises(KeyError):
+        gates.next_gate("nonexistent")
+
+
+def test_downstream_gates_unknown_raises():
+    with pytest.raises(KeyError):
+        gates.downstream_gates("nonexistent")

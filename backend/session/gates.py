@@ -40,9 +40,13 @@ APPROVABLE = ["script", "voice", "scenes"]
 
 
 def next_gate(gate: str):
+    if gate not in GATE_ORDER:
+        raise KeyError(f"unknown gate {gate!r} (valid: {GATE_ORDER})")
     i = GATE_ORDER.index(gate)
     return GATE_ORDER[i + 1] if i + 1 < len(GATE_ORDER) else None
 
 
-def downstream_gates(gate: str) -> list:
+def downstream_gates(gate: str) -> list[str]:
+    if gate not in GATE_ORDER:
+        raise KeyError(f"unknown gate {gate!r} (valid: {GATE_ORDER})")
     return GATE_ORDER[GATE_ORDER.index(gate) + 1:]
