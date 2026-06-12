@@ -271,3 +271,26 @@ def test_auto_run_equals_run_all(tmp_path, monkeypatch):
     assert store.get_session(a.conn, a.id)["auto_run"] == 1
 
 
+# ---------------------------------------------------------------------------
+# Task 8: blast-radius preview tests (impl forward-ported in Task 6)
+# ---------------------------------------------------------------------------
+
+def test_preview_reopen_lists_blast_radius(tmp_path, monkeypatch):
+    _fakes(monkeypatch)
+    sess = _at_assemble_gate(tmp_path, monkeypatch)
+    assert gatekeeper.preview_reopen(sess, "script") == {
+        "gate": "script",
+        "reruns": ["voice", "timing", "footage", "assemble"],
+        "staleGates": ["voice", "scenes", "assemble"]}
+    assert gatekeeper.preview_reopen(sess, "scenes") == {
+        "gate": "scenes", "reruns": ["assemble"], "staleGates": ["assemble"]}
+
+
+def test_preview_reopen_is_readonly(tmp_path, monkeypatch):
+    calls = _fakes(monkeypatch)
+    sess = _at_assemble_gate(tmp_path, monkeypatch)
+    before = (dict(calls), store.get_gate_states(sess.conn, sess.id))
+    gatekeeper.preview_reopen(sess, "script")
+    assert (dict(calls), store.get_gate_states(sess.conn, sess.id)) == before
+
+
