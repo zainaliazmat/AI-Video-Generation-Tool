@@ -1,18 +1,10 @@
-"""Studio v3 gatekeeper — Task 4 tests.
-
-Imports helpers from test_session_engine (same process, not a subprocess) so the
-fake-pipeline wiring stays in one place. Adapter names match the REAL helpers
-in that file (_fakes_with_counts, _mk_session(tmp_path, monkeypatch)).
-"""
+"""Studio v3 gatekeeper — Task 4 tests."""
 from __future__ import annotations
 
 import pytest
 
 from session import gatekeeper, store
-
-# Re-use the helpers that Task 3 added to test_session_engine. The import is
-# explicit — if a rename breaks this, the compiler tells us immediately.
-from tests.test_session_engine import _fakes_with_counts, _mk_session
+from tests.session_helpers import fakes_with_counts as _fakes_with_counts, mk_session as _mk_session
 
 
 # ---------------------------------------------------------------------------

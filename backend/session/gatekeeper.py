@@ -18,7 +18,11 @@ def _emit(on_stage, stage, state, t0=None):
 
 
 def _run_segment(sess, gate, on_stage=None):
-    """Run the stages that precede `gate`, then open it (awaiting_approval)."""
+    """Run the stages that precede `gate`, then open it (awaiting_approval).
+
+    When the segment includes the assemble stage, also materialize spec.json
+    so the per-scene player has a spec to read when the gate opens (ruling 1A).
+    """
     for stage in gates.GATE_SEGMENTS[gate]:
         t0 = time.monotonic()
         _emit(on_stage, stage, "running")
