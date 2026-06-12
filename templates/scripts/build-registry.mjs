@@ -50,7 +50,11 @@ function discover() {
     if (!entry.isDirectory() || entry.name === 'scripts' || entry.name === 'node_modules') {
       continue;
     }
+    if (entry.name.startsWith('.')) continue; // §17.4: staging/dot dirs are never templates
     const dir = join(templatesDir, entry.name);
+    // §15.2 crash-window sentinel: a folder mid-install is scanner-INVISIBLE
+    // until the installer verifies it and removes the sentinel.
+    if (existsSync(join(dir, '.installing'))) continue;
     const manifestPath = join(dir, 'manifest.json');
     if (!existsSync(manifestPath)) continue;
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
