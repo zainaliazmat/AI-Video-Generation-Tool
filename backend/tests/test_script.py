@@ -422,6 +422,42 @@ def test_band_300_preset_fires_retry_on_wrong_count():
     assert comp.calls == 2
     assert out.band_miss is None
     assert len(out.beats) == 42
+    # The corrective user line must mention the preset's actual band numbers.
+    second_user = next(
+        m["content"]
+        for m in comp.all_kwargs[1]["messages"]
+        if m["role"] == "user"
+    )
+    assert "38" in second_user and "48" in second_user
+
+
+def test_band_outofband_then_unparseable_returns_attempt1_with_band_miss():
+    """Attempt 1 parses but is out-of-band; attempt 2 is unparseable JSON →
+    returns the parseable attempt-1 script with band_miss set (not an exception).
+    Exactly 2 LLM calls made."""
+    truncated = '{"title": "T", "beats": [{"text": "be'
+    client, comp = _capturing_client(_beats_json(3), truncated)
+    out = generate_script("t", provider="deepseek", client=client, model="m", target_length=60)
+    assert comp.calls == 2
+    assert isinstance(out, BeatsScript)
+    assert len(out.beats) == 3                           # attempt-1 script returned as-is
+    assert out.band_miss is not None
+    assert out.band_miss["requested"] == [5, 8]
+    assert out.band_miss["got"] == 3
+
+
+def test_band_unparseable_then_outofband_returns_attempt2_with_band_miss():
+    """Attempt 1 is unparseable; attempt 2 parses but is out-of-band →
+    returns attempt-2 script with band_miss set. Exactly 2 LLM calls made."""
+    truncated = '{"title": "T", "beats": [{"text": "be'
+    client, comp = _capturing_client(truncated, _beats_json(3))
+    out = generate_script("t", provider="deepseek", client=client, model="m", target_length=60)
+    assert comp.calls == 2
+    assert isinstance(out, BeatsScript)
+    assert len(out.beats) == 3                           # attempt-2 script returned as-is
+    assert out.band_miss is not None
+    assert out.band_miss["requested"] == [5, 8]
+    assert out.band_miss["got"] == 3
 
 
 def test_band_no_target_length_no_band_check():

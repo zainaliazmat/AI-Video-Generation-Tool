@@ -257,10 +257,12 @@ def _generate_with_band_retry(
     suffix = _corrective_suffix(n1, beat_min, beat_max)
     try:
         script2 = parse_beats_response(make_corrective_call(suffix))
-    except ValueError as e:
-        raise ValueError(
-            f"script generation returned unparseable JSON twice: {e}"
-        ) from e
+    except ValueError:
+        # Attempt 2 unparseable after attempt 1 was valid but out-of-band:
+        # return the parseable attempt-1 script with band_miss rather than
+        # raising — an out-of-band-but-valid script beats a dead stage.
+        script1.band_miss = {"requested": [beat_min, beat_max], "got": n1}
+        return script1
     n2 = len(script2.beats)
     if beat_min <= n2 <= beat_max:
         return script2
@@ -293,20 +295,6 @@ def build_user_prompt(topic: str, evidence_block: str | None = None,
             "Return the JSON object now."
         )
     return f"Topic: {topic}{tail}\nReturn the JSON object now."
-
-
-def _parse_with_retry(do_call) -> BeatsScript:
-    """Call the LLM (do_call -> raw content str), parse+validate, retry once."""
-    last_err: Exception | None = None
-    for _ in range(MAX_RETRIES + 1):
-        content = do_call()
-        try:
-            return parse_beats_response(content)
-        except ValueError as e:  # bad JSON or schema violation
-            last_err = e
-    raise ValueError(
-        f"LLM script response invalid after {MAX_RETRIES + 1} attempts: {last_err}"
-    )
 
 
 def generate_script(
