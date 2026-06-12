@@ -599,6 +599,19 @@ describe('install orchestration (§15.2)', () => {
     expect(installedState().lastError).toBeNull();
   });
 
+  it('T1b copyAssets throws post-install → install() RESOLVES, result.id===fixture-card, lastError===null, registry contains fixture-card', async () => {
+    // Pre-fix: this test would REJECT because copyAssets threw after clearLastError was
+    // called AFTER copyAssets. Post-fix: clearLastError runs first, copyAssets is
+    // best-effort, so the promise resolves normally.
+    const {runners} = stubRunners({
+      copyAssets: () => { throw new Error('mirror blew up'); },
+    });
+    const result = await install(FIX_SRC, {runners});
+    expect(result.id).toBe('fixture-card');
+    expect(installedState().lastError).toBeNull();
+    expect(registryContains('fixture-card')).toBe(true);
+  });
+
   it('T2 tsc failure: rejects stage=typecheck, folder gone, registry NOT called', async () => {
     const {calls, runners} = stubRunners({
       tsc: () => { throw Object.assign(new Error('TS2322 type error boom'), {stdout: Buffer.from(''), stderr: Buffer.from('TS2322 type error boom')}); },

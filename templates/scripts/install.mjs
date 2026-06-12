@@ -36,7 +36,7 @@ import {
   renameSync,
   statSync,
 } from 'node:fs';
-import {resolve, join, relative} from 'node:path';
+import {resolve, join, relative, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
@@ -463,6 +463,7 @@ export const _defaultRunners = {
   // Included here so that test stubs composed from _defaultRunners carry a valid
   // genManifests entry and don't accidentally shadow the stage's own default with
   // undefined when a stub omits this key.
+  // NOTE: this definition must stay in lockstep with install-stages.mjs's copy.
   genManifests: (scanDir) =>
     execFileSync(
       join(TEMPLATES_DIR, 'node_modules', '.bin', 'tsx'),
@@ -511,7 +512,7 @@ function _shipAssets(tplDir, manifest) {
     // Strip leading 'assets/' — we flatten into RENDER_ASSETS_DIR/<id>/
     const basename = rel.replace(/^assets\//, '');
     const dest = join(destDir, basename);
-    mkdirSync(join(destDir, ...(basename.includes('/') ? [basename.split('/').slice(0, -1).join('/')] : [])), {recursive: true});
+    mkdirSync(dirname(dest), {recursive: true});
     if (existsSync(src)) {
       cpSync(src, dest, {recursive: false, force: true});
     }
@@ -734,10 +735,19 @@ export async function install(srcZipOrDir, opts = {}) {
       throw new InstallError('preview', err.message || String(err));
     }
 
-    // Mirror template-assets into preview/public/
-    await runners.copyAssets();
-
+    // Install is fully committed at this point — clear any previous error before
+    // the best-effort preview mirror so a copyAssets hiccup doesn't look like a
+    // failed install.
     clearLastError();
+
+    // Mirror template-assets into preview/public/ (best-effort — the template
+    // is already registered and live; run `npm run copy-assets` in preview/ to
+    // refresh manually if this step fails).
+    try {
+      await runners.copyAssets();
+    } catch (e) {
+      console.warn('[install] preview mirror copy-assets failed post-install — run `npm run copy-assets` in preview/ to refresh; install itself succeeded: ' + e.message);
+    }
 
     return {
       id,
@@ -915,8 +925,8 @@ export async function doctor(srcZipOrDir, opts = {}) {
       rmSync(join(PREVIEWS_DIR, `${id}.jpg`), {force: true});
       if (snap) _restoreSnapshot(id, snap);
       // Rebuild registry + mirror assets to restore to pre-doctor state
-      try { runners.buildRegistry(); } catch { /* best-effort */ }
-      try { runners.copyAssets(); } catch { /* best-effort */ }
+      try { await runners.buildRegistry(); } catch { /* best-effort */ }
+      try { await runners.copyAssets(); } catch { /* best-effort */ }
     }
 
     // Only reaches here if no throw inside the try above
