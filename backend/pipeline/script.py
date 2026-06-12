@@ -452,6 +452,7 @@ def generate_grounded_script(
         verify_stage.verify_script(
             script, ctx, verify_fn=vfn, retrieve_fn=retrieve_fn,
             retrieval_key=retrieval_key, cache_dir=cache_dir,
+            max_targeted=verify_stage.scaled_max_targeted(len(script.beats)),
         )
         _reselect_hook_if_dropped(script, ctx, vfn)
         _enforce_floor(script)

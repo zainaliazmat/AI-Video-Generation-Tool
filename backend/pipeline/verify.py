@@ -19,9 +19,32 @@ offline in tests; the default batches a single DeepSeek call.
 """
 from __future__ import annotations
 
+import math
 from typing import Callable, Dict, List, Optional
 
 from pipeline.content import BeatsScript
+
+# ---------------------------------------------------------------------------
+# Module-level caps (v3 M2-T4)
+# ---------------------------------------------------------------------------
+
+# Base targeted-rescue limit per 8-beat chunk.  Scales at the call site via
+# scaled_max_targeted(n_beats) so longer presets get proportionally more rescues.
+MAX_TARGETED_BASE: int = 3
+
+# Hard cap on Tavily re-checks fired per save burst in verify_edited_beats.
+# Beats beyond the first EDIT_RECHECK_MAX_TAVILY edited indices are skipped and
+# flagged {"status": "unverified", "reason": "recheck skipped (cap) — re-save to recheck"}.
+EDIT_RECHECK_MAX_TAVILY: int = 4
+
+
+def scaled_max_targeted(n_beats: int) -> int:
+    """Return the targeted-rescue cap for a script with `n_beats` beats.
+
+    Formula: MAX_TARGETED_BASE * ceil(n_beats / 8)
+    Examples: 8 → 3, 9 → 6, 30 → 12, 48 → 18.
+    """
+    return MAX_TARGETED_BASE * math.ceil(n_beats / 8)
 
 
 def _is_stat(beat) -> bool:
@@ -126,8 +149,12 @@ def verify_edited_beats(
     "supported" (source re-attached) or "unverified" (amber). Leaves `script.beats`
     untouched (text is the operator's). Idempotent for a given verdict set."""
     indices = sorted({i for i in indices if 0 <= i < len(script.beats)})
+    # Split indices into the checked slice (≤ EDIT_RECHECK_MAX_TAVILY) and overflow.
+    checked = indices[:EDIT_RECHECK_MAX_TAVILY]
+    overflow = indices[EDIT_RECHECK_MAX_TAVILY:]
+
     items = []
-    for i in indices:
+    for i in checked:
         b = script.beats[i]
         snips: List[Dict] = []
         if retrieve_fn is not None:
@@ -138,7 +165,7 @@ def verify_edited_beats(
 
     flags = list(script.beat_flags or [])
     flags = [f for f in flags if f.get("index") not in indices]  # replace edited entries
-    for i in indices:
+    for i in checked:
         v = verdicts.get(i, {"claim_supported": False, "source": None})
         if v.get("claim_supported"):
             if v.get("source"):
@@ -147,6 +174,11 @@ def verify_edited_beats(
         else:
             flags.append({"index": i, "status": "unverified",
                           "reason": "verify could not support this edit — add a source or reword"})
+    # Overflow beats: skip Tavily, mark amber with a cap-specific reason so the
+    # operator knows a re-save will trigger a proper recheck.
+    for i in overflow:
+        flags.append({"index": i, "status": "unverified",
+                      "reason": "recheck skipped (cap) — re-save to recheck"})
     flags.sort(key=lambda f: f["index"])
     script.beat_flags = flags
     return script

@@ -5,7 +5,7 @@ Per factual beat: spoken-claim-unsupported -> DROP; only-number-unsupported ->
 DEMOTE (strip the stat data); supported -> keep. A bounded targeted Tavily lookup
 rescues a true fact the broad search missed before any drop. The LLM verifier and
 the retrieval are dependency-injected, so these run fully offline."""
-from pipeline.verify import verify_script
+from pipeline.verify import verify_script, verify_edited_beats, scaled_max_targeted, EDIT_RECHECK_MAX_TAVILY
 from pipeline.content import Beat, BeatsScript
 from pipeline.retrieval import RetrievedContext, RetrievedSnippet
 
@@ -167,3 +167,91 @@ def test_verify_records_a_report():
     out = verify_script(script, ctx, verify_fn=vf, retrieve_fn=_FakeRetrieve(_ctx()))
     verdicts = {r["text"]: r["verdict"] for r in out.verify_report}
     assert verdicts == {"hook": "kept", "bad": "dropped"}
+
+
+# ---------------------------------------------------------------------------
+# v3 M2-T4: named caps — scaled_max_targeted + EDIT_RECHECK_MAX_TAVILY
+# ---------------------------------------------------------------------------
+
+class _FakeRetrieveEdited:
+    """Targeted-lookup stand-in for verify_edited_beats tests; records call count."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, query, *, key=None, cache_dir=None):
+        self.calls += 1
+        from types import SimpleNamespace
+        return SimpleNamespace(snippets=[])
+
+
+def _always_unsupported(items):
+    """verify_fn that marks every item as unsupported."""
+    return [
+        {"index": it["index"], "claim_supported": False, "number_supported": None, "source": None}
+        for it in items
+    ]
+
+
+# ---- scaled_max_targeted formula ----
+
+def test_scaled_max_targeted_8_beats():
+    assert scaled_max_targeted(8) == 3   # ceil(8/8)=1 → 3*1=3
+
+
+def test_scaled_max_targeted_9_beats():
+    assert scaled_max_targeted(9) == 6   # ceil(9/8)=2 → 3*2=6
+
+
+def test_scaled_max_targeted_30_beats():
+    assert scaled_max_targeted(30) == 12  # ceil(30/8)=4 → 3*4=12
+
+
+def test_scaled_max_targeted_48_beats():
+    assert scaled_max_targeted(48) == 18  # ceil(48/8)=6 → 3*6=18
+
+
+# ---- EDIT_RECHECK_MAX_TAVILY cap ----
+
+def test_edit_recheck_cap_fires_exactly_4_retrievals():
+    """6 edited indices → only the first 4 trigger Tavily calls; 2 overflow get skip flag."""
+    beats = [Beat(text=f"claim {i}", source=f"https://src{i}") for i in range(6)]
+    script = BeatsScript(title="T", beats=beats)
+    rt = _FakeRetrieveEdited()
+    out = verify_edited_beats(script, list(range(6)), verify_fn=_always_unsupported, retrieve_fn=rt)
+    assert rt.calls == EDIT_RECHECK_MAX_TAVILY  # exactly 4 Tavily calls fired
+
+    flags_by_idx = {f["index"]: f for f in out.beat_flags}
+    assert len(flags_by_idx) == 6
+
+    # Overflow beats (indices 4 and 5) carry the cap-specific skip reason.
+    for i in (4, 5):
+        assert flags_by_idx[i]["status"] == "unverified"
+        assert "recheck skipped (cap)" in flags_by_idx[i]["reason"]
+        assert "re-save to recheck" in flags_by_idx[i]["reason"]
+
+    # Checked beats (indices 0-3) carry the normal unsupported reason.
+    for i in range(4):
+        assert flags_by_idx[i]["status"] == "unverified"
+        assert "recheck skipped (cap)" not in flags_by_idx[i]["reason"]
+
+
+def test_edit_recheck_overflow_beat_order_preserved():
+    """Overflow flags are sorted correctly alongside checked flags."""
+    beats = [Beat(text=f"c{i}", source="https://s") for i in range(6)]
+    script = BeatsScript(title="T", beats=beats)
+    rt = _FakeRetrieveEdited()
+    out = verify_edited_beats(script, list(range(6)), verify_fn=_always_unsupported, retrieve_fn=rt)
+    indices_in_order = [f["index"] for f in out.beat_flags]
+    assert indices_in_order == sorted(indices_in_order)
+
+
+def test_edit_recheck_under_cap_unchanged():
+    """4 or fewer edited indices → no overflow, all 4 retrievals fire normally."""
+    beats = [Beat(text=f"c{i}", source="https://s") for i in range(4)]
+    script = BeatsScript(title="T", beats=beats)
+    rt = _FakeRetrieveEdited()
+    out = verify_edited_beats(script, [0, 1, 2, 3], verify_fn=_always_unsupported, retrieve_fn=rt)
+    assert rt.calls == 4
+    assert all(f["status"] == "unverified" for f in out.beat_flags)
+    assert all("recheck skipped (cap)" not in (f["reason"] or "") for f in out.beat_flags)
