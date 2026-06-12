@@ -140,3 +140,93 @@ def test_delete_session_purges_all_tables(tmp_path):
     assert store.get_stage(conn, "auto-x", "script") is None
     assert store.get_footage_candidates(conn, "auto-x", scene_index=0) == []
     assert store.get_media_provenance(conn, "auto-x") == {}
+
+
+# ── v3-M1: gates table + auto_run column ────────────────────────────────────
+
+def test_gate_state_roundtrip_and_approved_at_preserved(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="t", now="t0")
+    store.upsert_gate_state(conn, "s1", "script", "awaiting_approval", now="t1")
+    assert store.get_gate_states(conn, "s1")["script"] == {
+        "state": "awaiting_approval", "approved_at": None}
+    store.upsert_gate_state(conn, "s1", "script", "approved", now="t2")
+    assert store.get_gate_states(conn, "s1")["script"] == {
+        "state": "approved", "approved_at": "t2"}
+    # stale must NOT erase the approval stamp (the Re-approve restore rule reads it)
+    store.upsert_gate_state(conn, "s1", "script", "stale", now="t3")
+    g = store.get_gate_states(conn, "s1")["script"]
+    assert g["state"] == "stale" and g["approved_at"] == "t2"
+
+
+def test_unknown_gate_state_rejected(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="t", now="t0")
+    with pytest.raises(ValueError):
+        store.upsert_gate_state(conn, "s1", "script", "pending", now="t1")
+
+
+def test_auto_run_defaults_false_and_flips(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="t", now="t0")
+    assert store.get_session(conn, "s1")["auto_run"] == 0
+    store.set_auto_run(conn, "s1", True, now="t1")
+    assert store.get_session(conn, "s1")["auto_run"] == 1
+
+
+def test_auto_run_column_migrates_pre_v3_db(tmp_path):
+    # simulate a pre-v3 DB: sessions table without the auto_run column
+    import sqlite3
+    db = tmp_path / "old.db"
+    raw = sqlite3.connect(db)
+    raw.execute("""CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, topic TEXT NOT NULL, created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL, current_stage TEXT, spec_path TEXT)""")
+    raw.execute("INSERT INTO sessions VALUES ('old1','t','c','u',NULL,NULL)")
+    raw.commit(); raw.close()
+    conn = store.connect(db)   # must ALTER, not crash
+    assert store.get_session(conn, "old1")["auto_run"] == 0
+
+
+def test_delete_session_purges_all_tables_structural(tmp_path):
+    """Structural delete test: populate every session_id-keyed table, delete,
+    then enumerate sqlite_master and assert zero rows for the sid remain.
+    Any future table added to the schema but omitted from delete_session will
+    fail this test immediately."""
+    conn = store.connect(tmp_path / "s.db")
+    sid = "sid-structural"
+    store.create_session(conn, id=sid, topic="t", now="t0")
+
+    # populate every table that carries session_id (or id-as-sid for sessions)
+    store.upsert_stage(conn, sid, "script", status="done", now="t0", output_json="{}")
+    store.replace_footage_candidates(conn, sid, scene_index=0, candidates=[
+        {"rank": 1, "query": "q", "duration_frames": 30, "thumb_url": "u", "selected": 1}])
+    store.upsert_provenance(conn, sid, 0, source="auto", query="q", rank=1,
+                            pexels_id=1, pexels_url="u")
+    store.append_spec_patch(conn, sid, kind="patch", patch=[{"op": "add", "path": "/x", "value": 1}],
+                            diff=[{"path": "/x", "before": None, "after": 1}], now="t0")
+    store.upsert_gate_state(conn, sid, "script", "approved", now="t0")
+
+    store.delete_session(conn, sid)
+
+    # Enumerate all user tables from sqlite_master
+    tables = [r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    ).fetchall()]
+
+    for table in tables:
+        # determine the session-identity column for this table
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if "session_id" in cols:
+            id_col = "session_id"
+        elif table == "sessions":
+            id_col = "id"
+        else:
+            continue  # no session-identity column — skip (e.g. a config table)
+        count = conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE {id_col}=?", (sid,)
+        ).fetchone()[0]
+        assert count == 0, (
+            f"delete_session left {count} orphan row(s) in table '{table}' "
+            f"for session '{sid}' — add it to delete_session()"
+        )

@@ -61,7 +61,27 @@ CREATE TABLE IF NOT EXISTS spec_patches (
   created_at  TEXT    NOT NULL,
   PRIMARY KEY (session_id, seq)
 );
+CREATE TABLE IF NOT EXISTS gates (
+  session_id  TEXT NOT NULL,
+  gate        TEXT NOT NULL,
+  state       TEXT NOT NULL,   -- awaiting_approval | approved | stale (PRD §6.1)
+  approved_at TEXT,            -- first-approval stamp; survives stale flips (§4.1 restore)
+  updated_at  TEXT NOT NULL,
+  PRIMARY KEY (session_id, gate)
+);
 """
+
+
+def _migrate(conn) -> None:
+    """Column additions for DBs created before v3. CREATE TABLE IF NOT EXISTS
+    can't add columns, so each new sessions column gets a guarded ALTER here
+    (target_length rides M2 through this same helper)."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
+    if "auto_run" not in cols:
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN auto_run INTEGER NOT NULL DEFAULT 0"
+        )
+        conn.commit()
 
 
 def connect(db_path) -> sqlite3.Connection:
@@ -72,6 +92,7 @@ def connect(db_path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
     conn.commit()
+    _migrate(conn)
     return conn
 
 
@@ -237,10 +258,60 @@ def get_media_provenance(conn, session_id):
             for r in rows}
 
 
+# ── v3-M1: gate state machine persistence ───────────────────────────────────
+
+GATE_STATES = {"awaiting_approval", "approved", "stale"}
+
+
+def upsert_gate_state(conn, session_id, gate, state, *, now) -> None:
+    """Persist a gate state transition.
+
+    The approval stamp (approved_at) is set only on the first ``approved``
+    write and is preserved across later ``stale`` or ``awaiting_approval``
+    flips via COALESCE — the Re-approve restore rule (PRD §4.1) reads it.
+    """
+    if state not in GATE_STATES:
+        raise ValueError(f"unknown gate state {state!r}")
+    # Supply approved_at only when approving; COALESCE keeps the FIRST stamp
+    # across any later flip (ruling 6A: logic lives in Python + SQL, not just SQL).
+    approved_at = now if state == "approved" else None
+    conn.execute(
+        """INSERT INTO gates (session_id, gate, state, approved_at, updated_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(session_id, gate) DO UPDATE SET
+             state=excluded.state,
+             approved_at=COALESCE(gates.approved_at, excluded.approved_at),
+             updated_at=excluded.updated_at""",
+        (session_id, gate, state, approved_at, now),
+    )
+    conn.commit()
+
+
+def get_gate_states(conn, session_id) -> dict:
+    """{gate: {state, approved_at}} for all gates belonging to the session."""
+    rows = conn.execute(
+        "SELECT gate, state, approved_at FROM gates WHERE session_id=?",
+        (session_id,),
+    ).fetchall()
+    return {r["gate"]: {"state": r["state"], "approved_at": r["approved_at"]}
+            for r in rows}
+
+
+def set_auto_run(conn, session_id, flag: bool, *, now) -> None:
+    """Toggle the auto-run flag (True → 1, False → 0) for a session."""
+    conn.execute(
+        "UPDATE sessions SET auto_run=?, updated_at=? WHERE id=?",
+        (1 if flag else 0, now, session_id),
+    )
+    conn.commit()
+
+
 def delete_session(conn, session_id) -> None:
-    """Remove a session and all its rows (stages, footage candidates, provenance).
+    """Remove a session and ALL its rows across every keyed table.
     One transaction so a crash can't leave half the session behind. Idempotent."""
     with conn:
+        conn.execute("DELETE FROM gates WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM spec_patches WHERE session_id=?", (session_id,))
         conn.execute("DELETE FROM media_provenance WHERE session_id=?", (session_id,))
         conn.execute("DELETE FROM footage_candidates WHERE session_id=?", (session_id,))
         conn.execute("DELETE FROM stages WHERE session_id=?", (session_id,))
