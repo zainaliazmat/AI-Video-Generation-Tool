@@ -15,7 +15,10 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {zodToJsonSchema} from 'zod-to-json-schema';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const templatesDir = resolve(__dirname, '..');
+const dirFlag = process.argv.indexOf('--dir');
+const templatesDir = dirFlag !== -1 && process.argv[dirFlag + 1]
+  ? resolve(process.argv[dirFlag + 1])
+  : resolve(__dirname, '..');
 
 function entryFile(dir: string): string | null {
   for (const f of ['schema.ts', 'schema.js']) {
@@ -29,7 +32,9 @@ async function run() {
   const done: string[] = [];
   for (const entry of readdirSync(templatesDir, {withFileTypes: true})) {
     if (!entry.isDirectory() || entry.name === 'scripts' || entry.name === 'node_modules') continue;
+    if (entry.name.startsWith('.')) continue; // §17.4: staging/dot dirs are never templates
     const dir = join(templatesDir, entry.name);
+    if (existsSync(join(dir, '.installing'))) continue; // §15.2: mid-install folder, skip
     const manifestPath = join(dir, 'manifest.json');
     const schemaPath = entryFile(dir);
     if (!existsSync(manifestPath) || !schemaPath) continue; // no manifest or no zod schema → skip

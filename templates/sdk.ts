@@ -70,6 +70,18 @@ export interface Manifest {
    * templates. MUST stay in lockstep with backend/manifest.py.
    */
   consumes?: string;
+  /** Catalog/search text (§4.2). Optional. Lockstep: backend/manifest.py. */
+  description?: string;
+  /** Search facets, e.g. ["numbers", "hero", "minimal"]. Optional. */
+  tags?: string[];
+  /** SPDX id. Required for non-core authors by the installer's imperative
+   *  pass (§15.13) — optional at the envelope level. */
+  license?: string;
+  /** Author link, surfaced in the gallery drawer. Optional. */
+  homepage?: string;
+  /** Declared relative paths under assets/ the installer must ship —
+   *  undeclared files are rejected (§4.2/§4.4). Optional. */
+  assets?: string[];
 }
 
 /** staticFile-resolved absolute paths for any media a template references. */

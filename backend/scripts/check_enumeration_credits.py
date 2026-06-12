@@ -1,7 +1,7 @@
 """Gate: every bundled enumeration image has a COMPLETE provenance record.
 
 COVERAGE direction (the part that makes "no image ships undocumented" true): we
-enumerate the actual image files in remotion/public/enumeration/ and require each
+enumerate the actual image files in templates/enumeration/assets/ and require each
 to have a complete CREDITS record. An image dropped in with no record FAILS — it is
 not enough to check that listed records are filled, because a no-record file would
 be invisible to that. We also flag records whose file is missing (stale entry).
@@ -15,21 +15,24 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CREDITS = ROOT / "templates/enumeration/assets/CREDITS.json"
-IMG_DIR = ROOT / "remotion/public/enumeration"
+IMG_DIR = ROOT / "templates/enumeration/assets"
 REQUIRED = ("source_url", "rights", "date")
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def main() -> int:
     data = json.loads(CREDITS.read_text())
-    # index records by their on-disk path (relative to remotion/public)
+    # index records by their on-disk path (relative to templates/enumeration)
     by_file = {a.get("file", ""): a for a in data.get("assets", [])}
     problems: list[str] = []
 
     # COVERAGE: every actual image file must have a complete record.
-    actual = sorted(p for p in IMG_DIR.glob("*") if p.suffix.lower() in IMG_EXTS) if IMG_DIR.exists() else []
+    # Exclude CREDITS.json itself — only image files count.
+    actual = sorted(
+        p for p in IMG_DIR.glob("*") if p.suffix.lower() in IMG_EXTS
+    ) if IMG_DIR.exists() else []
     for p in actual:
-        rel = f"enumeration/{p.name}"
+        rel = f"assets/{p.name}"
         rec = by_file.get(rel)
         if rec is None:
             problems.append(f"{rel}: image present but has NO CREDITS record (undocumented)")
@@ -42,7 +45,7 @@ def main() -> int:
     for f, rec in by_file.items():
         if not f:
             problems.append(f"{rec.get('label', '<no-label>')}: empty 'file'")
-        elif not (ROOT / "remotion/public" / f).exists():
+        elif not (ROOT / "templates/enumeration" / f).exists():
             problems.append(f"{f}: CREDITS record but image file missing")
 
     if not actual:

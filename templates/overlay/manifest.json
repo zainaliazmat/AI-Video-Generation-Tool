@@ -5,6 +5,11 @@
   "author": "core",
   "apiVersion": "1",
   "kind": "overlay",
+  "description": "Text overlay layer rendered above scene content.",
+  "tags": [
+    "overlay",
+    "text"
+  ],
   "inputSchema": {
     "type": "object",
     "properties": {

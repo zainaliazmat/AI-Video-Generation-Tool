@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 # Template slots. A spec references templates by the slot appropriate to each
 # position (a `transition` cannot go where a `scene` goes); validation enforces
@@ -35,11 +35,18 @@ TemplateKind = Literal[
 
 
 class DurationFrames(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     min: int
     max: int
 
 
 class Manifest(BaseModel):
+    # The envelope is strict (§15.13) — an unknown key is a stale or malformed
+    # package, never something to ignore. MUST stay in lockstep with
+    # templates/sdk.ts and the generated templates/manifest.schema.json.
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     name: str
     version: str
@@ -60,3 +67,11 @@ class Manifest(BaseModel):
     # hardcoded id. None on position/data-routed templates. Today: "enumeration".
     # MUST stay in lockstep with templates/sdk.ts.
     consumes: Optional[str] = None
+    # --- v1.1 additive fields (§4.2) — all optional at the envelope level.
+    # license is required for non-core authors by the IMPERATIVE pass (§15.13),
+    # which lives installer-side (M2), not in this schema validator.
+    description: Optional[str] = None     # catalog/search text
+    tags: Optional[list[str]] = None      # search facets
+    license: Optional[str] = None         # SPDX id
+    homepage: Optional[str] = None        # author link in the drawer
+    assets: Optional[list[str]] = None    # declared relative paths under assets/

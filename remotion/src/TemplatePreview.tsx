@@ -3,6 +3,7 @@ import {AbsoluteFill, useVideoConfig} from 'remotion';
 import {TransitionSeries, linearTiming} from '@remotion/transitions';
 import {registry} from '../../templates/registry.generated';
 import type {Theme} from './schema';
+import {resolveAssets} from './assets';
 
 /**
  * Renders ONE template in isolation from its `sampleProps`, for the gallery's
@@ -84,7 +85,7 @@ export const TemplatePreview: React.FC<TemplatePreviewProps> = ({
     const Component = entry.component;
     return (
       <AbsoluteFill style={{backgroundColor: theme.palette.background}}>
-        <Component data={props} theme={theme} timing={{fps, durationInFrames}} assets={{}} />
+        <Component data={props} theme={theme} timing={{fps, durationInFrames}} assets={resolveAssets(entry.manifest)} />
       </AbsoluteFill>
     );
   }

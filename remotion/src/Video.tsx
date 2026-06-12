@@ -7,6 +7,7 @@ import {deriveCaptionSuppressRanges} from './captions-suppress';
 import {hookWordTimingsForScene} from './word-alignment';
 import {itemTimingsForScene} from './item-timing';
 import {registry} from '../../templates/registry.generated';
+import {resolveAssets} from './assets';
 
 /**
  * dB -> linear amplitude. Remotion's `volume` prop is linear 0..1.
@@ -82,7 +83,7 @@ function renderScene(
         data={scene.templateProps ?? {}}
         theme={theme}
         timing={{fps, durationInFrames}}
-        assets={{}}
+        assets={resolveAssets(entry.manifest)}
         wordTimings={wordTimings}
         itemTimings={itemTimings}
       />
@@ -203,7 +204,7 @@ export const Video: React.FC<{spec: Spec}> = ({spec}) => {
                 data={layer.props ?? {}}
                 theme={theme}
                 timing={{fps, durationInFrames: layer.durationInFrames}}
-                assets={{}}
+                assets={resolveAssets(entry.manifest)}
               />
             ) : (
               <MissingTemplate templateId={layer.template} />

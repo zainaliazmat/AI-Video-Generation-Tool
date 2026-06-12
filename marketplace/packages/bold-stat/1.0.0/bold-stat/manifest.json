@@ -1,0 +1,39 @@
+{
+  "id": "bold-stat",
+  "name": "Bold Statistic",
+  "version": "1.0.0",
+  "author": "acme",
+  "apiVersion": "1",
+  "kind": "stat",
+  "description": "Bold statistic with count-up.",
+  "tags": [
+    "stat",
+    "number"
+  ],
+  "license": "MIT",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "value": {
+        "type": "string"
+      },
+      "label": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "value",
+      "label"
+    ],
+    "additionalProperties": false
+  },
+  "sampleProps": {
+    "value": "90%",
+    "label": "of materials are recyclable"
+  },
+  "durationFrames": {
+    "min": 45,
+    "max": 120
+  },
+  "rendersOwnText": true
+}

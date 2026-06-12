@@ -5,6 +5,13 @@
   "author": "core",
   "apiVersion": "1",
   "kind": "scene",
+  "description": "Image-as-hero enumeration — items reveal one-by-one in sync with narration.",
+  "tags": [
+    "enumeration",
+    "list",
+    "images",
+    "sync"
+  ],
   "consumes": "enumeration",
   "inputSchema": {
     "type": "object",
@@ -37,5 +44,12 @@
     "min": 60,
     "max": 300
   },
-  "rendersOwnText": true
+  "rendersOwnText": true,
+  "assets": [
+    "assets/sun.jpg",
+    "assets/moon.jpg",
+    "assets/planets.jpg",
+    "assets/eclipse.jpg",
+    "assets/phases.jpg"
+  ]
 }

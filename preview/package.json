@@ -12,7 +12,8 @@
     "build": "next build",
     "prestart": "npm run build-registry && npm run copy-assets",
     "start": "next start",
-    "typecheck": "npm run build-registry && tsc --noEmit"
+    "typecheck": "npm run build-registry && tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@remotion/google-fonts": "4.0.472",
@@ -20,6 +21,7 @@
     "@remotion/transitions": "4.0.472",
     "clsx": "2.1.1",
     "framer-motion": "12.40.0",
+    "marked": "18.0.5",
     "next": "15.5.19",
     "react": "19.2.7",
     "react-dom": "19.2.7",
@@ -34,6 +36,7 @@
     "autoprefixer": "10.5.0",
     "postcss": "8.5.15",
     "tailwindcss": "3.4.19",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "vitest": "^3.2.6"
   }
 }
