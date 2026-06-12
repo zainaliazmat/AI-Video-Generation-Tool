@@ -198,6 +198,56 @@ def set_voice(sess, *, voice, speed=1.0):
     return view(sess)
 
 
+def regenerate(sess, stage):
+    """Gated regenerate (script gate's primary action): re-run the stage NOW so
+    the gate page shows fresh output, then route downstream by the same §4.1
+    dispatch as edit():
+
+    - At a true FRONTIER (awaiting_approval, never approved): advance the stage
+      NOW, then instantly re-derive only the stages that already ran
+      (rederive_stale skips never-run stages, so the pipeline never advances past
+      the gate).
+    - At an APPROVED or REOPENED gate: advance the stage NOW, then reopen the
+      gate (§4.1) — downstream defers to Re-approve.
+    - STALE gate: view-only (M6 contract); names the awaiting gate to Re-approve.
+    - Gate row missing (stage has never been reached): raises ValueError.
+
+    Mirrors api.regenerate's stale-marking idiom exactly: upsert status=stale +
+    input_hash=None THEN engine.invalidate THEN engine.advance. The None hash
+    ensures advance() re-runs even when the inputs haven't changed."""
+    gate = gates.GATE_FOR_STAGE[stage]
+    states = store.get_gate_states(sess.conn, sess.id)
+    row = states.get(gate)
+    if row is None:
+        raise ValueError(f"gate {gate!r} has not been reached; nothing to regenerate")
+    if row["state"] == "stale":
+        reopened = next(
+            (g for g in gates.GATE_ORDER
+             if states.get(g, {}).get("state") == "awaiting_approval"), None)
+        if reopened is None:
+            raise RuntimeError(
+                f"gate {gate!r} is stale but no gate is awaiting_approval "
+                f"in {sorted(states)!r} — gate-state invariant violated")
+        raise ValueError(
+            f"gate {gate!r} is stale (view-only) — re-approve gate {reopened!r} first")
+    # stale-mark the stage row BEFORE invalidate+advance (donor pattern from api.regenerate)
+    stage_row = store.get_stage(sess.conn, sess.id, stage)
+    store.upsert_stage(sess.conn, sess.id, stage, status="stale", input_hash=None,
+                       output_json=stage_row["output_json"] if stage_row else None,
+                       now=_now())
+    sess.engine.invalidate(stage)
+    sess.engine.advance(stage)    # the fresh output, NOW (input_hash=None forces re-run)
+    if row["state"] == "approved" or row["approved_at"]:
+        # approved or reopened (awaiting with a stamp): §4.1 territory
+        if preview_reopen(sess, gate)["reruns"]:
+            _reopen(sess, gate)   # downstream defers to Re-approve
+            return view(sess)
+        return view(sess)         # OV-11: nothing downstream ran — free, no reopen
+    # true frontier: instant re-derive for stages that already ran
+    sess.engine.rederive_stale()
+    return view(sess)
+
+
 def _reopen(sess, gate):
     store.upsert_gate_state(sess.conn, sess.id, gate, "awaiting_approval", now=_now())
     states = store.get_gate_states(sess.conn, sess.id)

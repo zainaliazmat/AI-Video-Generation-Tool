@@ -54,7 +54,12 @@ def edit(sess: Session, stage, op):
 
 def regenerate(sess: Session, stage):
     """Force a fresh run of a stage (ignore the input-hash cache) + re-derive down.
-    Requires this stage's upstream deps to be `done` (advance fails loud otherwise)."""
+    Requires this stage's upstream deps to be `done` (advance fails loud otherwise).
+
+    OV-1 seam: gated sessions route through gatekeeper.regenerate (same pattern as
+    edit); ungated (v2/autopilot) continue with the byte-identical body below."""
+    if store.get_gate_states(sess.conn, sess.id):
+        return gatekeeper.regenerate(sess, stage)
     existing_row = store.get_stage(sess.conn, sess.id, stage)
     existing_output = existing_row["output_json"] if existing_row else None
     store.upsert_stage(sess.conn, sess.id, stage, status="stale", input_hash=None,
@@ -81,8 +86,8 @@ def close(sess: Session):
 
 # ── v3-M1: gate wrappers (thin delegation to gatekeeper) ────────────────────
 
-def gate_start(sess: Session, *, on_stage=None):
-    return gatekeeper.start(sess, on_stage=on_stage)
+def gate_start(sess: Session, *, auto_run=False, on_stage=None):
+    return gatekeeper.start(sess, auto_run=auto_run, on_stage=on_stage)
 
 def gate_approve(sess: Session, gate, *, on_stage=None):
     return gatekeeper.approve(sess, gate, on_stage=on_stage)

@@ -332,3 +332,54 @@ def test_auto_run_off_does_not_cascade(tmp_path, monkeypatch):
     assert "scenes" not in g
 
 
+# ---------------------------------------------------------------------------
+# Task 9 (completion): gate_start auto_run kwarg + gated regenerate seam (OV-1)
+# ---------------------------------------------------------------------------
+
+def test_gate_start_auto_run_cascades_all_gates(tmp_path, monkeypatch):
+    """api.gate_start(sess, auto_run=True) must cascade through all approvable
+    gates and leave assemble awaiting_approval — same as gatekeeper.start()."""
+    from session import api
+    _fakes(monkeypatch)
+    sess = _mk_session(tmp_path, monkeypatch)
+    api.gate_start(sess, auto_run=True)
+    g = store.get_gate_states(sess.conn, sess.id)
+    assert all(g[x]["state"] == "approved" for x in ("script", "voice", "scenes"))
+    assert g["assemble"]["state"] == "awaiting_approval"
+    assert store.get_session(sess.conn, sess.id)["auto_run"] == 1
+
+
+def test_regenerate_at_script_frontier_reruns_script_only(tmp_path, monkeypatch):
+    calls = _fakes(monkeypatch)
+    sess = _started(tmp_path, monkeypatch)
+    before = dict(calls)
+    gatekeeper.regenerate(sess, "script")
+    assert calls["script"] == before["script"] + 1        # fresh output NOW
+    assert store.get_stage(sess.conn, sess.id, "voice") is None   # never advanced
+    g = store.get_gate_states(sess.conn, sess.id)
+    assert g["script"]["state"] == "awaiting_approval"
+
+
+def test_regenerate_at_approved_gate_reopens_and_defers(tmp_path, monkeypatch):
+    calls = _fakes(monkeypatch)
+    sess = _at_assemble_gate(tmp_path, monkeypatch)
+    before = dict(calls)
+    gatekeeper.regenerate(sess, "script")
+    assert calls["script"] == before["script"] + 1        # script re-ran NOW
+    for st in ("voice", "timing", "footage", "assemble"):
+        assert calls[st] == before[st], f"{st} must defer to Re-approve"
+    g = store.get_gate_states(sess.conn, sess.id)
+    assert g["script"]["state"] == "awaiting_approval"    # reopened
+    assert g["scenes"]["state"] == "stale"
+
+
+def test_api_regenerate_seam_routes_gated_sessions(tmp_path, monkeypatch):
+    from session import api
+    calls = _fakes(monkeypatch)
+    sess = _at_assemble_gate(tmp_path, monkeypatch)
+    before = dict(calls)
+    api.regenerate(sess, "script")
+    assert calls["voice"] == before["voice"]              # gated: deferred
+    assert store.get_gate_states(sess.conn, sess.id)["script"]["state"] == "awaiting_approval"
+
+
