@@ -129,8 +129,11 @@ export function _acquireLock(op) {
         try {
           process.kill(holdingPid, 0); // signal 0 = probe: throws ESRCH if dead
           alive = true;
-        } catch {
-          alive = false; // ESRCH (no such process) or unexpected signal error
+        } catch (err) {
+          // ESRCH = no such process (dead). EPERM = alive but owned by another
+          // user — can't be tested cross-user in this suite, but must not be
+          // treated as dead.
+          alive = err.code !== 'ESRCH';
         }
       }
       if (alive) {
@@ -238,7 +241,9 @@ export function _sweepStale() {
     // no lock or corrupt — no live lock
   }
 
-  if (liveLockPid !== null) return; // don't sweep while a live op is running
+  // Don't sweep while a live op is running, UNLESS that live op is this
+  // process itself (engine driver calls _acquireLock then _sweepStale).
+  if (liveLockPid !== null && liveLockPid !== process.pid) return;
 
   for (const entry of readdirSync(STAGING_DIR, {withFileTypes: true})) {
     if (!entry.isDirectory()) continue; // never remove .lock / last-error.json files
@@ -255,6 +260,14 @@ export function _sweepStale() {
  */
 
 /**
+ * Internal shape returned by _discoverInstalled — adds `folder` (the actual
+ * on-disk directory name) used by installedState() to derive the git path.
+ * The `folder` field is NOT part of the public surface.
+ *
+ * @typedef {TemplateInfo & {folder: string}} DiscoveredTemplate
+ */
+
+/**
  * Scan templates/ and return metadata for every properly-installed template.
  *
  * Skips:
@@ -265,7 +278,7 @@ export function _sweepStale() {
  *   - folders without a manifest.json
  *   - folders whose manifest.json is unparseable (warns to stderr, skips)
  *
- * @returns {TemplateInfo[]} sorted by id
+ * @returns {DiscoveredTemplate[]} sorted by id
  */
 function _discoverInstalled() {
   const found = [];
@@ -291,6 +304,7 @@ function _discoverInstalled() {
       kind: manifest.kind ?? 'scene',
       author: manifest.author ?? 'unknown',
       description: manifest.description ?? '',
+      folder: entry.name, // actual on-disk name — used by installedState() for git path
     });
   }
   found.sort((a, b) => a.id.localeCompare(b.id));
@@ -326,9 +340,11 @@ export function installedState() {
   const templates = discovered.map((t) => {
     let uncommitted = false;
     try {
+      // Use the actual folder name (not manifest.id) so that a template whose
+      // folder was renamed after installation isn't silently reported as clean.
       const out = execFileSync(
         'git',
-        ['status', '--porcelain', '--', `templates/${t.id}`],
+        ['status', '--porcelain', '--', `templates/${t.folder}`],
         {cwd: REPO_ROOT, encoding: 'utf8'},
       );
       uncommitted = out.trim().length > 0;
@@ -336,7 +352,9 @@ export function installedState() {
       // git not available or not a git repo — treat as committed
       uncommitted = false;
     }
-    return {...t, uncommitted};
+    // Strip the internal `folder` field — public shape is id/version/kind/author/description/uncommitted.
+    const {folder: _folder, ...pub} = t;
+    return {...pub, uncommitted};
   });
   return {
     installedIds: templates.map((t) => t.id),

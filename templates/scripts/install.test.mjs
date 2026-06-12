@@ -95,6 +95,16 @@ describe('startup sweep (§15.2)', () => {
     expect(existsSync(join(staging, 'run-stale'))).toBe(false);
     expect(installedState().lastError).not.toBeNull(); // sweep never clears the error surface
   });
+  it('sweeps stale run-dirs even when the current process holds the lock', () => {
+    _acquireLock('install');
+    try {
+      mkdirSync(join(staging, 'run-stale-under-own-lock'), {recursive: true});
+      _sweepStale();
+      expect(existsSync(join(staging, 'run-stale-under-own-lock'))).toBe(false);
+    } finally {
+      _releaseLock();
+    }
+  });
 });
 
 describe('reference scan (§15.9/§17.1)', () => {
