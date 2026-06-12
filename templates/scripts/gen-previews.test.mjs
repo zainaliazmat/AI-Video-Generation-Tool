@@ -3,6 +3,7 @@ import {mkdirSync, writeFileSync, rmSync, readFileSync, cpSync} from 'node:fs';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {afterEach, describe, expect, it} from 'vitest';
+import {Buffer} from 'node:buffer';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const templatesDir = resolve(__dirname, '..');
@@ -28,6 +29,40 @@ function hashOf(out, id) {
   const line = out.split('\n').find((l) => l.trim().startsWith(`${id} `));
   return line?.trim().split(/\s+/)[1];
 }
+
+describe('gen-previews shared-helper salt', () => {
+  it('editing a root-level shared helper flips EVERY template hash', () => {
+    const sharedHelper = join(templatesDir, 'countUp.ts');
+    const originalBytes = readFileSync(sharedHelper);
+    try {
+      const out1 = dryRun();
+      const hookHash1 = hashOf(out1, 'hook');
+      const fadeHash1 = hashOf(out1, 'fade');
+      expect(hookHash1).toBeTruthy();
+      expect(fadeHash1).toBeTruthy();
+
+      // Mutate the shared helper
+      writeFileSync(sharedHelper, Buffer.concat([originalBytes, Buffer.from('\n// salt-test\n')]));
+
+      const out2 = dryRun();
+      const hookHash2 = hashOf(out2, 'hook');
+      const fadeHash2 = hashOf(out2, 'fade');
+      expect(hookHash2).toBeTruthy();
+      expect(fadeHash2).toBeTruthy();
+
+      expect(hookHash2).not.toBe(hookHash1);
+      expect(fadeHash2).not.toBe(fadeHash1);
+    } finally {
+      writeFileSync(sharedHelper, originalBytes);
+      // Verify tree is clean — restore must be byte-identical
+      const status = execFileSync('git', ['status', '--porcelain', 'templates/countUp.ts'], {
+        cwd: repoRoot,
+        stdio: 'pipe',
+      }).toString().trim();
+      expect(status).toBe('');
+    }
+  });
+});
 
 describe('gen-previews --dry-run / --only / whole-folder hash', () => {
   it('lists an unknown-to-the-lock template as STALE', () => {

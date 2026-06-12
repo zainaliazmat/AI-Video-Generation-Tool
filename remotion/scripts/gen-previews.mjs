@@ -61,6 +61,21 @@ function walkDir(dir) {
 
 function discover() {
   const harness = readFileSync(harnessSrc, 'utf8');
+
+  // Global salt: hash every root-level *.ts file directly under templates/ (non-recursive,
+  // sorted). In-folder files are hashed per-template; root-level shared helpers
+  // (sdk.ts, countUp.ts, heroBackground.ts, …) salt ALL hashes — over-approximate by
+  // design so that editing any shared helper stales every preview.
+  const sharedHelperSalt = createHash('sha256');
+  const rootTsFiles = readdirSync(templatesDir, {withFileTypes: true})
+    .filter((e) => e.isFile() && e.name.endsWith('.ts'))
+    .map((e) => e.name)
+    .sort();
+  for (const name of rootTsFiles) {
+    sharedHelperSalt.update(name).update(readFileSync(join(templatesDir, name)));
+  }
+  const globalSalt = sharedHelperSalt.digest();
+
   const out = [];
   for (const entry of readdirSync(templatesDir, {withFileTypes: true})) {
     if (!entry.isDirectory() || entry.name === 'scripts' || entry.name === 'node_modules') continue;
@@ -72,12 +87,15 @@ function discover() {
     const entryPath = isTransition ? join(dir, 'presentation.tsx') : join(dir, 'Component.tsx');
     if (!existsSync(entryPath)) continue;
     // Whole-folder hash (§15.2): every file under the template dir, sorted by
-    // relative path, plus the harness source. Catches helper / asset changes.
+    // relative path, plus the harness source. In-folder files are hashed per-template;
+    // root-level shared helpers salt ALL hashes (over-approximate by design — a
+    // shared-helper edit stales everything).
     const hash = createHash('sha256');
     for (const {rel, abs} of walkDir(dir)) {
       hash.update(rel).update(readFileSync(abs));
     }
     hash.update(harness);
+    hash.update(globalSalt);
     const inputHash = hash.digest('hex').slice(0, 16);
     out.push({id: manifest.id, kind: isTransition ? 'transition' : 'render', sampleProps: manifest.sampleProps ?? {}, inputHash});
   }
