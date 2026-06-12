@@ -59,6 +59,8 @@ def run_script(ctx: EngineContext, inputs: dict) -> dict:
     system_prompt = script_stage.system_prompt_for(ctx.target_length)
     if system_prompt != script_stage.SYSTEM_PROMPT:
         kw["system_prompt"] = system_prompt
+    # M2-T3: always pass target_length so the unified band+parse retry is active.
+    kw["target_length"] = ctx.target_length
     script = script_stage.generate_grounded_script(ctx.topic, cache_dir=ctx.cache_dir, **kw)
     plan = recipe_stage.plan(script, theme=ctx.theme, manifests=ctx.catalog)
     return {"script": script, "plan": plan}

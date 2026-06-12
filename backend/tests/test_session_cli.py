@@ -17,7 +17,7 @@ def _seed_session(tmp_path, monkeypatch, *, sid="s-cli"):
     script = BeatsScript(title="Reefs", beats=[
         Beat(text="hook"), Beat(text="mid", keywords="coral reef"), Beat(text="out")])
     monkeypatch.setattr("pipeline.script.generate_grounded_script",
-                        lambda topic, cache_dir=None: script)
+                        lambda topic, cache_dir=None, **kw: script)
     monkeypatch.setattr("pipeline.tts.synthesize",
                         lambda lines, path: (Path(path).parent.mkdir(parents=True, exist_ok=True),
                                              Path(path).write_bytes(b"W"),
@@ -57,7 +57,7 @@ def test_run_emits_session_id(tmp_path, monkeypatch):
     # fake the stages main.run drives (same shapes as the seed) + redirect output paths
     script = BeatsScript(title="Reefs", beats=[
         Beat(text="hook"), Beat(text="mid", keywords="coral reef"), Beat(text="out")])
-    monkeypatch.setattr("pipeline.script.generate_grounded_script", lambda topic, cache_dir=None: script)
+    monkeypatch.setattr("pipeline.script.generate_grounded_script", lambda topic, cache_dir=None, **kw: script)
     monkeypatch.setattr("pipeline.tts.synthesize",
                         lambda lines, path: (Path(path).parent.mkdir(parents=True, exist_ok=True),
                                              Path(path).write_bytes(b"W"),

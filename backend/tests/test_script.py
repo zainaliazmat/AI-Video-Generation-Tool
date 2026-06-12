@@ -313,3 +313,122 @@ def test_floor_warns_at_one_without_raising():
         beats=[Beat(text="hook", source="https://a"), Beat(text="one fact", source="https://a"), Beat(text="outro")],
     )
     _enforce_floor(script)  # 1 body claim → warns to stderr, does not raise
+
+
+# ---------------------------------------------------------------------------
+# M2-T3: beat-band validation + one bounded retry (OV-8)
+# ---------------------------------------------------------------------------
+# All tests use generate_script with the new target_length param and a
+# capturing fake client so we can assert call counts and prompt content.
+
+
+class _CapturingCompletions:
+    """Like _FakeCompletions but captures ALL calls (not just the last)."""
+
+    def __init__(self, *contents):
+        self._contents = list(contents)
+        self.calls = 0
+        self.all_kwargs = []          # one entry per call
+
+    def create(self, **kwargs):
+        self.all_kwargs.append(kwargs)
+        self.calls += 1
+        content = self._contents[min(self.calls - 1, len(self._contents) - 1)]
+        return type("R", (), {"choices": [_FakeMessage(content)]})
+
+
+def _capturing_client(*contents):
+    """Return (client, completions) where completions.all_kwargs captures every call."""
+    comp = _CapturingCompletions(*contents)
+    client = type("Client", (), {"chat": type("C", (), {"completions": comp})()})()
+    return client, comp
+
+
+def _beats_json(n, title="T"):
+    """Return a valid JSON string with `n` beats."""
+    return json.dumps({"title": title, "beats": [{"text": f"beat {i}"} for i in range(n)]})
+
+
+def test_band_inband_first_try_one_call():
+    """In-band first try (60s, 6 beats) → 1 LLM call, no band_miss on the script."""
+    client, comp = _capturing_client(_beats_json(6))
+    out = generate_script("t", provider="deepseek", client=client, model="m", target_length=60)
+    assert comp.calls == 1
+    assert out.band_miss is None
+    assert len(out.beats) == 6
+
+
+def test_band_wrong_then_right_count():
+    """First response has 3 beats (below 60s band 5-8), retry returns 6 → success, no band_miss, 2 calls."""
+    client, comp = _capturing_client(_beats_json(3), _beats_json(6))
+    out = generate_script("t", provider="deepseek", client=client, model="m", target_length=60)
+    assert comp.calls == 2
+    assert out.band_miss is None
+    assert len(out.beats) == 6
+
+
+def test_band_wrong_then_wrong_returns_as_is_with_band_miss():
+    """Both responses out-of-band (3 beats) → returned as-is with band_miss recorded, 2 calls."""
+    client, comp = _capturing_client(_beats_json(3), _beats_json(3))
+    out = generate_script("t", provider="deepseek", client=client, model="m", target_length=60)
+    assert comp.calls == 2
+    assert out.band_miss is not None
+    assert out.band_miss["requested"] == [5, 8]
+    assert out.band_miss["got"] == 3
+    assert len(out.beats) == 3  # returned as-is
+
+
+def test_band_corrective_line_in_retry_prompt():
+    """On a band miss, the retry appends a corrective user line (not system prompt)."""
+    client, comp = _capturing_client(_beats_json(3), _beats_json(6))
+    generate_script("t", provider="deepseek", client=client, model="m", target_length=60)
+    assert comp.calls == 2
+    # The second call's user message must contain the corrective line
+    second_messages = comp.all_kwargs[1]["messages"]
+    user_msg = next(m["content"] for m in second_messages if m["role"] == "user")
+    assert "3 beats" in user_msg          # mentions the wrong count
+    assert "5" in user_msg and "8" in user_msg  # mentions the expected band
+    # System prompt must be unchanged (golden rule: never mutate system prompt)
+    sys_msg_first = comp.all_kwargs[0]["messages"][0]["content"]
+    sys_msg_second = comp.all_kwargs[1]["messages"][0]["content"]
+    assert sys_msg_first == sys_msg_second
+
+
+def test_band_truncated_then_valid_json():
+    """First response is truncated JSON (unparseable), retry valid → success, exactly 2 calls.
+    No double-retry from any pre-existing parse loop — total call count is 2."""
+    truncated = '{"title": "T", "beats": [{"text": "beat 0"}, {"text": "be'   # cut off
+    client, comp = _capturing_client(truncated, _beats_json(6))
+    out = generate_script("t", provider="deepseek", client=client, model="m", target_length=60)
+    assert comp.calls == 2, f"expected exactly 2 calls, got {comp.calls}"
+    assert isinstance(out, BeatsScript)
+    assert len(out.beats) == 6
+    assert out.band_miss is None
+
+
+def test_band_truncated_twice_raises_clean_error():
+    """Two truncated JSON responses → clean error message, not a raw JSON traceback."""
+    truncated = '{"title": "T", "beats": [{"text": "be'
+    client, comp = _capturing_client(truncated, truncated)
+    with pytest.raises(ValueError, match="unparseable JSON"):
+        generate_script("t", provider="deepseek", client=client, model="m", target_length=60)
+    assert comp.calls == 2
+
+
+def test_band_300_preset_fires_retry_on_wrong_count():
+    """300s preset band is 38-48 beats; 20 beats triggers retry (proves band from preset, not hardcoded 5-8)."""
+    client, comp = _capturing_client(_beats_json(20), _beats_json(42))
+    out = generate_script("t", provider="deepseek", client=client, model="m", target_length=300)
+    assert comp.calls == 2
+    assert out.band_miss is None
+    assert len(out.beats) == 42
+
+
+def test_band_no_target_length_no_band_check():
+    """No target_length → original behavior: _parse_with_retry fires (parse retry only), no band check."""
+    # Without target_length, the existing parse-retry logic applies unchanged.
+    # An invalid response followed by a valid one → 2 calls, no band_miss.
+    client, comp = _capturing_client(json.dumps({"title": "T"}), _beats_json(6))
+    out = generate_script("t", provider="deepseek", client=client, model="m")
+    assert comp.calls == 2
+    assert out.band_miss is None

@@ -25,7 +25,7 @@ def _fakes(monkeypatch):
     calls = {"script": 0}
     script = BeatsScript(title="Reefs", beats=[Beat(text="hook"), Beat(text="mid", keywords="coral reef"), Beat(text="out")])
 
-    def fake_script(topic, cache_dir=None):
+    def fake_script(topic, cache_dir=None, **kw):
         calls["script"] += 1
         return script
     monkeypatch.setattr("pipeline.script.generate_grounded_script", fake_script)

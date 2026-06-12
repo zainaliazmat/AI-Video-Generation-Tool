@@ -177,6 +177,97 @@ VERIFY_SYSTEM_PROMPT = (
 MAX_RETRIES = 1  # one retry on an invalid reply, then fail loudly (6.1 v1)
 
 
+def _corrective_suffix(got: int, beat_min: int, beat_max: int) -> str:
+    """Return the corrective line appended to the USER message on a band-miss retry.
+    Appended to the user prompt ONLY — the system prompt is never touched."""
+    return (
+        f"\n\nYour previous response had {got} beats; "
+        f"produce between {beat_min} and {beat_max} beats."
+    )
+
+
+def _parse_with_retry(do_call) -> "BeatsScript":
+    """Call the LLM (do_call -> raw content str), parse+validate, retry once.
+
+    Legacy entry point (used when target_length is None / not given): parse failures
+    get one retry, then fail loudly. Band checking is NOT performed here — it lives
+    in _generate_with_band_retry which is the unified entry point for preset-aware
+    generation. Both share the same MAX_RETRIES=1 budget."""
+    last_err: Exception | None = None
+    for _ in range(MAX_RETRIES + 1):
+        content = do_call()
+        try:
+            return parse_beats_response(content)
+        except ValueError as e:  # bad JSON or schema violation
+            last_err = e
+    raise ValueError(
+        f"LLM script response invalid after {MAX_RETRIES + 1} attempts: {last_err}"
+    )
+
+
+def _generate_with_band_retry(
+    do_call,
+    make_corrective_call,
+    target_length: int,
+) -> "BeatsScript":
+    """Unified retry for band-and-parse failures (M2-T3, OV-8).
+
+    ONE bounded extra attempt for BOTH band misses and malformed/truncated JSON —
+    parse failure and band miss share the same single retry budget (never stacked).
+
+    Attempt 1  —  plain do_call():
+      • parse error  → attempt 2 (no corrective line — the failure is formatting)
+      • success, in-band  → return, no band_miss
+      • success, out-of-band  → attempt 2 WITH corrective user line
+
+    Attempt 2  —  make_corrective_call(suffix: str):
+      • parse error  → raise ValueError with a clean "unparseable JSON" message
+      • success, in-band  → return, no band_miss
+      • success, out-of-band  → return as-is, set band_miss on the script
+
+    The system prompt is NEVER modified; the corrective line goes into the USER
+    message only (via make_corrective_call receiving the suffix string).
+    """
+    preset = LENGTH_PRESETS[target_length]
+    beat_min, beat_max = preset["beat_min"], preset["beat_max"]
+
+    # --- Attempt 1 ---
+    try:
+        script1 = parse_beats_response(do_call())
+    except ValueError:
+        # Parse failure on attempt 1 — retry with no corrective line (just re-ask).
+        try:
+            script2 = parse_beats_response(make_corrective_call(""))
+        except ValueError as e:
+            raise ValueError(
+                f"script generation returned unparseable JSON twice: {e}"
+            ) from e
+        n2 = len(script2.beats)
+        if beat_min <= n2 <= beat_max:
+            return script2
+        script2.band_miss = {"requested": [beat_min, beat_max], "got": n2}
+        return script2
+
+    # --- Attempt 1 succeeded: check band ---
+    n1 = len(script1.beats)
+    if beat_min <= n1 <= beat_max:
+        return script1
+
+    # Out-of-band: retry WITH corrective line.
+    suffix = _corrective_suffix(n1, beat_min, beat_max)
+    try:
+        script2 = parse_beats_response(make_corrective_call(suffix))
+    except ValueError as e:
+        raise ValueError(
+            f"script generation returned unparseable JSON twice: {e}"
+        ) from e
+    n2 = len(script2.beats)
+    if beat_min <= n2 <= beat_max:
+        return script2
+    script2.band_miss = {"requested": [beat_min, beat_max], "got": n2}
+    return script2
+
+
 def build_user_prompt(topic: str, evidence_block: str | None = None,
                       extra_user_block: str | None = None) -> str:
     # extra_user_block is the Studio v2 additive seam (style memory + regenerate
@@ -221,13 +312,16 @@ def _parse_with_retry(do_call) -> BeatsScript:
 def generate_script(
     topic: str, *, provider: str | None = None, client=None, model: str | None = None,
     evidence_block: str | None = None, extra_user_block: str | None = None,
-    system_prompt: str | None = None,
+    system_prompt: str | None = None, target_length: int | None = None,
 ) -> BeatsScript:
     """Pure LLM generation. `evidence_block` (optional) injects retrieved grounding
     sources into the prompt; `generate_grounded_script` is the grounded entry point.
     `extra_user_block` is the Studio v2 additive seam (style memory + feedback).
     `system_prompt` (Studio v3 M2) overrides the system prompt for the selected
-    length preset; defaults to SYSTEM_PROMPT when None (byte-identical to 60s)."""
+    length preset; defaults to SYSTEM_PROMPT when None (byte-identical to 60s).
+    `target_length` (M2-T3, OV-8) enables unified beat-band + parse retry: if set,
+    uses _generate_with_band_retry instead of _parse_with_retry so parse failures
+    and band misses share the same single retry budget (never stacked)."""
     sp = system_prompt if system_prompt is not None else SYSTEM_PROMPT
     provider = provider or get_env("LLM_PROVIDER", "deepseek")
     if provider == "deepseek":
@@ -238,6 +332,7 @@ def generate_script(
             api_key_env="DEEPSEEK_API_KEY",
             base_url=get_env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
             model_env="DEEPSEEK_MODEL",
+            target_length=target_length,
         )
     if provider == "ollama":
         return _generate_openai_compatible(
@@ -247,15 +342,16 @@ def generate_script(
             api_key_env=None,
             base_url=get_env("OLLAMA_BASE_URL", "http://localhost:11434") + "/v1",
             model_env="OLLAMA_MODEL",
+            target_length=target_length,
         )
     if provider == "anthropic":
         return _generate_anthropic(topic, client=client, model=model,
                                    evidence_block=evidence_block, extra_user_block=extra_user_block,
-                                   system_prompt=sp)
+                                   system_prompt=sp, target_length=target_length)
     raise ValueError(f"Unknown LLM_PROVIDER: {provider!r}")
 
 
-def _generate_openai_compatible(topic, *, client, model, default_model, api_key_env, base_url, model_env, evidence_block=None, extra_user_block=None, system_prompt=None) -> BeatsScript:
+def _generate_openai_compatible(topic, *, client, model, default_model, api_key_env, base_url, model_env, evidence_block=None, extra_user_block=None, system_prompt=None, target_length=None) -> BeatsScript:
     if client is None:
         from openai import OpenAI
         api_key = require_env(api_key_env) if api_key_env else "ollama"
@@ -275,10 +371,27 @@ def _generate_openai_compatible(topic, *, client, model, default_model, api_key_
         )
         return resp.choices[0].message.content
 
+    if target_length is not None:
+        # M2-T3: unified band+parse retry — parse failure and band miss share one budget.
+        def make_corrective_call(suffix: str) -> str:
+            tail = (extra_user_block or "") + suffix
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": sp},
+                    {"role": "user", "content": build_user_prompt(topic, evidence_block, tail or None)},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.8,
+            )
+            return resp.choices[0].message.content
+
+        return _generate_with_band_retry(do_call, make_corrective_call, target_length)
+
     return _parse_with_retry(do_call)
 
 
-def _generate_anthropic(topic, *, client, model, evidence_block=None, extra_user_block=None, system_prompt=None) -> BeatsScript:
+def _generate_anthropic(topic, *, client, model, evidence_block=None, extra_user_block=None, system_prompt=None, target_length=None) -> BeatsScript:
     if client is None:
         import anthropic
         client = anthropic.Anthropic(api_key=require_env("ANTHROPIC_API_KEY"))
@@ -293,6 +406,19 @@ def _generate_anthropic(topic, *, client, model, evidence_block=None, extra_user
             messages=[{"role": "user", "content": build_user_prompt(topic, evidence_block, extra_user_block)}],
         )
         return msg.content[0].text
+
+    if target_length is not None:
+        def make_corrective_call(suffix: str) -> str:
+            tail = (extra_user_block or "") + suffix
+            msg = client.messages.create(
+                model=model,
+                max_tokens=1024,
+                system=sp,
+                messages=[{"role": "user", "content": build_user_prompt(topic, evidence_block, tail or None)}],
+            )
+            return msg.content[0].text
+
+        return _generate_with_band_retry(do_call, make_corrective_call, target_length)
 
     return _parse_with_retry(do_call)
 
@@ -310,6 +436,7 @@ def generate_grounded_script(
     verify_fn=None,
     extra_user_block: str | None = None,
     system_prompt: str | None = None,
+    target_length: int | None = None,
 ) -> BeatsScript:
     """Retrieval-grounded generation (3.1) + hook selection (3.2) + verification (3.3).
 
@@ -320,12 +447,15 @@ def generate_grounded_script(
     runs fully offline in tests; the LLM provider stays DeepSeek. `extra_user_block`
     is the Studio v2 additive seam (style memory + regenerate feedback).
     `system_prompt` (Studio v3 M2) overrides the system prompt for the selected
-    length preset; defaults to SYSTEM_PROMPT when None."""
+    length preset; defaults to SYSTEM_PROMPT when None.
+    `target_length` (M2-T3) enables the unified beat-band + parse retry; when set,
+    generate_script uses _generate_with_band_retry instead of _parse_with_retry."""
     retrieve_fn = retrieve_fn or retrieval.retrieve
     ctx = retrieve_fn(topic, key=retrieval_key, cache_dir=cache_dir)
     script = generate_script(
         topic, provider=provider, client=client, model=model, evidence_block=ctx.prompt_block(),
         extra_user_block=extra_user_block, system_prompt=system_prompt,
+        target_length=target_length,
     )
     _select_hook(script, ctx)
     _enforce_grounding(script, ctx)
