@@ -512,6 +512,34 @@ export default factory;
 });
 
 // ---------------------------------------------------------------------------
+// _stageImports — frozen import surface (§15.6)
+// ---------------------------------------------------------------------------
+
+const BAD_IMPORT = join(__dirname, 'fixtures', 'bad-import');
+const VALID_TRANSITION_FIX = join(__dirname, 'fixtures', 'valid-transition');
+
+describe('_stageImports — frozen import surface (§15.6)', () => {
+  afterEach(assertNoRunDirs);
+
+  it('bad-import fixture (lodash) → rejects stage=imports containing "lodash" and "frozen"', async () => {
+    await expectStage(_runValidation(zipFixture(BAD_IMPORT)), 'imports', 'lodash');
+    // Run again to check 'frozen' is also in the message
+    const err = await _runValidation(zipFixture(BAD_IMPORT)).then(() => null, (e) => e);
+    expect(err.message).toContain('frozen');
+  });
+
+  it('valid-scene (react + remotion only) → passes _runValidation (no false positive)', async () => {
+    const result = await _runValidation(zipFixture(FIX));
+    rmSync(result.runDir, {recursive: true, force: true});
+  });
+
+  it('valid-transition (react + remotion + @remotion/transitions) → passes _runValidation (no false positive)', async () => {
+    const result = await _runValidation(zipFixture(VALID_TRANSITION_FIX));
+    rmSync(result.runDir, {recursive: true, force: true});
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Task 10: install / uninstall / doctor orchestration (§15.2 / §15.9)
 // ---------------------------------------------------------------------------
 

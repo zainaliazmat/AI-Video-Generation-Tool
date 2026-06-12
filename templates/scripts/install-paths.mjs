@@ -43,7 +43,7 @@ export const PREVIEWS_DIR = resolve(REPO_ROOT, 'preview', 'public', 'previews');
  * Typed error for installer pipeline failures.
  *
  * @property {string} stage  — pipeline stage where the failure occurred.
- *   One of: 'lock' | 'unpack' | 'envelope' | 'contract' | 'id' | 'compat' |
+ *   One of: 'lock' | 'unpack' | 'envelope' | 'contract' | 'imports' | 'id' | 'compat' |
  *   'schema' | 'typecheck' | 'register' | 'preview' | 'integrity' | 'uninstall'
  * @property {number} statusCode — 409 for lock conflicts (already running),
  *   else 1.

@@ -9,6 +9,7 @@
 //   _stageUnpack           — stage 1
 //   _stageEnvelope         — stage 2
 //   _stageContract         — contract (imperative pass)
+//   _stageImports          — imports (imperative pass, §15.6)
 //   _stageId               — stage 3
 //   _stageCompat           — stage 4
 //   _stageSchema           — stage 5
@@ -27,7 +28,7 @@ import {
   statSync,
   cpSync,
 } from 'node:fs';
-import {resolve, join, dirname, basename, sep} from 'node:path';
+import {resolve, join, dirname, basename, sep, relative} from 'node:path';
 import {createRequire} from 'node:module';
 import {isDeepStrictEqual} from 'node:util';
 
@@ -570,6 +571,101 @@ export function _stageCompat(manifest) {
 }
 
 // ---------------------------------------------------------------------------
+// _stageImports — frozen import surface (§15.6)
+// ---------------------------------------------------------------------------
+
+/**
+ * The frozen set of bare package names that v1 templates may import.
+ * Relative imports (starting with '.' or '/') are always allowed.
+ */
+const ALLOWED_IMPORTS = new Set(['react', 'react-dom', 'remotion', '@remotion/transitions', 'zod']);
+
+/**
+ * Walk a directory tree and return all file paths (absolute).
+ *
+ * @param {string} dir
+ * @returns {string[]}
+ */
+function _walkFiles(dir) {
+  const results = [];
+  for (const entry of readdirSync(dir, {withFileTypes: true})) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(..._walkFiles(full));
+    } else {
+      results.push(full);
+    }
+  }
+  return results;
+}
+
+/**
+ * Extract the bare package name from a specifier.
+ *   '@remotion/transitions' → '@remotion/transitions' (two segments for scoped)
+ *   'lodash/fp'             → 'lodash'
+ *   'react'                 → 'react'
+ *
+ * Returns null if the specifier is relative (starts with '.' or '/') —
+ * the caller should skip those.
+ *
+ * @param {string} spec
+ * @returns {string|null}
+ */
+function _packageName(spec) {
+  if (spec.startsWith('.') || spec.startsWith('/')) return null;
+  if (spec.startsWith('@')) {
+    // Scoped package: keep @scope/name (first two segments)
+    const parts = spec.split('/');
+    return parts.slice(0, 2).join('/');
+  }
+  return spec.split('/')[0];
+}
+
+/**
+ * Scan every .ts/.tsx file in tplDir for import specifiers and assert that
+ * every bare import is in the frozen allowlist.
+ *
+ * Relative imports (./…, ../sdk) and absolute paths are always allowed.
+ *
+ * @param {string} tplDir
+ * @param {object} _manifest  (unused, for pipeline signature consistency)
+ */
+export function _stageImports(tplDir, _manifest) {
+  const allFiles = _walkFiles(tplDir).filter((f) => f.endsWith('.ts') || f.endsWith('.tsx'));
+
+  for (const absFile of allFiles) {
+    const src = readFileSync(absFile, 'utf8');
+    const relFile = relative(tplDir, absFile);
+    const specifiers = new Set();
+
+    // `import … from '…'` and `export … from '…'`
+    const fromRe = /(?:import|export)[^'"]*?from\s*['"]([^'"]+)['"]/g;
+    let m;
+    while ((m = fromRe.exec(src)) !== null) specifiers.add(m[1]);
+
+    // `import '…'` (side-effect imports)
+    const sideEffectRe = /import\s*['"]([^'"]+)['"]/g;
+    while ((m = sideEffectRe.exec(src)) !== null) specifiers.add(m[1]);
+
+    // `import('…')` (dynamic imports)
+    const dynamicRe = /import\(\s*['"]([^'"]+)['"]\s*\)/g;
+    while ((m = dynamicRe.exec(src)) !== null) specifiers.add(m[1]);
+
+    for (const spec of specifiers) {
+      const pkg = _packageName(spec);
+      if (pkg === null) continue; // relative / absolute — always allowed
+
+      if (!ALLOWED_IMPORTS.has(pkg)) {
+        throw new InstallError(
+          'imports',
+          `disallowed import "${spec}" in ${relFile} — v1 templates may import only react, react-dom, remotion, @remotion/transitions, zod (the frozen import surface, §15.6). Relative imports (./…, ../sdk) are allowed.`,
+        );
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Stage 5 — schema (§6.5 / §15.13)
 // ---------------------------------------------------------------------------
 
@@ -677,6 +773,9 @@ export async function _runValidation(srcZipOrDir, opts = {}) {
 
     // Imperative pass: contract (§15.13)
     _stageContract(tplDir, manifest);
+
+    // Imperative pass: imports (§15.6)
+    _stageImports(tplDir, manifest);
 
     // Stage 3: id
     const existing = _stageId(manifest, tplDir, opts);
