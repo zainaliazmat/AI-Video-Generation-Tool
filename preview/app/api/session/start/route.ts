@@ -1,5 +1,6 @@
 import {spawn, type ChildProcess} from 'node:child_process';
 import path from 'node:path';
+import {inFlight} from '../../../../lib/sessionFlight';
 
 // child_process is Node-only; never bundle this for Edge.
 export const runtime = 'nodejs';
@@ -15,12 +16,11 @@ const SESSION_GATE = path.join(REPO_ROOT, 'backend', 'session_gate.py');
 // Session timeout: a full start run (script + maybe more in auto-run) can be long.
 const START_TIMEOUT_MS = 15 * 60 * 1000;
 
-// Single-flight: keyed by sid (ruling 4A — the global flag in /api/generate would falsely
-// serialize unrelated sessions).
+// inFlight is imported from lib/sessionFlight (ruling 4A: single shared Map
+// across start + approve routes; duplicate concurrent request for same sid → 409).
 // NOTE: for --op start, the sid isn't known until the CLI emits the sid-first PROGRESS event
 // (it's generated server-side by the Python process). We register the in-flight key when
 // that event arrives, so we cannot 409-by-sid before then. That's fine by design.
-const inFlight = new Map<string, true>();
 
 export async function POST(req: Request) {
   let topic = '';

@@ -1,5 +1,6 @@
 import {spawn, type ChildProcess} from 'node:child_process';
 import path from 'node:path';
+import {inFlight} from '../../../../../lib/sessionFlight';
 
 // child_process is Node-only; never bundle this for Edge.
 export const runtime = 'nodejs';
@@ -15,12 +16,8 @@ const SESSION_GATE = path.join(REPO_ROOT, 'backend', 'session_gate.py');
 // Approve timeout: voice+scenes approval can be long (TTS + footage fetch).
 const APPROVE_TIMEOUT_MS = 15 * 60 * 1000;
 
-// Single-flight: keyed by sid (ruling 4A — guards against concurrent approve
-// calls for the same session; the CLI's already-approved ValueError is the
-// sequential backstop for logical double-approves).
-// Shared with start/route.ts conceptually; this module holds the approve-side.
-// The Map is module-level so duplicate concurrent requests for the same sid → 409.
-export const inFlight = new Map<string, true>();
+// inFlight is imported from lib/sessionFlight (ruling 4A: single shared Map
+// across start + approve routes; duplicate concurrent request for same sid → 409).
 
 export async function POST(req: Request, {params}: {params: Promise<{id: string}>}) {
   const {id: sid} = await params;
