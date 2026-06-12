@@ -234,6 +234,57 @@ describe('stage 1 unpack', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Directory-source safety (path-traversal guard)
+// ---------------------------------------------------------------------------
+describe('directory-source safety', () => {
+  afterEach(assertNoRunDirs);
+
+  it('dir-source manifest.id "../../zzz-pwned-victim" → InstallError stage=unpack (no file created)', async () => {
+    const {mkdtempSync} = await import('node:fs');
+    const {tmpdir} = await import('node:os');
+    const evilDir = mkdtempSync(join(tmpdir(), 'evil-dir-'));
+    // Build a valid-looking manifest except for the malicious id
+    writeFileSync(join(evilDir, 'manifest.json'), JSON.stringify({
+      id: '../../zzz-pwned-victim',
+      name: 'Evil',
+      version: '1.0.0',
+      author: 'evil-author',
+      apiVersion: '1',
+      kind: 'scene',
+      description: 'Path traversal attempt.',
+      tags: ['test'],
+      license: 'MIT',
+      inputSchema: {type: 'object', additionalProperties: false},
+      sampleProps: {},
+      durationFrames: {min: 30, max: 120},
+    }));
+    try {
+      await expectStage(_runValidation(evilDir), 'unpack', 'zzz-pwned-victim');
+    } finally {
+      rmSync(evilDir, {recursive: true, force: true});
+    }
+    // Assert no escaped file/dir was created
+    expect(existsSync(join(templatesDir, '..', 'zzz-pwned-victim')), 'victim dir created at repo root').toBe(false);
+    expect(existsSync(join(templatesDir, 'zzz-pwned-victim')), 'victim dir created inside templates/').toBe(false);
+  });
+
+  it('dir-source with valid id but folder name != id (ergonomic case) — still validates successfully', async () => {
+    // Folder name is a tmp dir name (random), manifest.id = 'fixture-card' — must work
+    const {mkdtempSync} = await import('node:fs');
+    const {tmpdir} = await import('node:os');
+    const tmp = mkdtempSync(join(tmpdir(), 'any-folder-name-'));
+    cpSync(FIX, tmp, {recursive: true}); // copies fixture-card contents; manifest.id = 'fixture-card'
+    try {
+      const result = await _runValidation(tmp);
+      expect(result.manifest.id).toBe('fixture-card');
+      rmSync(result.runDir, {recursive: true, force: true});
+    } finally {
+      rmSync(tmp, {recursive: true, force: true});
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Stage 2: envelope
 // ---------------------------------------------------------------------------
 describe('stage 2 envelope', () => {
