@@ -18,7 +18,11 @@ SCHEMA_PATH = Path(__file__).resolve().parents[1] / "templates" / "manifest.sche
 
 
 def render_schema() -> str:
-    return json.dumps(Manifest.model_json_schema(), indent=2, sort_keys=True) + "\n"
+    schema = Manifest.model_json_schema()
+    # Self-declare the dialect: Pydantic emits draft 2020-12 ($defs). A
+    # validator wired for draft-07 would silently skip the $refs (§15.13).
+    schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+    return json.dumps(schema, indent=2, sort_keys=True) + "\n"
 
 
 def main() -> int:
