@@ -123,6 +123,20 @@
   }
 }
 
+/* ── Focus-visible rings (§16.13 D19) ─────────────────────────────────────
+   Shared utility applied to ALL interactive controls — new (tabs, search,
+   ghost install button, kind pills, card install/update buttons, drawer
+   Install/Uninstall/Cancel, use-it chip, cross-tab links) AND existing ones
+   that previously lacked it (FilterPill, TemplateCard body button, drawer
+   close button). §17.6 gap paid down here. */
+.focus-ring {
+  outline: none;
+}
+.focus-ring:focus-visible {
+  box-shadow: 0 0 0 2px var(--glass-border-active);
+  border-radius: inherit;
+}
+
 /* Reduced Transparency — doubles as the low-GPU fallback per the ruling: frosted
    surfaces go near-solid and drop the backdrop-filter (the expensive part). */
 @media (prefers-reduced-transparency: reduce) {
