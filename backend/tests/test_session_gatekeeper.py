@@ -200,6 +200,38 @@ def test_empty_blast_radius_edit_skips_reopen(tmp_path, monkeypatch):
     assert g["voice"]["state"] == "awaiting_approval"    # NOT stale
 
 
+def test_scenes_frontier_edit_is_instant(tmp_path, monkeypatch):
+    # ruled: "scene-gate edits are instant via the frontier path" — at the
+    # AWAITING scenes gate (never approved), a timing edit re-derives the
+    # already-ran downstream (footage, assemble) immediately and
+    # re-materializes spec.json; no reopen, no deferral, gate still awaiting
+    calls = _fakes(monkeypatch)
+    sess = _started(tmp_path, monkeypatch)
+    gatekeeper.approve(sess, "script")
+    gatekeeper.approve(sess, "voice")            # heavy segment ran; scenes awaiting
+    before = dict(calls)
+    # timing fake returns [WordTiming("w", 0, 5)]; index 0 is in-range
+    gatekeeper.edit(sess, "timing", {"op": "fix_word", "index": 0, "text": "kilometres"})
+    g = store.get_gate_states(sess.conn, sess.id)
+    assert g["scenes"]["state"] == "awaiting_approval"          # no reopen drama
+    assert store.get_stage(sess.conn, sess.id, "assemble")["status"] == "done"
+    assert calls["assemble"] == before["assemble"] + 1          # re-derived immediately
+    assert sess.engine.ctx.spec_out.exists()                    # spec rematerialized
+
+
+def test_edit_at_stale_gate_rejected(tmp_path, monkeypatch):
+    # M6 contract: stale gates are view-only; backend backstops the UI
+    _fakes(monkeypatch)
+    sess = _at_assemble_gate(tmp_path, monkeypatch)
+    # editing script at the approved gate reopens it → scenes goes stale
+    gatekeeper.edit(sess, "script", _edit_beat_op(0, "Reopen script."))
+    g = store.get_gate_states(sess.conn, sess.id)
+    assert g["scenes"]["state"] == "stale"                      # scenes is stale now
+    with pytest.raises(ValueError, match=r"re-approve gate 'script'"):
+        # timing belongs to scenes gate, which is stale → rejected
+        gatekeeper.edit(sess, "timing", {"op": "fix_word", "index": 0, "text": "x"})
+
+
 def test_set_voice_defers_like_an_edit(tmp_path, monkeypatch):
     calls = _fakes(monkeypatch)
     sess = _at_assemble_gate(tmp_path, monkeypatch)

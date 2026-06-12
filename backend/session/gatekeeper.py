@@ -112,18 +112,32 @@ def preview_reopen(sess, gate):
 
 
 def edit(sess, stage, op):
-    """A gated edit. At an approved gate this is the §4.1 reopen: apply WITHOUT
-    re-deriving (edits accumulate; Re-approve pays); when the blast radius is
-    EMPTY (nothing downstream has run — ruling OV-11) it's plain v2 behavior,
-    no sheet, no Re-approve. Voice edits route to set_voice (ruling OV-13 —
-    voice is regenerate-shaped, engine.edit has no voice handler). The
-    blast-radius sheet's Confirm is what calls this; Cancel never reaches
-    the backend."""
+    """A gated edit (§4.1), routed by the OWNING gate's state:
+
+    - gate row missing, stage ran (1A corollary — e.g. assemble ran inside the
+      scenes segment before its own gate row exists): plain v2 edit — downstream
+      of such a stage is empty-or-render, so the default path just re-applies
+      and re-materializes.
+    - gate STALE: rejected — stale gates are view-only (M6 contract); the
+      Re-approve belongs to the reopened gate, the error names it.
+    - gate APPROVED or REOPENED (awaiting_approval with an approved_at stamp):
+      non-empty blast radius ⇒ §4.1 reopen/accumulate — apply WITHOUT
+      re-deriving; Re-approve pays once. Empty blast radius (ruling OV-11:
+      nothing downstream ever ran) ⇒ the edit is free, no reopen.
+    - gate at a true FRONTIER (awaiting_approval, never approved): instant —
+      apply, then re-derive ONLY the stages that already ran (ruling: scene-gate
+      edits are instant; rederive_stale skips never-run stages so the pipeline
+      never advances past the gate).
+
+    Voice edits route to set_voice (ruling OV-13 — voice is regenerate-shaped,
+    engine.edit has no voice handler). The blast-radius sheet's Confirm is what
+    calls this; Cancel never reaches the backend."""
     if stage == "voice":
         return set_voice(sess, voice=op["voice"], speed=op.get("speed", 1.0))
     gate = gates.GATE_FOR_STAGE[stage]
     states = store.get_gate_states(sess.conn, sess.id)
-    if states.get(gate) is None:
+    row = states.get(gate)
+    if row is None:
         # 1A corollary: a stage may have run inside an earlier segment before
         # its own gate row exists (assemble at the scenes gate) — that's a
         # frontier edit, not an error
@@ -131,13 +145,29 @@ def edit(sess, stage, op):
             raise ValueError(f"gate {gate!r} has not been reached; nothing to edit")
         sess.engine.edit(stage, op)
         return view(sess)
-    if not preview_reopen(sess, gate)["reruns"]:    # OV-11: empty blast radius
-        sess.engine.edit(stage, op, rederive=False) # frontier: apply, no reopen, no rederive
-        if stage == "assemble":                     # assemble edits must keep spec.json current
-            sess.engine.materialize_spec()
+    if row["state"] == "stale":
+        reopened = next(
+            (g for g in gates.GATE_ORDER
+             if states.get(g, {}).get("state") == "awaiting_approval"), None)
+        raise ValueError(
+            f"gate {gate!r} is stale (view-only) — re-approve gate {reopened!r} first")
+    if row["state"] == "approved" or row["approved_at"]:
+        # approved, or reopened (awaiting with a stamp): §4.1 territory
+        if preview_reopen(sess, gate)["reruns"]:
+            sess.engine.edit(stage, op, rederive=False)   # reopen/accumulate: defer
+            _reopen(sess, gate)
+            return view(sess)
+        sess.engine.edit(stage, op, rederive=False)       # OV-11: free, no reopen
         return view(sess)
-    sess.engine.edit(stage, op, rederive=False)     # reopen: defer
-    _reopen(sess, gate)
+    # true frontier: instant — re-derive only what already ran (never advances
+    # past the gate: rederive_stale skips stages with no row)
+    sess.engine.edit(stage, op, rederive=False)
+    sess.engine.rederive_stale()
+    if stage == "assemble":
+        # assemble has no non-render downstream, so nothing goes stale and
+        # rederive_stale can't re-materialize — but the edit changed the
+        # assemble output; spec.json must follow immediately
+        sess.engine.materialize_spec()
     return view(sess)
 
 
