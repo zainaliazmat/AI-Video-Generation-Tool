@@ -613,11 +613,13 @@ function _restoreSnapshot(id, snap) {
  *   update?: boolean,
  *   confirmReplace?: boolean,
  *   overrideCapability?: boolean,
- *   runners?: Partial<typeof _defaultRunners>
+ *   runners?: Partial<typeof _defaultRunners>,
+ *   onStage?: (stage: string) => void
  * }} opts
  */
 export async function install(srcZipOrDir, opts = {}) {
   const runners = {..._defaultRunners, ...opts.runners};
+  const onStage = opts.onStage ?? (() => {});
   let id = null;
   let runDir = null;
   let snap = null;
@@ -644,6 +646,7 @@ export async function install(srcZipOrDir, opts = {}) {
   try {
     _sweepStale();
 
+    onStage('validating');
     // Stages 1–5
     const {runDir: rd, tplDir, manifest, existing} = await _runValidation(srcZipOrDir, {
       update: opts.update,
@@ -671,6 +674,7 @@ export async function install(srcZipOrDir, opts = {}) {
     }
     renameSync(tplDir, installDir);
 
+    onStage('typecheck');
     // tsc check — failure → restore (update) + rethrow
     try {
       await runners.tsc();
@@ -682,6 +686,7 @@ export async function install(srcZipOrDir, opts = {}) {
       throw new InstallError('typecheck', msg.slice(0, 2000));
     }
 
+    onStage('assets');
     // Ship declared assets + CREDITS.json to RENDER_ASSETS_DIR/<id>/
     _shipAssets(installDir, manifest);
 
@@ -689,9 +694,11 @@ export async function install(srcZipOrDir, opts = {}) {
     // (Crash-window: see module header comment above)
     rmSync(join(installDir, '.installing'), {force: true});
 
+    onStage('register');
     // Register — build-registry regenerates registry.generated.ts
     await runners.buildRegistry();
 
+    onStage('rendering-preview');
     // Smoke render — failure → full rollback
     try {
       await runners.genPreviews(id);
@@ -721,6 +728,7 @@ export async function install(srcZipOrDir, opts = {}) {
       console.warn('[install] preview mirror copy-assets failed post-install — run `npm run copy-assets` in preview/ to refresh; install itself succeeded: ' + e.message);
     }
 
+    onStage('done');
     return {
       id,
       version: manifest.version,
@@ -759,7 +767,8 @@ export async function install(srcZipOrDir, opts = {}) {
  * @param {{
  *   update?: boolean,
  *   confirmReplace?: boolean,
- *   runners?: Partial<typeof _defaultRunners>
+ *   runners?: Partial<typeof _defaultRunners>,
+ *   onStage?: (stage: string) => void
  * }} opts
  */
 export async function installFromMarketplace(id, opts = {}) {
@@ -796,11 +805,13 @@ export async function installFromMarketplace(id, opts = {}) {
   }
 
   // Delegate to install() with the catalog sha256 as the integrity gate.
+  // onStage flows through — the SSE route passes it here and install() fires it.
   return install(zipPath, {
     sha256: entry.sha256,
     update: opts.update,
     confirmReplace: opts.confirmReplace,
     runners: opts.runners,
+    onStage: opts.onStage,
   });
 }
 
@@ -816,10 +827,11 @@ export async function installFromMarketplace(id, opts = {}) {
  * (the caller/UI decides whether to warn the user; we uninstall either way).
  *
  * @param {string} id
- * @param {{runners?: Partial<typeof _defaultRunners>}} opts
+ * @param {{runners?: Partial<typeof _defaultRunners>, onStage?: (stage: string) => void}} opts
  */
 export async function uninstall(id, opts = {}) {
   const runners = {..._defaultRunners, ...opts.runners};
+  const onStage = opts.onStage ?? (() => {});
   _acquireLock('uninstall');
   try {
     _sweepStale();
@@ -841,6 +853,7 @@ export async function uninstall(id, opts = {}) {
 
     const refs = scanReferences(id);
 
+    onStage('removing');
     // Remove everything
     rmSync(join(TEMPLATES_DIR, id), {recursive: true, force: true});
     rmSync(join(RENDER_ASSETS_DIR, id), {recursive: true, force: true});
@@ -861,6 +874,7 @@ export async function uninstall(id, opts = {}) {
     await runners.copyAssets();
     clearLastError();
 
+    onStage('done');
     return {id, removed: true, referencedBy: refs};
   } catch (e) {
     _writeLastError({op: 'uninstall', id, stage: e.stage ?? 'uninstall', message: e.message});

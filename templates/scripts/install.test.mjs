@@ -571,6 +571,39 @@ async function cleanOrchestrationFixtures() {
   execFileSync('node', [join(__dirname, 'build-registry.mjs')], {stdio: 'pipe'});
 }
 
+// ---------------------------------------------------------------------------
+// onStage progress hook (§16.3/§16.15-1 — M4 SSE surface)
+// ---------------------------------------------------------------------------
+
+describe('onStage progress hook (§16.3/§16.15-1)', () => {
+  afterEach(cleanOrchestrationFixtures);
+
+  it('install fires onStage in the correct order: validating → typecheck → assets → register → rendering-preview → done', async () => {
+    const stages = [];
+    const {runners} = stubRunners();
+    await install(FIX_SRC, {runners, onStage: (s) => stages.push(s)});
+    expect(stages).toEqual(['validating', 'typecheck', 'assets', 'register', 'rendering-preview', 'done']);
+  });
+
+  it('omitting onStage does not throw (happy-path contract)', async () => {
+    const {runners} = stubRunners();
+    // No onStage in opts — existing tests already prove this; explicit here for clarity.
+    const result = await install(FIX_SRC, {runners});
+    expect(result.id).toBe('fixture-card');
+  });
+
+  it('uninstall fires onStage: removing → done', async () => {
+    // Install first so uninstall has something to remove
+    const {runners: r1} = stubRunners();
+    await install(FIX_SRC, {runners: r1});
+
+    const stages = [];
+    const {runners: r2} = stubRunners();
+    await uninstall('fixture-card', {runners: r2, onStage: (s) => stages.push(s)});
+    expect(stages).toEqual(['removing', 'done']);
+  });
+});
+
 describe('install orchestration (§15.2)', () => {
   afterEach(cleanOrchestrationFixtures);
 
