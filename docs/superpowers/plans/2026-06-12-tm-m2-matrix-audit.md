@@ -117,7 +117,7 @@ These tests live in the remotion vitest suite (`cd remotion && npx vitest run`),
 | `remotion/src/assets.test.ts` | `resolveAssets > returns {} when manifest.assets is absent` | R1 (resolver behavior) |
 | `remotion/src/assets.test.ts` | `resolveAssets > returns {} when manifest.assets is empty` | R1 |
 | `remotion/src/assets.test.ts` | `resolveAssets > maps each declared relPath to its namespaced staticFile URL` | R1 (resolver contract) |
-| `remotion/src/enumeration-media.test.ts` | All 13 tests (resolveMedia cascade, iconNameFor, monogram, assets-prop contract) | §15.14 enumeration-backfill; coverage of the media resolver, not the identical-render row (which is M3) |
+| `remotion/src/enumeration-media.test.ts` | All 13 tests (resolveMedia cascade, iconNameFor, monogram, assets-prop contract) | §15.14 enumeration-backfill; covers the media resolver. The identical-render row (24) is the eyes-on render gate, proven in M2 (see row 24 above). |
 
 ---
 
