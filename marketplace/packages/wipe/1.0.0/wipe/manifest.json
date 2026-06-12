@@ -1,0 +1,35 @@
+{
+  "id": "wipe",
+  "name": "Directional Wipe",
+  "version": "1.0.0",
+  "author": "studio-fps",
+  "apiVersion": "1",
+  "kind": "transition",
+  "description": "Directional wipe transition.",
+  "tags": [
+    "transition",
+    "wipe"
+  ],
+  "license": "Apache-2.0",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "direction": {
+        "enum": [
+          "left",
+          "right",
+          "up",
+          "down"
+        ]
+      }
+    },
+    "additionalProperties": false
+  },
+  "sampleProps": {
+    "direction": "left"
+  },
+  "durationFrames": {
+    "min": 15,
+    "max": 45
+  }
+}

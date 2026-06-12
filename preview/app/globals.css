@@ -123,6 +123,189 @@
   }
 }
 
+/* ── Focus-visible rings (§16.13 D19) ─────────────────────────────────────
+   Shared utility applied to ALL interactive controls — new (tabs, search,
+   ghost install button, kind pills, card install/update buttons, drawer
+   Install/Uninstall/Cancel, use-it chip, cross-tab links) AND existing ones
+   that previously lacked it (FilterPill, TemplateCard body button, drawer
+   close button). §17.6 gap paid down here. */
+.focus-ring {
+  outline: none;
+}
+.focus-ring:focus-visible {
+  box-shadow: 0 0 0 2px var(--glass-border-active);
+  border-radius: inherit;
+}
+
+/* ── /templates/guide prose — server-rendered from docs/TEMPLATE-AUTHORING.md.
+   The doc's `---` separators are hidden; h2 top borders carry the section rhythm.
+   scroll-margin-top clears the sticky nav (~45px) plus breathing room. ── */
+.guide-prose {
+  font-family: var(--font-ui), system-ui, sans-serif;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.75;
+}
+.guide-prose > :first-child {
+  margin-top: 0;
+}
+.guide-prose h2 {
+  margin-top: 56px;
+  padding-top: 32px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  color: var(--text-primary);
+  scroll-margin-top: 72px;
+}
+.guide-prose h3 {
+  margin-top: 36px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  scroll-margin-top: 72px;
+}
+.guide-prose h2 + h3 {
+  margin-top: 20px;
+}
+.guide-prose p {
+  margin-top: 14px;
+}
+.guide-prose strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.guide-prose a:not(.guide-anchor) {
+  color: var(--accent-3);
+}
+.guide-prose a:not(.guide-anchor):hover {
+  text-decoration: underline;
+}
+.guide-anchor {
+  margin-left: 8px;
+  opacity: 0;
+  font-weight: 400;
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.guide-prose h2:hover .guide-anchor,
+.guide-prose h3:hover .guide-anchor,
+.guide-anchor:focus-visible {
+  opacity: 1;
+}
+.guide-prose code {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.86em;
+  color: var(--accent-3);
+  background: rgba(139, 92, 246, 0.1);
+  border: 1px solid rgba(139, 92, 246, 0.16);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+.guide-code {
+  margin: 18px 0 0;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  background: rgba(10, 14, 26, 0.7);
+  overflow: hidden;
+}
+.guide-code figcaption {
+  padding: 7px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.guide-code pre {
+  margin: 0;
+  padding: 14px 16px;
+  overflow-x: auto;
+}
+.guide-prose pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+.guide-table-wrap {
+  margin-top: 18px;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  background: var(--card-bg);
+  overflow-x: auto;
+}
+.guide-prose table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.guide-prose th {
+  padding: 10px 16px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  white-space: nowrap;
+}
+.guide-prose td {
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  vertical-align: top;
+  line-height: 1.6;
+}
+.guide-prose tr:last-child td {
+  border-bottom: none;
+}
+.guide-prose blockquote {
+  margin: 18px 0 0;
+  padding: 14px 18px;
+  border: 1px solid rgba(94, 92, 230, 0.28);
+  border-left: 3px solid var(--accent-1);
+  border-radius: var(--radius-md);
+  background: rgba(94, 92, 230, 0.08);
+}
+.guide-prose blockquote p {
+  margin: 0;
+}
+.guide-prose blockquote p + p {
+  margin-top: 8px;
+}
+.guide-prose ul,
+.guide-prose ol {
+  margin-top: 14px;
+  padding-left: 22px;
+}
+.guide-prose li {
+  margin-top: 6px;
+}
+.guide-prose li::marker {
+  color: var(--text-muted);
+}
+.guide-prose ul:has(input[type='checkbox']) {
+  list-style: none;
+  padding-left: 4px;
+}
+.guide-prose input[type='checkbox'] {
+  accent-color: var(--accent-1);
+  margin-right: 9px;
+  vertical-align: -2px;
+}
+.guide-prose hr {
+  display: none;
+}
+
 /* Reduced Transparency — doubles as the low-GPU fallback per the ruling: frosted
    surfaces go near-solid and drop the backdrop-filter (the expensive part). */
 @media (prefers-reduced-transparency: reduce) {

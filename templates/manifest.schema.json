@@ -1,0 +1,169 @@
+{
+  "$defs": {
+    "DurationFrames": {
+      "additionalProperties": false,
+      "properties": {
+        "max": {
+          "title": "Max",
+          "type": "integer"
+        },
+        "min": {
+          "title": "Min",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ],
+      "title": "DurationFrames",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "title": "Apiversion",
+      "type": "string"
+    },
+    "assets": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Assets"
+    },
+    "author": {
+      "title": "Author",
+      "type": "string"
+    },
+    "consumes": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Consumes"
+    },
+    "description": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Description"
+    },
+    "durationFrames": {
+      "$ref": "#/$defs/DurationFrames"
+    },
+    "homepage": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Homepage"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "inputSchema": {
+      "additionalProperties": true,
+      "title": "Inputschema",
+      "type": "object"
+    },
+    "kind": {
+      "enum": [
+        "hook",
+        "scene",
+        "stat",
+        "lower-third",
+        "transition",
+        "overlay",
+        "outro"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "license": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "License"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "rendersOwnText": {
+      "default": false,
+      "title": "Rendersowntext",
+      "type": "boolean"
+    },
+    "sampleProps": {
+      "additionalProperties": true,
+      "title": "Sampleprops",
+      "type": "object"
+    },
+    "tags": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Tags"
+    },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "name",
+    "version",
+    "author",
+    "apiVersion",
+    "kind",
+    "inputSchema",
+    "sampleProps",
+    "durationFrames"
+  ],
+  "title": "Manifest",
+  "type": "object"
+}

@@ -5,6 +5,12 @@
   "author": "core",
   "apiVersion": "1",
   "kind": "scene",
+  "description": "Footage scene — media background for caption-led beats.",
+  "tags": [
+    "scene",
+    "footage",
+    "media"
+  ],
   "inputSchema": {
     "type": "object",
     "properties": {

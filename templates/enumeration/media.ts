@@ -1,9 +1,17 @@
 /**
  * Source-swappable media resolver for the enumeration hero. Cascade:
- * curated NASA PD image -> designed lucide icon -> neutral mark. The image and
- * icon SOURCES are plain maps so vendoring an icon subset or swapping the image
- * set later is a localized change. Pure + deterministic -> unit-tested. Reuses
- * the plural-folding candidates() from icons.ts. See media design doc Tier 2.
+ * curated NASA PD image (resolved THROUGH the assets prop) -> designed lucide
+ * icon -> neutral mark. The image and icon SOURCES are plain maps so vendoring
+ * an icon subset or swapping the image set later is a localized change.
+ * Pure + deterministic -> unit-tested. Reuses the plural-folding candidates()
+ * from icons.ts. See media design doc Tier 2.
+ *
+ * resolveMedia(label, assets): the `assets` prop is the staticFile-resolved map
+ * provided by the renderer (resolveAssets(manifest)). The src returned for an
+ * image resolution is the RESOLVED URL from that map, NOT a hand-built
+ * staticFile() string — this keeps installs relocatable (§15.1). Fail-closed:
+ * if assets[IMAGE_MANIFEST[c]] is absent/falsy the cascade falls to the icon
+ * layer, so a template missing an install still renders legibly.
  *
  * INVARIANT (asserted in the test): every IMAGE_MANIFEST key MUST also be an
  * ICON_MAP key. An image item's LIST row renders a small icon (not a thumbnail),
@@ -22,14 +30,14 @@ export type MediaResolution =
   | {kind: 'icon'; name: LucideName}
   | {kind: 'mark'};
 
-// label -> bundled NASA PD image, as a staticFile() path under remotion/public/.
+// label -> declared relPath under assets/ (verbatim key into the assets prop).
 // The operator drops the confirmed-PD files; provenance lives in assets/CREDITS.json.
 export const IMAGE_MANIFEST: Record<string, string> = {
-  sun: 'enumeration/sun.jpg',
-  moon: 'enumeration/moon.jpg',
-  planet: 'enumeration/planets.jpg',
-  eclipse: 'enumeration/eclipse.jpg',
-  phase: 'enumeration/phases.jpg',
+  sun: 'assets/sun.jpg',
+  moon: 'assets/moon.jpg',
+  planet: 'assets/planets.jpg',
+  eclipse: 'assets/eclipse.jpg',
+  phase: 'assets/phases.jpg',
 };
 
 // label -> lucide icon name. MUST be a superset of IMAGE_MANIFEST keys (invariant).
@@ -44,10 +52,20 @@ export const ICON_MAP: Record<string, LucideName> = {
   neptune: 'circle', uranus: 'circle', pluto: 'circle',
 };
 
-export function resolveMedia(label: string): MediaResolution {
+/**
+ * Resolve a label to its best media representation.
+ *
+ * @param label  - Display label (e.g. "Sun", "Planets").
+ * @param assets - staticFile-resolved map from the renderer (resolveAssets(manifest)).
+ *                 Keys are the declared relPaths verbatim ("assets/sun.jpg").
+ *                 An image match is only emitted when assets[relPath] is truthy —
+ *                 fail-closed: absent install → falls through to icon/mark.
+ */
+export function resolveMedia(label: string, assets: Record<string, string>): MediaResolution {
   const k = label.trim().toLowerCase();
   for (const c of candidates(k)) {
-    if (IMAGE_MANIFEST[c]) return {kind: 'image', src: IMAGE_MANIFEST[c], alt: label};
+    const rel = IMAGE_MANIFEST[c];
+    if (rel && assets[rel]) return {kind: 'image', src: assets[rel], alt: label};
   }
   const name = iconNameFor(label);
   if (name) return {kind: 'icon', name};

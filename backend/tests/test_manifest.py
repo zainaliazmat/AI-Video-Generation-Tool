@@ -10,7 +10,7 @@ import pathlib
 import pytest
 from pydantic import ValidationError
 
-from manifest import Manifest
+from manifest import DurationFrames, Manifest
 from pipeline.validate import load_catalog
 
 _TEMPLATES_DIR = pathlib.Path(__file__).resolve().parents[2] / "templates"
@@ -98,3 +98,45 @@ def test_enumeration_manifest_loads_with_capability():
     assert m.kind == "scene"
     assert m.rendersOwnText is True
     assert m.consumes == "enumeration"
+
+
+def test_v11_fields_parse_all_present():
+    m = Manifest.model_validate({
+        **_valid(),
+        "description": "Word-cascade opening title.",
+        "tags": ["hook", "kinetic"],
+        "license": "MIT",
+        "homepage": "https://example.com",
+        "assets": ["assets/underline.svg"],
+    })
+    assert m.description == "Word-cascade opening title."
+    assert m.tags == ["hook", "kinetic"]
+    assert m.license == "MIT"
+    assert m.homepage == "https://example.com"
+    assert m.assets == ["assets/underline.svg"]
+
+
+def test_v11_fields_all_optional():
+    m = Manifest.model_validate(_valid())
+    assert m.description is None
+    assert m.tags is None
+    assert m.license is None
+    assert m.homepage is None
+    assert m.assets is None
+
+
+def test_unknown_envelope_field_rejected():
+    # extra="forbid" (§15.13): unknown keys hard-fail instead of silently passing.
+    with pytest.raises(ValidationError):
+        Manifest.model_validate({**_valid(), "surprise": True})
+
+
+def test_unknown_duration_frames_field_rejected():
+    bad = _valid()
+    bad["durationFrames"] = {"min": 30, "max": 120, "step": 1}
+    with pytest.raises(ValidationError):
+        Manifest.model_validate(bad)
+
+    # DurationFrames is strict standalone too, not just via the envelope path.
+    with pytest.raises(ValidationError):
+        DurationFrames.model_validate({"min": 1, "max": 5, "step": 1})

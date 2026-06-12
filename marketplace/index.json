@@ -1,0 +1,63 @@
+{
+  "catalogVersion": 1,
+  "packages": [
+    {
+      "id": "bold-stat",
+      "name": "Bold Statistic",
+      "version": "1.0.0",
+      "kind": "stat",
+      "apiVersion": "1",
+      "author": "acme",
+      "license": "MIT",
+      "description": "Bold statistic with count-up.",
+      "tags": [
+        "stat",
+        "number"
+      ],
+      "package": "packages/bold-stat/1.0.0/bold-stat-1.0.0.zip",
+      "sha256": "08a07a79ccc45385b2c4d76ab38b56f1d70433852260841b8881c2e1665e890f",
+      "preview": {
+        "poster": "packages/bold-stat/1.0.0/poster.jpg"
+      }
+    },
+    {
+      "id": "kinetic-hook",
+      "name": "Kinetic Hook",
+      "version": "1.0.0",
+      "kind": "hook",
+      "apiVersion": "1",
+      "author": "acme",
+      "license": "MIT",
+      "description": "Word-cascade opening title with an accent underline sweep.",
+      "tags": [
+        "hook",
+        "kinetic",
+        "title"
+      ],
+      "package": "packages/kinetic-hook/1.0.0/kinetic-hook-1.0.0.zip",
+      "sha256": "009d6d9cad14429bce88050cfdce5b75363639d17b76925b9fd14879bcef48e7",
+      "preview": {
+        "poster": "packages/kinetic-hook/1.0.0/poster.jpg"
+      }
+    },
+    {
+      "id": "wipe",
+      "name": "Directional Wipe",
+      "version": "1.0.0",
+      "kind": "transition",
+      "apiVersion": "1",
+      "author": "studio-fps",
+      "license": "Apache-2.0",
+      "description": "Directional wipe transition.",
+      "tags": [
+        "transition",
+        "wipe"
+      ],
+      "package": "packages/wipe/1.0.0/wipe-1.0.0.zip",
+      "sha256": "bc3f53d860be27f5f1fe6efe07ce6604f94c77761f5cb7ff4b6ef9ef2d3c00c7",
+      "preview": {
+        "poster": "packages/wipe/1.0.0/poster.jpg"
+      }
+    }
+  ]
+}
