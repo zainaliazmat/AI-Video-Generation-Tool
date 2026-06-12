@@ -1,6 +1,7 @@
 'use client';
 
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import Link from 'next/link';
 import {useRouter} from 'next/navigation';
 import {motion, useReducedMotion} from 'framer-motion';
 import {cn} from '@/lib/cn';
@@ -480,6 +481,14 @@ export function TemplateGallery({
             aria-label="Search templates"
           />
         </div>
+
+        {/* Authoring guide link — same ghost grammar as the zip button */}
+        <Link
+          href="/templates/guide"
+          className="focus-ring glass glass-hover inline-flex items-center gap-[7px] rounded-full px-[15px] py-2 font-ui text-[12.5px] font-medium text-ink"
+        >
+          ✎ Template guide
+        </Link>
 
         {/* Ghost install from zip button — keyboard/SR path for install; drag overlay is mouse-only */}
         <button

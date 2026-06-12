@@ -21,6 +21,7 @@
     "@remotion/transitions": "4.0.472",
     "clsx": "2.1.1",
     "framer-motion": "12.40.0",
+    "marked": "18.0.5",
     "next": "15.5.19",
     "react": "19.2.7",
     "react-dom": "19.2.7",
