@@ -1,11 +1,14 @@
-import {mkdirSync, writeFileSync, rmSync, existsSync, cpSync, readdirSync} from 'node:fs';
+import {mkdirSync, writeFileSync, rmSync, existsSync, cpSync, readdirSync, readFileSync} from 'node:fs';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {execFileSync} from 'node:child_process';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {
   InstallError, listInstalled, installedState, clearLastError, scanReferences,
   _acquireLock, _releaseLock, _writeLastError, _sweepStale,
-  _runValidation, STAGING_DIR, TEMPLATES_DIR, SUPPORTED_API_VERSION,
+  _runValidation, STAGING_DIR, TEMPLATES_DIR, RENDER_ASSETS_DIR, PREVIEWS_DIR,
+  SCRIPTS_DIR, SUPPORTED_API_VERSION,
+  install, uninstall, doctor, _defaultRunners,
 } from './install.mjs';
 import {zipFixture, zipRaw} from './fixtures/helpers.mjs';
 
@@ -505,5 +508,290 @@ export default factory;
     } finally {
       rmSync(tmpFix, {recursive: true, force: true});
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 10: install / uninstall / doctor orchestration (§15.2 / §15.9)
+// ---------------------------------------------------------------------------
+
+const FIX_SRC = join(__dirname, 'fixtures', 'valid-scene');
+
+/**
+ * Build a stubbed runners set.
+ * - tsc, genPreviews, copyAssets are no-ops (captured in calls[]).
+ * - buildRegistry is REAL (runs the actual build-registry.mjs) so that
+ *   registry.generated.ts reflects the current templates/ state and
+ *   "is fixture-card in registry?" assertions work.
+ */
+function stubRunners(overrides = {}) {
+  const calls = [];
+  return {
+    calls,
+    runners: {
+      tsc: () => { calls.push('tsc'); },
+      buildRegistry: () => {
+        calls.push('buildRegistry');
+        execFileSync('node', [join(__dirname, 'build-registry.mjs')], {stdio: 'pipe'});
+      },
+      genManifests: _defaultRunners.genManifests,
+      genPreviews: (id) => { calls.push(`genPreviews:${id}`); },
+      copyAssets: () => { calls.push('copyAssets'); },
+      ...overrides,
+    },
+  };
+}
+
+/** Read registry.generated.ts and return true if `id` appears in it. */
+function registryContains(id) {
+  const reg = join(__dirname, '..', 'registry.generated.ts');
+  if (!existsSync(reg)) return false;
+  return readFileSync(reg, 'utf8').includes(JSON.stringify(id));
+}
+
+/** Clean up all fixture-card / fixture-wipe residue after each orchestration test. */
+async function cleanOrchestrationFixtures() {
+  const ids = ['fixture-card', 'fixture-wipe'];
+  for (const id of ids) {
+    rmSync(join(TEMPLATES_DIR, id), {recursive: true, force: true});
+    rmSync(join(RENDER_ASSETS_DIR, id), {recursive: true, force: true});
+    rmSync(join(PREVIEWS_DIR, `${id}.mp4`), {force: true});
+    rmSync(join(PREVIEWS_DIR, `${id}.jpg`), {force: true});
+  }
+  // Drop any test-added lock entries from previews.lock.json
+  const lockPath = join(PREVIEWS_DIR, 'previews.lock.json');
+  if (existsSync(lockPath)) {
+    try {
+      const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
+      for (const id of ids) delete lock[id];
+      writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n');
+    } catch { /* tolerate */ }
+  }
+  // Restore registry to 8 core templates
+  execFileSync('node', [join(__dirname, 'build-registry.mjs')], {stdio: 'pipe'});
+}
+
+describe('install orchestration (§15.2)', () => {
+  afterEach(cleanOrchestrationFixtures);
+
+  it('T1 happy path: call order, assets shipped, sentinel gone, registry updated, result shape', async () => {
+    const {calls, runners} = stubRunners();
+    const result = await install(FIX_SRC, {runners});
+
+    // Call order
+    expect(calls).toEqual(['tsc', 'buildRegistry', 'genPreviews:fixture-card', 'copyAssets']);
+
+    // Result shape
+    expect(result).toMatchObject({id: 'fixture-card', version: '1.0.0', kind: 'scene', updated: null});
+    expect(result.preview).toBe('previews/fixture-card.mp4');
+
+    // Sentinel is gone
+    expect(existsSync(join(TEMPLATES_DIR, 'fixture-card', '.installing'))).toBe(false);
+
+    // Declared assets shipped to RENDER_ASSETS_DIR
+    expect(existsSync(join(RENDER_ASSETS_DIR, 'fixture-card', 'dot.png'))).toBe(true);
+    expect(existsSync(join(RENDER_ASSETS_DIR, 'fixture-card', 'CREDITS.json'))).toBe(true);
+
+    // Registry contains fixture-card
+    expect(registryContains('fixture-card')).toBe(true);
+
+    // lastError cleared
+    expect(installedState().lastError).toBeNull();
+  });
+
+  it('T2 tsc failure: rejects stage=typecheck, folder gone, registry NOT called', async () => {
+    const {calls, runners} = stubRunners({
+      tsc: () => { throw Object.assign(new Error('TS2322 type error boom'), {stdout: Buffer.from(''), stderr: Buffer.from('TS2322 type error boom')}); },
+    });
+    await expectStage(install(FIX_SRC, {runners}), 'typecheck', 'TS');
+    expect(existsSync(join(TEMPLATES_DIR, 'fixture-card'))).toBe(false);
+    expect(calls.filter(c => c === 'buildRegistry')).toHaveLength(0);
+    expect(registryContains('fixture-card')).toBe(false);
+    expect(installedState().lastError?.stage).toBe('typecheck');
+  });
+
+  it('T3 preview failure: rejects stage=preview, folder+assets gone, buildRegistry called twice (register + rollback)', async () => {
+    const {calls, runners} = stubRunners({
+      genPreviews: () => { throw new Error('render crashed'); },
+    });
+    await expectStage(install(FIX_SRC, {runners}), 'preview');
+    expect(existsSync(join(TEMPLATES_DIR, 'fixture-card'))).toBe(false);
+    expect(existsSync(join(RENDER_ASSETS_DIR, 'fixture-card'))).toBe(false);
+    expect(calls.filter(c => c === 'buildRegistry')).toHaveLength(2);
+    expect(registryContains('fixture-card')).toBe(false);
+  });
+
+  it('T4 --update semver-up: result.updated.from is old version, manifest on disk is new version', async () => {
+    const {runners: r1} = stubRunners();
+    await install(FIX_SRC, {runners: r1});
+
+    // Build a 1.1.0 version of the fixture
+    const zip110 = zipFixture(FIX_SRC, {mutateManifest: (m) => { m.version = '1.1.0'; return m; }});
+    const {runners: r2} = stubRunners();
+    const result = await install(zip110, {update: true, runners: r2});
+
+    expect(result.updated).toMatchObject({from: '1.0.0'});
+    const onDisk = JSON.parse(readFileSync(join(TEMPLATES_DIR, 'fixture-card', 'manifest.json'), 'utf8'));
+    expect(onDisk.version).toBe('1.1.0');
+  });
+
+  it('T5 --update tsc failure restores old version', async () => {
+    const {runners: r1} = stubRunners();
+    await install(FIX_SRC, {runners: r1});
+
+    const zip120 = zipFixture(FIX_SRC, {mutateManifest: (m) => { m.version = '1.2.0'; return m; }});
+    const {runners: r2} = stubRunners({
+      tsc: () => { throw Object.assign(new Error('TS2344'), {stdout: Buffer.from(''), stderr: Buffer.from('TS2344')}); },
+    });
+    await expectStage(install(zip120, {update: true, runners: r2}), 'typecheck');
+
+    // Old version still on disk
+    const onDisk = JSON.parse(readFileSync(join(TEMPLATES_DIR, 'fixture-card', 'manifest.json'), 'utf8'));
+    expect(onDisk.version).toBe('1.0.0');
+  });
+
+  it('T6 same-version replace via confirmReplace:true → result.updated.from is old version', async () => {
+    const {runners: r1} = stubRunners();
+    await install(FIX_SRC, {runners: r1});
+
+    const {runners: r2} = stubRunners();
+    const result = await install(FIX_SRC, {update: true, confirmReplace: true, runners: r2});
+    expect(result.updated).toMatchObject({from: '1.0.0'});
+  });
+
+  it('T7 sha256 mismatch → rejects stage=integrity before unpack (no folder created)', async () => {
+    const zip = zipFixture(FIX_SRC);
+    const {runners} = stubRunners();
+    await expectStage(
+      install(zip, {sha256: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef', runners}),
+      'integrity',
+    );
+    expect(existsSync(join(TEMPLATES_DIR, 'fixture-card'))).toBe(false);
+  });
+
+  it('T7b sha256 correct hash → passes', async () => {
+    const zip = zipFixture(FIX_SRC);
+    const {createHash} = await import('node:crypto');
+    const actual = createHash('sha256').update(readFileSync(zip)).digest('hex');
+    const {runners} = stubRunners();
+    const result = await install(zip, {sha256: actual, runners});
+    expect(result.id).toBe('fixture-card');
+  });
+
+  it('T7c sha256 on directory source → rejects with clear message', async () => {
+    const {runners} = stubRunners();
+    await expectStage(
+      install(FIX_SRC, {sha256: 'abc123', runners}),
+      'integrity',
+    );
+  });
+
+  it('T8 concurrent 409: second install while first holds lock → stage=lock', async () => {
+    let resolveGate;
+    const gate = new Promise((res) => { resolveGate = res; });
+    const {runners: r1} = stubRunners({
+      tsc: () => gate,
+    });
+    const p1 = install(FIX_SRC, {runners: r1});
+
+    // Give p1 time to acquire lock and enter tsc runner
+    await new Promise((res) => setTimeout(res, 200));
+
+    const {runners: r2} = stubRunners();
+    await expectStage(install(FIX_SRC, {runners: r2}), 'lock');
+
+    resolveGate();
+    await p1;
+  });
+});
+
+describe('uninstall orchestration (§15.9)', () => {
+  afterEach(cleanOrchestrationFixtures);
+
+  it('T9a refuse core template → stage=uninstall containing "core"', async () => {
+    const {runners} = stubRunners();
+    await expectStage(uninstall('hook', {runners}), 'uninstall', 'core');
+  });
+
+  it('T9b unknown id → stage=uninstall', async () => {
+    const {runners} = stubRunners();
+    await expectStage(uninstall('nonexistent-template-xyz', {runners}), 'uninstall');
+  });
+
+  it('T9c full removal: folder+assets+previews+lockentry gone, referencedBy.total===1', async () => {
+    // Install first
+    const {runners: r1} = stubRunners();
+    await install(FIX_SRC, {runners: r1});
+
+    // Plant preview stubs
+    writeFileSync(join(PREVIEWS_DIR, 'fixture-card.mp4'), 'fake-mp4');
+    writeFileSync(join(PREVIEWS_DIR, 'fixture-card.jpg'), 'fake-jpg');
+
+    // Plant a lock entry
+    const lockPath = join(PREVIEWS_DIR, 'previews.lock.json');
+    let lock = {};
+    try { lock = JSON.parse(readFileSync(lockPath, 'utf8')); } catch { /* */ }
+    lock['fixture-card'] = 'abc123';
+    writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n');
+
+    // Plant a referencing project
+    const projDir = join(resolve(TEMPLATES_DIR, '..'), 'projects', 'zzz-uninstall-fixture');
+    mkdirSync(projDir, {recursive: true});
+    writeFileSync(join(projDir, 'spec.json'), JSON.stringify({
+      scenes: [{id: 's1', template: 'fixture-card'}],
+    }));
+
+    try {
+      const {runners: r2} = stubRunners();
+      const result = await uninstall('fixture-card', {runners: r2});
+
+      expect(result.referencedBy.total).toBe(1);
+      expect(existsSync(join(TEMPLATES_DIR, 'fixture-card'))).toBe(false);
+      expect(existsSync(join(RENDER_ASSETS_DIR, 'fixture-card'))).toBe(false);
+      expect(existsSync(join(PREVIEWS_DIR, 'fixture-card.mp4'))).toBe(false);
+      expect(existsSync(join(PREVIEWS_DIR, 'fixture-card.jpg'))).toBe(false);
+
+      // Lock entry gone
+      const lockAfter = JSON.parse(readFileSync(lockPath, 'utf8'));
+      expect(lockAfter['fixture-card']).toBeUndefined();
+
+      expect(registryContains('fixture-card')).toBe(false);
+    } finally {
+      rmSync(projDir, {recursive: true, force: true});
+      // Clean up preview stubs already removed by uninstall; force=true handles it
+      rmSync(join(PREVIEWS_DIR, 'fixture-card.mp4'), {force: true});
+      rmSync(join(PREVIEWS_DIR, 'fixture-card.jpg'), {force: true});
+      // Restore lock
+      try {
+        const lockFinal = JSON.parse(readFileSync(lockPath, 'utf8'));
+        delete lockFinal['fixture-card'];
+        writeFileSync(lockPath, JSON.stringify(lockFinal, null, 2) + '\n');
+      } catch { /* */ }
+    }
+  });
+});
+
+describe('doctor orchestration (§15.2)', () => {
+  afterEach(cleanOrchestrationFixtures);
+
+  it('T10a clean fixture → {ok:true} and zero residue (no templates/fixture-card, registry=8)', async () => {
+    const {runners} = stubRunners();
+    const result = await doctor(FIX_SRC, {runners});
+    expect(result).toMatchObject({ok: true, id: 'fixture-card', version: '1.0.0', kind: 'scene'});
+
+    // Doctor ALWAYS rolls back — no residue
+    expect(existsSync(join(TEMPLATES_DIR, 'fixture-card'))).toBe(false);
+    expect(existsSync(join(RENDER_ASSETS_DIR, 'fixture-card'))).toBe(false);
+    expect(registryContains('fixture-card')).toBe(false);
+  });
+
+  it('T10b failing candidate (tsc throws) → rejects stage=typecheck, zero residue', async () => {
+    const {runners} = stubRunners({
+      tsc: () => { throw Object.assign(new Error('TS2322 doctor fail'), {stdout: Buffer.from(''), stderr: Buffer.from('TS2322 doctor fail')}); },
+    });
+    await expectStage(doctor(FIX_SRC, {runners}), 'typecheck');
+    expect(existsSync(join(TEMPLATES_DIR, 'fixture-card'))).toBe(false);
+    expect(existsSync(join(RENDER_ASSETS_DIR, 'fixture-card'))).toBe(false);
+    expect(registryContains('fixture-card')).toBe(false);
   });
 });

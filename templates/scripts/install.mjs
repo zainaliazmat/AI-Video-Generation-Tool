@@ -32,10 +32,14 @@ import {
   mkdirSync,
   rmSync,
   existsSync,
+  cpSync,
+  renameSync,
+  statSync,
 } from 'node:fs';
 import {resolve, join, relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // Re-export path constants + InstallError from shared module (backward compat)
@@ -56,10 +60,14 @@ export {
 
 import {
   TEMPLATES_DIR,
+  SCRIPTS_DIR,
   STAGING_DIR,
   LOCK_PATH,
   LAST_ERROR_PATH,
   REPO_ROOT,
+  REMOTION_DIR,
+  RENDER_ASSETS_DIR,
+  PREVIEWS_DIR,
   InstallError,
 } from './install-paths.mjs';
 
@@ -78,6 +86,9 @@ export {
   _stageSchema,
   _runValidation,
 } from './install-stages.mjs';
+
+// Also import locally so install()/doctor() can call _runValidation directly.
+import {_runValidation} from './install-stages.mjs';
 
 // ---------------------------------------------------------------------------
 // Single-flight lock (§15.2)
@@ -414,6 +425,514 @@ export function scanReferences(id) {
   }
 
   return {total, files};
+}
+
+// ---------------------------------------------------------------------------
+// Default runners (§15.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Default runner implementations for the four heavy pipeline stages.
+ *
+ * These are replaceable per-call via opts.runners so that the test suite can
+ * stub heavy stages (tsc / preview / copyAssets) while still running the REAL
+ * buildRegistry so registry assertions work.
+ *
+ * tsc runner note: `npx tsc --noEmit` in remotion/ uses remotion/tsconfig.json
+ * which includes `../templates/**‌/*.tsx` via glob — so the freshly renamed
+ * templates/<id> is typechecked by file glob even though it isn't in the
+ * registry yet (tsc globs files, it doesn't need the registry).
+ */
+export const _defaultRunners = {
+  tsc: () => {
+    try {
+      execFileSync('npx', ['tsc', '--noEmit'], {cwd: REMOTION_DIR, stdio: 'pipe'});
+    } catch (err) {
+      // Capture stderr/stdout so the InstallError message contains the TS error.
+      const out = Buffer.concat([
+        err.stdout instanceof Buffer ? err.stdout : Buffer.from(err.stdout ?? ''),
+        err.stderr instanceof Buffer ? err.stderr : Buffer.from(err.stderr ?? ''),
+      ]).toString('utf8');
+      const excerpt = out.split('\n').slice(0, 30).join('\n');
+      throw Object.assign(new Error(excerpt || err.message), {_tscOriginal: true});
+    }
+  },
+  buildRegistry: () =>
+    execFileSync('node', [join(SCRIPTS_DIR, 'build-registry.mjs')], {stdio: 'pipe'}),
+  // genManifests is used by _stageSchema (stage 5) via _runValidation's runners.
+  // Included here so that test stubs composed from _defaultRunners carry a valid
+  // genManifests entry and don't accidentally shadow the stage's own default with
+  // undefined when a stub omits this key.
+  genManifests: (scanDir) =>
+    execFileSync(
+      join(TEMPLATES_DIR, 'node_modules', '.bin', 'tsx'),
+      [join(SCRIPTS_DIR, 'gen-manifests.ts'), '--dir', scanDir],
+      {stdio: 'pipe'},
+    ),
+  genPreviews: (id) =>
+    execFileSync(
+      'node',
+      [join(REPO_ROOT, 'remotion', 'scripts', 'gen-previews.mjs'), '--only', id, '--force'],
+      {stdio: 'pipe'},
+    ),
+  copyAssets: () =>
+    execFileSync('node', [join(REPO_ROOT, 'preview', 'scripts', 'copy-assets.mjs')], {stdio: 'pipe'}),
+};
+
+// ---------------------------------------------------------------------------
+// Ship-assets helper (§15.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Copy all declared manifest.assets PLUS CREDITS.json to
+ * RENDER_ASSETS_DIR/<id>/.
+ *
+ * CREDITS.json is always copied when it exists in assets/ — it may not be
+ * listed in manifest.assets (§4.4 only requires it when non-CREDITS assets
+ * ship), but it is always safe to mirror.
+ *
+ * @param {string} tplDir  templates/<id> (already renamed, sentinel still present).
+ * @param {object} manifest
+ */
+function _shipAssets(tplDir, manifest) {
+  const id = manifest.id;
+  const destDir = join(RENDER_ASSETS_DIR, id);
+  mkdirSync(destDir, {recursive: true});
+
+  const toCopy = new Set(manifest.assets ?? []);
+
+  // Always include CREDITS.json when present
+  const creditsRel = 'assets/CREDITS.json';
+  const creditsAbs = join(tplDir, creditsRel);
+  if (existsSync(creditsAbs)) toCopy.add(creditsRel);
+
+  for (const rel of toCopy) {
+    const src = join(tplDir, rel);
+    // Strip leading 'assets/' — we flatten into RENDER_ASSETS_DIR/<id>/
+    const basename = rel.replace(/^assets\//, '');
+    const dest = join(destDir, basename);
+    mkdirSync(join(destDir, ...(basename.includes('/') ? [basename.split('/').slice(0, -1).join('/')] : [])), {recursive: true});
+    if (existsSync(src)) {
+      cpSync(src, dest, {recursive: false, force: true});
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot / restore helpers (§15.2 update path)
+// ---------------------------------------------------------------------------
+
+/**
+ * Take snapshots of template folder, assets, and preview files + lock entry
+ * before an update install so they can be restored on failure.
+ *
+ * @param {string} id
+ * @param {string} runId  Used to name the snapshot dirs inside STAGING_DIR.
+ * @returns {{snapshotDir: string|null, snapshotAssetsDir: string|null, snapshotPreviewsDir: string|null, lockEntry: string|null}}
+ */
+function _snapshotForUpdate(id, runId) {
+  const tplInstallDir = join(TEMPLATES_DIR, id);
+  const assetsDir = join(RENDER_ASSETS_DIR, id);
+  const previewsLockPath = join(PREVIEWS_DIR, 'previews.lock.json');
+
+  let snapshotDir = null;
+  if (existsSync(tplInstallDir)) {
+    snapshotDir = join(STAGING_DIR, `${runId}-snapshot`);
+    mkdirSync(snapshotDir, {recursive: true});
+    cpSync(tplInstallDir, join(snapshotDir, id), {recursive: true});
+  }
+
+  let snapshotAssetsDir = null;
+  if (existsSync(assetsDir)) {
+    snapshotAssetsDir = join(STAGING_DIR, `${runId}-snapshot-assets`);
+    mkdirSync(snapshotAssetsDir, {recursive: true});
+    cpSync(assetsDir, join(snapshotAssetsDir, id), {recursive: true});
+  }
+
+  let snapshotPreviewsDir = null;
+  const mp4 = join(PREVIEWS_DIR, `${id}.mp4`);
+  const jpg = join(PREVIEWS_DIR, `${id}.jpg`);
+  if (existsSync(mp4) || existsSync(jpg)) {
+    snapshotPreviewsDir = join(STAGING_DIR, `${runId}-snapshot-previews`);
+    mkdirSync(snapshotPreviewsDir, {recursive: true});
+    if (existsSync(mp4)) cpSync(mp4, join(snapshotPreviewsDir, `${id}.mp4`));
+    if (existsSync(jpg)) cpSync(jpg, join(snapshotPreviewsDir, `${id}.jpg`));
+  }
+
+  // Snapshot the lock entry value
+  let lockEntry = null;
+  try {
+    const lock = JSON.parse(readFileSync(previewsLockPath, 'utf8'));
+    lockEntry = lock[id] ?? null;
+  } catch { /* lock missing or corrupt — fine */ }
+
+  return {snapshotDir, snapshotAssetsDir, snapshotPreviewsDir, lockEntry};
+}
+
+/**
+ * Restore from update snapshots on install failure.
+ *
+ * @param {string} id
+ * @param {{snapshotDir: string|null, snapshotAssetsDir: string|null, snapshotPreviewsDir: string|null, lockEntry: string|null}} snap
+ */
+function _restoreSnapshot(id, snap) {
+  const {snapshotDir, snapshotAssetsDir, snapshotPreviewsDir, lockEntry} = snap;
+
+  // Remove the partially-installed folder and replace with snapshot
+  rmSync(join(TEMPLATES_DIR, id), {recursive: true, force: true});
+  if (snapshotDir && existsSync(join(snapshotDir, id))) {
+    cpSync(join(snapshotDir, id), join(TEMPLATES_DIR, id), {recursive: true});
+  }
+
+  // Restore assets
+  rmSync(join(RENDER_ASSETS_DIR, id), {recursive: true, force: true});
+  if (snapshotAssetsDir && existsSync(join(snapshotAssetsDir, id))) {
+    mkdirSync(join(RENDER_ASSETS_DIR, id), {recursive: true});
+    cpSync(join(snapshotAssetsDir, id), join(RENDER_ASSETS_DIR, id), {recursive: true});
+  }
+
+  // Restore previews
+  rmSync(join(PREVIEWS_DIR, `${id}.mp4`), {force: true});
+  rmSync(join(PREVIEWS_DIR, `${id}.jpg`), {force: true});
+  if (snapshotPreviewsDir) {
+    const snapMp4 = join(snapshotPreviewsDir, `${id}.mp4`);
+    const snapJpg = join(snapshotPreviewsDir, `${id}.jpg`);
+    if (existsSync(snapMp4)) cpSync(snapMp4, join(PREVIEWS_DIR, `${id}.mp4`));
+    if (existsSync(snapJpg)) cpSync(snapJpg, join(PREVIEWS_DIR, `${id}.jpg`));
+  }
+
+  // Restore lock entry
+  const previewsLockPath = join(PREVIEWS_DIR, 'previews.lock.json');
+  try {
+    let lock = {};
+    try { lock = JSON.parse(readFileSync(previewsLockPath, 'utf8')); } catch { /* */ }
+    if (lockEntry !== null) {
+      lock[id] = lockEntry;
+    } else {
+      delete lock[id];
+    }
+    writeFileSync(previewsLockPath, JSON.stringify(lock, null, 2) + '\n');
+  } catch { /* best-effort */ }
+}
+
+// ---------------------------------------------------------------------------
+// install() — verify-before-register pipeline (§15.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Install a template from a zip or directory source.
+ *
+ * Stage order (§15.2 contract — implement verbatim):
+ *   sha256 pre-check (if opts.sha256 set) → _runValidation (stages 1–5) →
+ *   snapshot (if updating) → write .installing sentinel → atomic rename →
+ *   tsc → shipAssets → rm .installing → buildRegistry →
+ *   genPreviews → copyAssets → clearLastError
+ *
+ * Crash-window honesty: the sentinel is removed immediately BEFORE the
+ * register (build-registry) call. It cannot survive into registration.
+ * The residual window (crash between sentinel-rm and preview-pass) leaves a
+ * registered-but-unsmoked template; the spec accepts this and the startup
+ * sweep + the next predev build-registry cover the wider window.
+ *
+ * @param {string} srcZipOrDir
+ * @param {{
+ *   sha256?: string,
+ *   update?: boolean,
+ *   confirmReplace?: boolean,
+ *   overrideCapability?: boolean,
+ *   runners?: Partial<typeof _defaultRunners>
+ * }} opts
+ */
+export async function install(srcZipOrDir, opts = {}) {
+  const runners = {..._defaultRunners, ...opts.runners};
+  let id = null;
+  let runDir = null;
+  let snap = null;
+
+  // sha256 pre-check (§15.14) — file sources only
+  if (opts.sha256 !== undefined) {
+    let st;
+    try { st = statSync(srcZipOrDir); } catch { st = null; }
+    if (st && st.isDirectory()) {
+      throw new InstallError('integrity', 'sha256 check is not supported for directory sources — provide a zip file');
+    }
+    if (st) {
+      const actual = createHash('sha256').update(readFileSync(srcZipOrDir)).digest('hex');
+      if (actual !== opts.sha256) {
+        throw new InstallError(
+          'integrity',
+          `sha256 mismatch — refusing to install (expected ${opts.sha256}, got ${actual})`,
+        );
+      }
+    }
+  }
+
+  _acquireLock('install');
+  try {
+    _sweepStale();
+
+    // Stages 1–5
+    const {runDir: rd, tplDir, manifest, existing} = await _runValidation(srcZipOrDir, {
+      update: opts.update,
+      confirmReplace: opts.confirmReplace,
+      overrideCapability: opts.overrideCapability,
+      runners: opts.runners ?? {},
+    });
+    runDir = rd;
+    id = manifest.id;
+
+    // Snapshot before overwriting (update path)
+    const runId = `run-${process.pid}`;
+    if (existing) {
+      snap = _snapshotForUpdate(id, runId);
+    }
+
+    // Write .installing sentinel INTO the staged folder
+    writeFileSync(join(tplDir, '.installing'), 'installing');
+
+    // Atomic publish: rename staged folder to templates/<id>
+    const installDir = join(TEMPLATES_DIR, id);
+    // If updating, remove the old dir first (rename would fail on POSIX if dest non-empty)
+    if (existing) {
+      rmSync(installDir, {recursive: true, force: true});
+    }
+    renameSync(tplDir, installDir);
+
+    // tsc check — failure → restore (update) + rethrow
+    try {
+      await runners.tsc();
+    } catch (err) {
+      rmSync(installDir, {recursive: true, force: true});
+      if (snap) _restoreSnapshot(id, snap);
+      // buildRegistry NOT called — template was never registered
+      const msg = err.message || String(err);
+      throw new InstallError('typecheck', msg.slice(0, 2000));
+    }
+
+    // Ship declared assets + CREDITS.json to RENDER_ASSETS_DIR/<id>/
+    _shipAssets(installDir, manifest);
+
+    // Remove .installing sentinel BEFORE registration
+    // (Crash-window: see module header comment above)
+    rmSync(join(installDir, '.installing'), {force: true});
+
+    // Register — build-registry regenerates registry.generated.ts
+    await runners.buildRegistry();
+
+    // Smoke render — failure → full rollback
+    try {
+      await runners.genPreviews(id);
+    } catch (err) {
+      // ROLLBACK: remove installed folder + assets + preview candidate
+      rmSync(installDir, {recursive: true, force: true});
+      rmSync(join(RENDER_ASSETS_DIR, id), {recursive: true, force: true});
+      rmSync(join(PREVIEWS_DIR, `${id}.mp4`), {force: true});
+      rmSync(join(PREVIEWS_DIR, `${id}.jpg`), {force: true});
+      if (snap) _restoreSnapshot(id, snap);
+      await runners.buildRegistry();
+      await runners.copyAssets();
+      throw new InstallError('preview', err.message || String(err));
+    }
+
+    // Mirror template-assets into preview/public/
+    await runners.copyAssets();
+
+    clearLastError();
+
+    return {
+      id,
+      version: manifest.version,
+      kind: manifest.kind,
+      preview: `previews/${id}.mp4`,
+      updated: existing ? {from: existing.version} : null,
+    };
+  } catch (e) {
+    _writeLastError({op: 'install', id, stage: e.stage ?? 'install', message: e.message});
+    throw e;
+  } finally {
+    // Best-effort cleanup of runDir and snapshot dirs
+    if (runDir) rmSync(runDir, {recursive: true, force: true});
+    if (snap) {
+      if (snap.snapshotDir) rmSync(snap.snapshotDir, {recursive: true, force: true});
+      if (snap.snapshotAssetsDir) rmSync(snap.snapshotAssetsDir, {recursive: true, force: true});
+      if (snap.snapshotPreviewsDir) rmSync(snap.snapshotPreviewsDir, {recursive: true, force: true});
+    }
+    _releaseLock();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// uninstall() — §15.9
+// ---------------------------------------------------------------------------
+
+/**
+ * Uninstall a template by id.
+ *
+ * Protected: core templates (author === 'core') cannot be uninstalled.
+ * Returns {id, removed: true, referencedBy} — referencedBy.total may be > 0
+ * (the caller/UI decides whether to warn the user; we uninstall either way).
+ *
+ * @param {string} id
+ * @param {{runners?: Partial<typeof _defaultRunners>}} opts
+ */
+export async function uninstall(id, opts = {}) {
+  const runners = {..._defaultRunners, ...opts.runners};
+  _acquireLock('uninstall');
+  try {
+    _sweepStale();
+
+    const manifestPath = join(TEMPLATES_DIR, id, 'manifest.json');
+    if (!existsSync(manifestPath)) {
+      throw new InstallError('uninstall', `no template "${id}" installed`);
+    }
+    let manifest;
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    } catch (e) {
+      throw new InstallError('uninstall', `cannot read manifest for "${id}": ${e.message}`);
+    }
+
+    if (manifest.author === 'core') {
+      throw new InstallError('uninstall', `"${id}" is a core template — protected, cannot uninstall`);
+    }
+
+    const refs = scanReferences(id);
+
+    // Remove everything
+    rmSync(join(TEMPLATES_DIR, id), {recursive: true, force: true});
+    rmSync(join(RENDER_ASSETS_DIR, id), {recursive: true, force: true});
+    rmSync(join(PREVIEWS_DIR, `${id}.mp4`), {force: true});
+    rmSync(join(PREVIEWS_DIR, `${id}.jpg`), {force: true});
+
+    // Drop lock entry from previews.lock.json (tolerate missing/corrupt)
+    const lockPath = join(PREVIEWS_DIR, 'previews.lock.json');
+    try {
+      if (existsSync(lockPath)) {
+        const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
+        delete lock[id];
+        writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n');
+      }
+    } catch { /* best-effort */ }
+
+    await runners.buildRegistry();
+    await runners.copyAssets();
+    clearLastError();
+
+    return {id, removed: true, referencedBy: refs};
+  } catch (e) {
+    _writeLastError({op: 'uninstall', id, stage: e.stage ?? 'uninstall', message: e.message});
+    throw e;
+  } finally {
+    _releaseLock();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// doctor() — §15.2 dry-run: same pipeline as install, guaranteed rollback
+// ---------------------------------------------------------------------------
+
+/**
+ * Run the full install pipeline (stages 1–7: validate + tsc + preview) as a
+ * dry-run — always rolls back on both success AND failure, leaving zero
+ * residue in templates/, RENDER_ASSETS_DIR, and preview files.
+ *
+ * Doctor treats an already-installed id as an update (update+confirmReplace
+ * internally) so an author re-running doctor on an installed template doesn't
+ * trip the collision gate.
+ *
+ * Returns {ok:true, id, version, kind} on success, throws the stage error on
+ * failure (after rollback in both cases).
+ *
+ * "doctor-clean == installable" is the contract: doctor reaches real tsc +
+ * real preview render by default — the same stages as install.
+ *
+ * @param {string} srcZipOrDir
+ * @param {{runners?: Partial<typeof _defaultRunners>}} opts
+ */
+export async function doctor(srcZipOrDir, opts = {}) {
+  const runners = {..._defaultRunners, ...opts.runners};
+  let id = null;
+  let runDir = null;
+  let snap = null;
+
+  _acquireLock('doctor');
+  try {
+    _sweepStale();
+
+    // Stages 1–5 with implicit update+confirmReplace so an installed id
+    // doesn't hit the collision gate.
+    const {runDir: rd, tplDir, manifest, existing} = await _runValidation(srcZipOrDir, {
+      update: true,
+      confirmReplace: true,
+      runners: opts.runners ?? {},
+    });
+    runDir = rd;
+    id = manifest.id;
+
+    // Snapshot any existing installation so we can restore unconditionally
+    const runId = `doctor-${process.pid}`;
+    snap = _snapshotForUpdate(id, runId);
+
+    let installSucceeded = false;
+    try {
+      // Write sentinel and rename into place
+      writeFileSync(join(tplDir, '.installing'), 'installing');
+      const installDir = join(TEMPLATES_DIR, id);
+      if (existing) rmSync(installDir, {recursive: true, force: true});
+      renameSync(tplDir, installDir);
+
+      // tsc
+      try {
+        await runners.tsc();
+      } catch (err) {
+        const msg = err.message || String(err);
+        throw new InstallError('typecheck', msg.slice(0, 2000));
+      }
+
+      // Ship assets
+      _shipAssets(installDir, manifest);
+
+      // Remove sentinel
+      rmSync(join(installDir, '.installing'), {force: true});
+
+      // buildRegistry
+      await runners.buildRegistry();
+
+      // genPreviews
+      try {
+        await runners.genPreviews(id);
+      } catch (err) {
+        throw new InstallError('preview', err.message || String(err));
+      }
+
+      installSucceeded = true;
+    } finally {
+      // UNCONDITIONAL rollback — doctor NEVER leaves residue
+      const installDir = join(TEMPLATES_DIR, id);
+      rmSync(installDir, {recursive: true, force: true});
+      rmSync(join(RENDER_ASSETS_DIR, id), {recursive: true, force: true});
+      rmSync(join(PREVIEWS_DIR, `${id}.mp4`), {force: true});
+      rmSync(join(PREVIEWS_DIR, `${id}.jpg`), {force: true});
+      if (snap) _restoreSnapshot(id, snap);
+      // Rebuild registry + mirror assets to restore to pre-doctor state
+      try { runners.buildRegistry(); } catch { /* best-effort */ }
+      try { runners.copyAssets(); } catch { /* best-effort */ }
+    }
+
+    // Only reaches here if no throw inside the try above
+    return {ok: true, id, version: manifest.version, kind: manifest.kind};
+  } catch (e) {
+    _writeLastError({op: 'doctor', id, stage: e.stage ?? 'doctor', message: e.message});
+    throw e;
+  } finally {
+    if (runDir) rmSync(runDir, {recursive: true, force: true});
+    if (snap) {
+      if (snap.snapshotDir) rmSync(snap.snapshotDir, {recursive: true, force: true});
+      if (snap.snapshotAssetsDir) rmSync(snap.snapshotAssetsDir, {recursive: true, force: true});
+      if (snap.snapshotPreviewsDir) rmSync(snap.snapshotPreviewsDir, {recursive: true, force: true});
+    }
+    _releaseLock();
+  }
 }
 
 // ---------------------------------------------------------------------------
