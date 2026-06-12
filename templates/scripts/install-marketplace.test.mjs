@@ -118,6 +118,28 @@ describe('installFromMarketplace', () => {
     expect(existsSync(join(TEMPLATES_DIR, PKG_ID))).toBe(false);
   });
 
+  it('traversal package path: rejects before installing (containment guard)', async () => {
+    // Plant the package but rewrite the index with a traversal path before calling install
+    const idx = JSON.parse(readFileSync(join(marketplaceDir, 'index.json'), 'utf8'));
+    const entry = idx.packages.find((p) => p.id === PKG_ID);
+    expect(entry, 'entry must exist after plantMarketplacePkg').toBeTruthy();
+    // Overwrite index with a traversal package path for the entry
+    const tampered = {
+      ...idx,
+      packages: idx.packages.map((p) =>
+        p.id === PKG_ID ? {...p, package: '../../escape.zip'} : p,
+      ),
+    };
+    writeFileSync(join(marketplaceDir, 'index.json'), JSON.stringify(tampered, null, 2) + '\n');
+
+    const err = await installFromMarketplace(PKG_ID, {runners: stubRunners()}).then(() => null, (e) => e);
+    expect(err).toBeTruthy();
+    expect(err).toBeInstanceOf(InstallError);
+    expect(err.message).toContain('outside the store');
+    // No folder created
+    expect(existsSync(join(TEMPLATES_DIR, PKG_ID))).toBe(false);
+  });
+
   it('CLI: node install.mjs install --from-marketplace zzz-nope → exit nonzero, stderr names catalog', () => {
     let threw = false;
     try {

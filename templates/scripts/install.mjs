@@ -36,7 +36,7 @@ import {
   renameSync,
   statSync,
 } from 'node:fs';
-import {resolve, join, relative, dirname} from 'node:path';
+import {resolve, join, relative, dirname, sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
@@ -783,8 +783,11 @@ export async function installFromMarketplace(id, opts = {}) {
     );
   }
 
-  // Resolve zip path
+  // Resolve zip path — containment guard (defense for M4/M6 index serving)
   const zipPath = join(MARKETPLACE_DIR, entry.package);
+  if (!zipPath.startsWith(resolve(MARKETPLACE_DIR) + sep)) {
+    throw new InstallError('integrity', `marketplace entry "${id}" resolves outside the store`);
+  }
   if (!existsSync(zipPath)) {
     throw new InstallError(
       'unpack',

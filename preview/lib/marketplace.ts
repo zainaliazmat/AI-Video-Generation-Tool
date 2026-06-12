@@ -1,5 +1,5 @@
 import {readFileSync, existsSync} from 'node:fs';
-import {resolve, join} from 'node:path';
+import {resolve, join, sep} from 'node:path';
 import {createHash} from 'node:crypto';
 
 export interface CatalogEntry {
@@ -25,6 +25,9 @@ export class LocalFolderSource implements MarketplaceSource {
   }
   async fetchPackage(entry: CatalogEntry): Promise<{zipPath: string}> {
     const zipPath = resolve(this.marketplaceDir, entry.package);
+    if (!zipPath.startsWith(resolve(this.marketplaceDir) + sep)) {
+      throw new Error(`marketplace entry "${entry.id}" resolves outside the store: ${entry.package}`);
+    }
     if (!existsSync(zipPath)) {
       throw new Error(`marketplace package missing: ${entry.package} — run build-marketplace-index`);
     }

@@ -60,4 +60,16 @@ describe('LocalFolderSource', () => {
     expect(threw).toBe(true);
     rmSync(dir, {recursive: true, force: true});
   });
+  it('fetchPackage throws when entry.package traverses outside the store root', () => {
+    const {dir} = tmpMarketplace();
+    // Write an index with a traversal package path
+    writeFileSync(join(dir, 'index.json'), JSON.stringify({catalogVersion: 1, packages: [
+      {id: 'demo', name: 'Demo', version: '1.0.0', kind: 'scene', apiVersion: '1', author: 'acme', license: 'MIT', package: '../../escape.zip', sha256: 'aabbcc'},
+    ]}, null, 2));
+    let threw = false;
+    try { runSeam(`const i = await src.getIndex(); await src.fetchPackage(i.packages[0]);`, dir); }
+    catch (e) { threw = true; expect(String(e.stderr)).toContain('outside the store'); }
+    expect(threw).toBe(true);
+    rmSync(dir, {recursive: true, force: true});
+  });
 });
