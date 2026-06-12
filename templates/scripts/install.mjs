@@ -130,7 +130,7 @@ export function _acquireLock(op) {
           process.kill(holdingPid, 0); // signal 0 = probe: throws ESRCH if dead
           alive = true;
         } catch {
-          alive = false; // ESRCH — no such process
+          alive = false; // ESRCH (no such process) or unexpected signal error
         }
       }
       if (alive) {
