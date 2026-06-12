@@ -85,11 +85,131 @@ def test_style_memory_block_alters_a_prompt():
     assert "1250C" in seeded
 
 
-def test_frozen_system_prompt_byte_identical_after_seam():
+# ---------------------------------------------------------------------------
+# D1-B: system_prompt_for() surgery + LENGTH_PRESETS (Studio v3 M2)
+# ---------------------------------------------------------------------------
+
+# Golden bytes captured from the original frozen SYSTEM_PROMPT before the M2
+# refactor.  system_prompt_for(60) MUST reproduce this string byte-for-byte.
+_GOLDEN_SYSTEM_PROMPT_60 = (
+    "You are a scriptwriter for short-form faceless videos (vertical, ~60-90s). "
+    "Respond ONLY with a JSON object of the form "
+    '{"title": string, "beats": Beat[], "hook_candidates"?: Hook[]} where a Beat is '
+    '{"text": string, "data"?: object, "keywords"?: string, "source"?: string} '
+    'and a Hook is {"text": string, "pattern": string, "source"?: string}. '
+    "Each beat's `text` is ONE spoken narration sentence (8-18 words). Produce 5-8 beats. "
+    "Pace for retention: open tight, deliver a clear payoff, no filler or dead air. "
+    "The FIRST beat must be a punchy hook that opens the video; the LAST beat must be a "
+    "closing call to action (e.g. follow for more). "
+    "The title must NOT promise a fixed count (avoid 'N facts ...') — unverifiable facts may be dropped. "
+    'For any beat whose point is a single striking number or statistic, include '
+    '"data": {"value": "<the number, e.g. 90%>", "label": "<short context, 2-5 words>"}. '
+    'For any beat that NAMES a small enumerable SET of things (2-6 items, e.g. '
+    '"the sun, the moon, the planets"), instead include '
+    '"data": {"items": ["<item1>", "<item2>", ...]} with the bare item nouns in the SAME '
+    "ORDER the narration speaks them, and make the beat `text` actually name each item in "
+    "that order. Use `items` for an enumerable set, NOT for a single statistic (that is "
+    "`value`/`label`); never put both on one beat. "
+    'For EVERY beat, add "keywords": "<2-4 words>" for stock-footage search. GUIDING PRINCIPLE: '
+    'pick words whose DOMINANT stock-footage meaning IS your subject — a stock library returns '
+    'the COMMON sense of a phrase, not the one you intended. Apply it: '
+    '(a) name a CONCRETE, FILMABLE thing on screen, never an abstract concept ("melting glacier", '
+    'not "economic growth" or "freedom"); '
+    '(b) LEAD WITH THE CONCRETE NOUN, never a process word — a process-led phrase drifts to the '
+    'wrong scene ("ocean evaporation steam" returns a geothermal vent; use "sea spray over waves"); '
+    '(c) never use a compound whose everyday meaning is a DIFFERENT object than you mean — it '
+    'returns that other object ("hand crank" returns a coffee grinder; name the visible part: '
+    '"brass clockwork gears"); '
+    '(d) for a subject too specific for stock — a named place, person, event, branded object, or '
+    'niche instrument — use an ANONYMOUS filmable category or mood that evokes it, NEVER a named '
+    'landmark a viewer would recognize ("celestial globe" or "the Antikythera mechanism" -> '
+    '"antique astronomical instrument", not a famous astronomical clock; "Challenger Deep" -> '
+    '"dark ocean abyss"; "Nobel medal" -> "physics laboratory"). '
+    "When grounding SOURCES are provided in the user message, state ONLY facts those "
+    'sources support and set each factual beat\'s "source" to the exact URL of the '
+    "specific source that backs it; never invent a URL or an unsupported fact. "
+    "No emojis, no markdown, no numbering."
+)
+
+
+def test_system_prompt_golden_60():
+    """D1-B: system_prompt_for(60) must be byte-identical to the original frozen prompt."""
+    from pipeline import script as script_stage
+    assert script_stage.system_prompt_for(60) == _GOLDEN_SYSTEM_PROMPT_60
+
+
+def test_system_prompt_module_constant_equals_60():
+    """SYSTEM_PROMPT module constant equals system_prompt_for(60) — existing importers safe."""
+    from pipeline import script as script_stage
+    assert script_stage.SYSTEM_PROMPT == script_stage.system_prompt_for(60)
+    assert script_stage.SYSTEM_PROMPT == _GOLDEN_SYSTEM_PROMPT_60
+
+
+def test_system_prompt_segments_present_in_all_presets():
+    """KEYWORD_RULE_SEGMENT and GROUNDING_SEGMENT appear byte-identical in every preset prompt."""
+    from pipeline import script as script_stage
+    for length in script_stage.LENGTH_PRESETS:
+        prompt = script_stage.system_prompt_for(length)
+        assert script_stage.KEYWORD_RULE_SEGMENT in prompt, \
+            f"KEYWORD_RULE_SEGMENT missing from system_prompt_for({length})"
+        assert script_stage.GROUNDING_SEGMENT in prompt, \
+            f"GROUNDING_SEGMENT missing from system_prompt_for({length})"
+
+
+def test_system_prompt_segments_byte_identical_across_presets():
+    """The keyword and grounding segment text is the exact same object / bytes for all presets."""
+    from pipeline import script as script_stage
+    from pipeline.script import KEYWORD_RULE_SEGMENT, GROUNDING_SEGMENT
+    for length in script_stage.LENGTH_PRESETS:
+        prompt = script_stage.system_prompt_for(length)
+        # find() returns -1 if not present; the segment content test above covers that
+        kw_idx = prompt.find(KEYWORD_RULE_SEGMENT)
+        gr_idx = prompt.find(GROUNDING_SEGMENT)
+        assert kw_idx >= 0
+        assert gr_idx >= 0
+        # The segment text embedded in the prompt equals the module constant exactly
+        assert prompt[kw_idx:kw_idx + len(KEYWORD_RULE_SEGMENT)] == KEYWORD_RULE_SEGMENT
+        assert prompt[gr_idx:gr_idx + len(GROUNDING_SEGMENT)] == GROUNDING_SEGMENT
+
+
+def test_system_prompt_beat_bands_per_preset():
+    """Each preset prompt names its own beat band; 60s and 30s do NOT appear in 180/300 prompts."""
+    from pipeline import script as script_stage
+    p30 = script_stage.system_prompt_for(30)
+    p60 = script_stage.system_prompt_for(60)
+    p180 = script_stage.system_prompt_for(180)
+    p300 = script_stage.system_prompt_for(300)
+
+    # 30s: 5-6 beats, 60s: 5-8 beats
+    assert "Produce 5-6 beats" in p30
+    assert "Produce 5-8 beats" in p60
+    assert "Produce 22-30 beats" in p180
+    assert "Produce 38-48 beats" in p300
+
+    # Beat bands are preset-exclusive (cross-contamination check)
+    assert "Produce 5-6 beats" not in p60
+    assert "Produce 5-6 beats" not in p180
+    assert "Produce 5-8 beats" not in p30
+    assert "Produce 5-8 beats" not in p180
+    assert "Produce 22-30 beats" not in p30
+    assert "Produce 22-30 beats" not in p60
+    assert "Produce 38-48 beats" not in p30
+    assert "Produce 38-48 beats" not in p60
+
+
+def test_system_prompt_for_unknown_length_raises():
+    """system_prompt_for with an unknown length raises KeyError (codebase idiom)."""
+    import pytest
+    from pipeline import script as script_stage
+    with pytest.raises(KeyError):
+        script_stage.system_prompt_for(999)
+    with pytest.raises(KeyError):
+        script_stage.system_prompt_for(0)
+
+
+def test_additive_seam_does_not_alter_system_prompt():
     """PRD risk mitigation: the additive seam must never touch the frozen SYSTEM_PROMPT."""
     from pipeline import script as script_stage
-    # sanity that we are reading the real prompt (was a dead variable with a WRONG
-    # head, "You are a faceless" — the intended assertion would have failed)
     assert script_stage.SYSTEM_PROMPT.startswith("You are a scriptwriter")
     # Build a prompt with a big style block; SYSTEM_PROMPT object is unchanged.
     before = script_stage.SYSTEM_PROMPT

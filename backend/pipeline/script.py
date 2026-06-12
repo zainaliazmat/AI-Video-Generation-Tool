@@ -25,13 +25,30 @@ from pipeline.content import Beat, BeatsScript, HookCandidate, Source, parse_bea
 from pipeline import retrieval
 from pipeline import verify as verify_stage
 
-SYSTEM_PROMPT = (
-    "You are a scriptwriter for short-form faceless videos (vertical, ~60-90s). "
+# ---------------------------------------------------------------------------
+# SYSTEM_PROMPT segments (D1-B surgery, Studio v3 M2)
+# ---------------------------------------------------------------------------
+# The prompt is split into named segments that concatenate back to the original
+# SYSTEM_PROMPT byte-for-byte when target_length=60 (D1-B golden test).
+#
+# Original sentence layout (preserved in full by system_prompt_for):
+#   _intro_sentence(p)   — "You are a scriptwriter … (~60-90s). "
+#   _JSON_SCHEMA_BLOCK   — "Respond ONLY with a JSON object …"
+#   _beats_sentence(p)   — "Each beat's `text` is ONE … Produce 5-8 beats. "
+#   _STRUCTURE_SEGMENT   — "Pace for retention … never put both on one beat. "
+#   KEYWORD_RULE_SEGMENT — ① keyword-rule block (never varies)
+#   GROUNDING_SEGMENT    — citation / grounding rules (never varies)
+
+# Constant: JSON response-schema declaration (lines 30-33 of the original prompt).
+_JSON_SCHEMA_BLOCK = (
     "Respond ONLY with a JSON object of the form "
     '{"title": string, "beats": Beat[], "hook_candidates"?: Hook[]} where a Beat is '
     '{"text": string, "data"?: object, "keywords"?: string, "source"?: string} '
     'and a Hook is {"text": string, "pattern": string, "source"?: string}. '
-    "Each beat's `text` is ONE spoken narration sentence (8-18 words). Produce 5-8 beats. "
+)
+
+# Constant: structural beat/data rules that follow the beats-count sentence.
+_STRUCTURE_SEGMENT = (
     "Pace for retention: open tight, deliver a clear payoff, no filler or dead air. "
     "The FIRST beat must be a punchy hook that opens the video; the LAST beat must be a "
     "closing call to action (e.g. follow for more). "
@@ -44,6 +61,10 @@ SYSTEM_PROMPT = (
     "ORDER the narration speaks them, and make the beat `text` actually name each item in "
     "that order. Use `items` for an enumerable set, NOT for a single statistic (that is "
     "`value`/`label`); never put both on one beat. "
+)
+
+# Segment ①: keyword-rule block — byte-identical across ALL presets.
+KEYWORD_RULE_SEGMENT = (
     'For EVERY beat, add "keywords": "<2-4 words>" for stock-footage search. GUIDING PRINCIPLE: '
     'pick words whose DOMINANT stock-footage meaning IS your subject — a stock library returns '
     'the COMMON sense of a phrase, not the one you intended. Apply it: '
@@ -59,11 +80,87 @@ SYSTEM_PROMPT = (
     'landmark a viewer would recognize ("celestial globe" or "the Antikythera mechanism" -> '
     '"antique astronomical instrument", not a famous astronomical clock; "Challenger Deep" -> '
     '"dark ocean abyss"; "Nobel medal" -> "physics laboratory"). '
+)
+
+# Segment ②: grounding / citation rules — byte-identical across ALL presets.
+GROUNDING_SEGMENT = (
     "When grounding SOURCES are provided in the user message, state ONLY facts those "
     'sources support and set each factual beat\'s "source" to the exact URL of the '
     "specific source that backs it; never invent a URL or an unsupported fact. "
     "No emojis, no markdown, no numbering."
 )
+
+# ---------------------------------------------------------------------------
+# Length presets (OV-3: 60s band is 5-8 beats, matching the frozen prompt)
+# Fields used by system_prompt_for():
+#   duration_desc  — "~60-90s" style wording for the intro sentence
+#   beat_min       — minimum beat count
+#   beat_max       — maximum beat count
+#   wpb_min        — words-per-beat minimum
+#   wpb_max        — words-per-beat maximum
+#   sentence_desc  — "ONE spoken narration sentence" or "one to two spoken …"
+# ---------------------------------------------------------------------------
+LENGTH_PRESETS: dict[int, dict] = {
+    30: {
+        "duration_desc": "~30s",
+        "beat_min": 5,
+        "beat_max": 6,
+        "wpb_min": 8,
+        "wpb_max": 18,
+        "sentence_desc": "ONE spoken narration sentence",
+    },
+    60: {
+        # OV-3: 5-8 beats matches the frozen prompt's "Produce 5-8 beats";
+        # PRD §5.0's 7-9 was a drafting artifact — band 5-8 is normative.
+        "duration_desc": "~60-90s",
+        "beat_min": 5,
+        "beat_max": 8,
+        "wpb_min": 8,
+        "wpb_max": 18,
+        "sentence_desc": "ONE spoken narration sentence",
+    },
+    180: {
+        "duration_desc": "~2-3 minutes",
+        "beat_min": 22,
+        "beat_max": 30,
+        "wpb_min": 15,
+        "wpb_max": 45,
+        "sentence_desc": "one to two spoken narration sentences",
+    },
+    300: {
+        "duration_desc": "~4-5 minutes",
+        "beat_min": 38,
+        "beat_max": 48,
+        "wpb_min": 15,
+        "wpb_max": 45,
+        "sentence_desc": "one to two spoken narration sentences",
+    },
+}
+
+
+def system_prompt_for(target_length: int) -> str:
+    """Return the full system prompt parametrized for `target_length` seconds.
+
+    Raises KeyError if `target_length` is not in LENGTH_PRESETS (codebase idiom).
+    SYSTEM_PROMPT == system_prompt_for(60) — byte-identical (D1-B golden test).
+
+    Sentence order mirrors the original frozen prompt exactly:
+      intro_sentence → JSON schema → beats_sentence → structure → keywords → grounding
+    """
+    p = LENGTH_PRESETS[target_length]  # KeyError on unknown length — codebase idiom
+    intro = (
+        f"You are a scriptwriter for short-form faceless videos (vertical, {p['duration_desc']}). "
+    )
+    beats = (
+        f"Each beat's `text` is {p['sentence_desc']} ({p['wpb_min']}-{p['wpb_max']} words). "
+        f"Produce {p['beat_min']}-{p['beat_max']} beats. "
+    )
+    return intro + _JSON_SCHEMA_BLOCK + beats + _STRUCTURE_SEGMENT + KEYWORD_RULE_SEGMENT + GROUNDING_SEGMENT
+
+
+# SYSTEM_PROMPT: module-level constant preserved for all existing importers.
+# Byte-identical to system_prompt_for(60) — verified by test_system_prompt_golden_60.
+SYSTEM_PROMPT = system_prompt_for(60)
 
 VERIFY_SYSTEM_PROMPT = (
     "You are a strict fact-checker. Each item has a CLAIM, an optional on-screen "
