@@ -37,24 +37,42 @@ export function mirrorTemplateAssets(src, dst) {
     rmSync(dst, {recursive: true, force: true});
     return;
   }
-  // Copy src → dst first (creates new / overwrites changed).
-  mkdirSync(dst, {recursive: true});
-  cpSync(src, dst, {recursive: true});
 
-  // Orphan-delete: walk dst, remove any entry with no src counterpart.
-  // §15.7: deletions are STRICTLY scoped inside dst.
-  function purgeOrphans(dstDir, srcDir) {
+  // Purge-first: walk dst BEFORE copying and remove any entry whose src
+  // counterpart is missing OR has a different type (file vs dir).  This
+  // prevents cpSync from hitting ENOTSUP (src-file / dst-dir) or a native
+  // SIGABRT (src-dir / dst-file) on Node 22 when types are flipped.
+  // §15.7: ALL deletes are STRICTLY scoped inside dst; no path outside the
+  // dst argument is ever touched.
+  function purgeStaleOrTypeMismatched(dstDir, srcDir) {
+    if (!existsSync(dstDir)) return;
     for (const entry of readdirSync(dstDir)) {
       const dstEntry = join(dstDir, entry);
       const srcEntry = join(srcDir, entry);
       if (!existsSync(srcEntry)) {
+        // Orphan: no counterpart in src at all.
         rmSync(dstEntry, {recursive: true, force: true});
-      } else if (statSync(dstEntry).isDirectory()) {
-        purgeOrphans(dstEntry, srcEntry);
+      } else {
+        const dstStat = statSync(dstEntry);
+        const srcStat = statSync(srcEntry);
+        if (dstStat.isDirectory() !== srcStat.isDirectory()) {
+          // Type mismatch (file↔dir): remove dst entry so cpSync can create
+          // the correct type from scratch.
+          rmSync(dstEntry, {recursive: true, force: true});
+        } else if (dstStat.isDirectory()) {
+          // Same type, both dirs: recurse to handle orphans/type-flips inside.
+          purgeStaleOrTypeMismatched(dstEntry, srcEntry);
+        }
+        // Same type, both files: cpSync will overwrite — no action needed.
       }
     }
   }
-  purgeOrphans(dst, src);
+
+  mkdirSync(dst, {recursive: true});
+  purgeStaleOrTypeMismatched(dst, src);
+
+  // Now cpSync is safe: no type conflicts remain in dst.
+  cpSync(src, dst, {recursive: true});
   console.log(`[copy-assets] template-assets -> ${dst}`);
 }
 

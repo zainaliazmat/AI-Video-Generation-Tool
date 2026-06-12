@@ -1,4 +1,4 @@
-import {mkdirSync, writeFileSync, rmSync, existsSync, mkdtempSync} from 'node:fs';
+import {mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, mkdtempSync, statSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {describe, expect, it} from 'vitest';
@@ -48,6 +48,37 @@ describe('copy-assets mirrors (§15.7)', () => {
     writeFileSync(join(dst, 'old', 'x.png'), 'x');
     expect(() => mirrorTemplateAssets(join(tmp, 'nope'), dst)).not.toThrow();
     expect(existsSync(dst)).toBe(false);
+    rmSync(tmp, {recursive: true, force: true});
+  });
+  it('type-flip FILE→DIR: src has FILE x, dst has DIR x with a child — mirror converges (dst x becomes the file) without throwing', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'typeflip-fd-'));
+    const src = join(tmp, 'src'), dst = join(tmp, 'dst');
+    mkdirSync(src, {recursive: true});
+    // src has x as a FILE
+    writeFileSync(join(src, 'x'), 'file-contents');
+    // dst has x as a DIR with a child
+    mkdirSync(join(dst, 'x'), {recursive: true});
+    writeFileSync(join(dst, 'x', 'child.txt'), 'old');
+    expect(() => mirrorTemplateAssets(src, dst)).not.toThrow();
+    // after mirror, dst/x must be the FILE with src bytes
+    expect(statSync(join(dst, 'x')).isFile()).toBe(true);
+    expect(readFileSync(join(dst, 'x'), 'utf8')).toBe('file-contents');
+    rmSync(tmp, {recursive: true, force: true});
+  });
+  it('type-flip DIR→FILE: src has DIR x with a child, dst has FILE x — mirror converges (dst x becomes the dir with child) without throwing', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'typeflip-df-'));
+    const src = join(tmp, 'src'), dst = join(tmp, 'dst');
+    mkdirSync(src, {recursive: true});
+    // src has x as a DIR with a child
+    mkdirSync(join(src, 'x'), {recursive: true});
+    writeFileSync(join(src, 'x', 'child.txt'), 'new');
+    // dst has x as a FILE
+    mkdirSync(dst, {recursive: true});
+    writeFileSync(join(dst, 'x'), 'old-file');
+    expect(() => mirrorTemplateAssets(src, dst)).not.toThrow();
+    // after mirror, dst/x must be the DIR containing the child
+    expect(statSync(join(dst, 'x')).isDirectory()).toBe(true);
+    expect(existsSync(join(dst, 'x', 'child.txt'))).toBe(true);
     rmSync(tmp, {recursive: true, force: true});
   });
 });
