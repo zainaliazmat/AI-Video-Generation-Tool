@@ -155,8 +155,8 @@ export function TemplateGallery({
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState<string>('all');
   const [installStates, setInstallStates] = useState<Record<string, InstallState>>({});
-  // Drawer: we accept both TemplateMeta (legacy path) and UnifiedItem
-  const [selected, setSelected] = useState<TemplateMeta | null>(null);
+  // Drawer: hold the selected UnifiedItem directly (§16.9/§16.10)
+  const [selected, setSelected] = useState<UnifiedItem | null>(null);
   // Drag overlay (lg-gated)
   const [dragDepth, setDragDepth] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -466,10 +466,7 @@ export function TemplateGallery({
                 key={item.id}
                 item={item}
                 installState={installState}
-                onOpen={() => {
-                  const meta = findMeta(item);
-                  setSelected(meta);
-                }}
+                onOpen={() => setSelected(item)}
                 onInstall={(i, opts) => handleInstallItem(i, opts)}
                 onDismissError={() => handleDismissError(item.id)}
               />
@@ -478,7 +475,19 @@ export function TemplateGallery({
         </div>
       )}
 
-      <TemplateDrawer template={selected} onClose={() => setSelected(null)} />
+      <TemplateDrawer
+        item={selected}
+        meta={selected ? findMeta(selected) : null}
+        onClose={() => setSelected(null)}
+        onInstall={(item) => {
+          handleInstallItem(item);
+          setSelected(null);
+        }}
+        onUninstalled={() => {
+          setSelected(null);
+          router.refresh();
+        }}
+      />
     </main>
   );
 }

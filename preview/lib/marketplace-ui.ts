@@ -34,6 +34,8 @@ export interface UnifiedItem {
   poster?: string | null;
   /** Frame duration range — present for installed items, absent for catalog. */
   durationFrames?: {min: number; max: number};
+  /** Homepage URL from the catalog manifest (optional). */
+  homepage?: string | null;
 }
 
 export interface DeriveInput {
