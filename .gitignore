@@ -34,6 +34,7 @@ remotion/public/sample-spec.json
 remotion/public/spec.json
 # preview app generated copies (mirrored from remotion/public + root by copy-assets)
 preview/public/assets/
+preview/public/template-assets/
 preview/public/sample-spec.json
 preview/public/spec.json
 preview/next-env.d.ts
