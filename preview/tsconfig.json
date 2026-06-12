@@ -17,6 +17,7 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./*"],
+      "@installer": ["../templates/scripts/install.mjs"],
       "@remotion-src/*": ["../remotion/src/*"],
       "@templates/*": ["../templates/*"],
       "react": ["node_modules/@types/react"],
