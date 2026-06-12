@@ -43,6 +43,18 @@ def _topic_for(sid: str) -> str:
         conn.close()
 
 
+def _row_for(sid: str) -> tuple[str, int]:
+    """Return (topic, target_length) from the stored session row."""
+    conn = store.connect(job_ctx.SESSIONS_DB)
+    try:
+        row = store.get_session(conn, sid)
+        if row is None:
+            raise KeyError(f"no session {sid!r}")
+        return row["topic"], row["target_length"]
+    finally:
+        conn.close()
+
+
 def _floor(beats) -> dict:
     """Two-tier fact floor (PRD §6.1): supported = beats carrying a grounded source.
     0 supported = hard-fail tier; 1 = warn; else ok."""
@@ -87,7 +99,8 @@ def _build_verify_fns():
 
 
 def read(sid: str) -> dict:
-    ctx = job_ctx.build_ctx(topic=_topic_for(sid), sid=sid)
+    topic, target_length = _row_for(sid)
+    ctx = job_ctx.build_ctx(topic=topic, sid=sid, target_length=target_length)
     sess = api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)
     try:
         bundle = sess.engine._load_output("script")
@@ -99,7 +112,8 @@ def read(sid: str) -> dict:
 
 
 def edit_beat(sid: str, *, index: int, text=None, data=None, clear_data=False) -> dict:
-    ctx = job_ctx.build_ctx(topic=_topic_for(sid), sid=sid)
+    topic, target_length = _row_for(sid)
+    ctx = job_ctx.build_ctx(topic=topic, sid=sid, target_length=target_length)
     sess = api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)
     try:
         vfn, rfn = _build_verify_fns()
@@ -117,7 +131,8 @@ def edit_beat(sid: str, *, index: int, text=None, data=None, clear_data=False) -
 
 
 def drop_beat(sid: str, *, index: int) -> dict:
-    ctx = job_ctx.build_ctx(topic=_topic_for(sid), sid=sid)
+    topic, target_length = _row_for(sid)
+    ctx = job_ctx.build_ctx(topic=topic, sid=sid, target_length=target_length)
     sess = api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)
     try:
         api.edit(sess, "script", {"op": "drop_beat", "index": index})
@@ -135,7 +150,9 @@ def regenerate(sid: str, *, feedback: str = "") -> dict:
     if mem_block:
         block_parts.append(mem_block)
     extra = "\n\n".join(block_parts)
-    ctx = job_ctx.build_ctx(topic=_topic_for(sid), sid=sid, extra_user_block=extra)
+    topic, target_length = _row_for(sid)
+    ctx = job_ctx.build_ctx(topic=topic, sid=sid, extra_user_block=extra,
+                            target_length=target_length)
     sess = api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)
     try:
         api.regenerate(sess, "script")

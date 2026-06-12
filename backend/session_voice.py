@@ -40,6 +40,18 @@ def _topic_for(sid: str) -> str:
         conn.close()
 
 
+def _row_for(sid: str) -> tuple[str, int]:
+    """Return (topic, target_length) from the stored session row."""
+    conn = store.connect(job_ctx.SESSIONS_DB)
+    try:
+        row = store.get_session(conn, sid)
+        if row is None:
+            raise KeyError(f"no session {sid!r}")
+        return row["topic"], row["target_length"]
+    finally:
+        conn.close()
+
+
 def list_voices(sid: str | None = None) -> dict:
     current = None
     if sid:
@@ -60,7 +72,9 @@ def preview(voice: str, *, speed: float = 1.0) -> dict:
 def apply(sid: str, *, voice: str, speed: float = 1.0) -> dict:
     if not tts_stage.is_valid_voice(voice):
         raise ValueError(f"unknown voice {voice!r}")
-    ctx = job_ctx.build_ctx(topic=_topic_for(sid), sid=sid, voice=voice, speed=speed)
+    topic, target_length = _row_for(sid)
+    ctx = job_ctx.build_ctx(topic=topic, sid=sid, voice=voice, speed=speed,
+                            target_length=target_length)
     sess = api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)
     try:
         from session import store as _store, gatekeeper as _gatekeeper

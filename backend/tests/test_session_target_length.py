@@ -298,3 +298,94 @@ def test_start_default_target_length_is_60(tmp_path, monkeypatch):
     sess = sg._resume(sid)
     assert sess.engine.ctx.target_length == 60
     session_api.close(sess)
+
+
+# ---------------------------------------------------------------------------
+# 3b. No-bust hash: _input_hash at target_length=60 == pre-M2 hash (key absent)
+# ---------------------------------------------------------------------------
+
+def test_input_hash_at_default_60_equals_pre_m2_hash(tmp_path):
+    """Hash at target_length=60 must equal the hash that would have been computed
+    before M2 (no target_length key in the payload) — so every pre-M2 stage row
+    cached under default 60 still hits after the upgrade."""
+    import hashlib as _hashlib
+    import json as _json
+    from session import engine as eng_mod
+
+    db = tmp_path / "s.db"
+    conn = store.connect(db)
+    store.create_session(conn, id="s-nobust", topic="Whales", now="t0")
+
+    ctx_60 = _ctx(tmp_path, target_length=60)
+    eng = eng_mod.Engine(conn, ctx_60, session_id="s-nobust")
+
+    # Call _input_hash with empty inputs (script has no deps)
+    h_60 = eng._input_hash("script", {})
+
+    # Reconstruct the pre-M2 payload (no target_length key) and hash it directly
+    pre_m2_payload = {"stage": "script", "topic": ctx_60.topic, "fps": ctx_60.fps,
+                      "inputs": {}}
+    pre_m2_blob = _json.dumps(pre_m2_payload, sort_keys=True)
+    h_pre_m2 = _hashlib.sha256(pre_m2_blob.encode("utf-8")).hexdigest()
+
+    assert h_60 == h_pre_m2, (
+        "target_length=60 must produce the same hash as a pre-M2 payload "
+        "(no target_length key) so resumed sessions don't silently re-derive"
+    )
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# 2b. v2 CLIs thread stored preset — session_timing.read uses target_length=180
+# ---------------------------------------------------------------------------
+
+def test_v2_cli_timing_threads_stored_target_length(tmp_path, monkeypatch):
+    """Create a 180 session in the DB, then call session_timing.read; the build_ctx
+    invocation inside the CLI must receive target_length=180 (not the default 60)."""
+    monkeypatch.setattr("session.job_ctx.SESSIONS_DB", tmp_path / "s.db")
+    monkeypatch.setattr("session.job_ctx.REPO_ROOT", tmp_path)
+    monkeypatch.setattr("session.job_ctx.ASSETS_DIR", tmp_path / "a")
+    monkeypatch.setattr("session.job_ctx.RETRIEVAL_CACHE", tmp_path / "c")
+    monkeypatch.setattr("session.job_ctx.TEMPLATES_DIR",
+                        Path(__file__).resolve().parents[2] / "templates")
+
+    # Seed the DB with a 180-session row
+    db = tmp_path / "s.db"
+    conn = store.connect(db)
+    store.create_session(conn, id="s-tl180", topic="Oceans", now="t0",
+                         target_length=180)
+    conn.close()
+
+    # Capture the target_length kwarg that session_timing.read passes to build_ctx
+    captured: dict = {}
+    import session.job_ctx as _jc
+    _orig_build_ctx = _jc.build_ctx
+
+    def spy_build_ctx(**kw):
+        captured.update(kw)
+        return _orig_build_ctx(**kw)
+
+    monkeypatch.setattr("session.job_ctx.build_ctx", spy_build_ctx)
+    # Also patch session_timing's local reference (imported at module level)
+    import session_timing as st_mod
+    monkeypatch.setattr(st_mod.job_ctx, "build_ctx", spy_build_ctx)
+
+    # Stub api.resume and api.close so no real DB engine work is needed
+    class _FakeEng:
+        def _load_output(self, stage):
+            return [] if stage == "timing" else []
+
+    class _FakeSess:
+        engine = _FakeEng()
+
+    monkeypatch.setattr(st_mod.api, "resume",
+                        lambda db, ctx, session_id: _FakeSess())
+    monkeypatch.setattr(st_mod.api, "close", lambda sess: None)
+
+    result = st_mod.read("s-tl180")
+
+    assert result["ok"] is True
+    assert captured.get("target_length") == 180, (
+        f"session_timing.read must pass target_length=180 from the DB row; "
+        f"got {captured.get('target_length')!r}"
+    )

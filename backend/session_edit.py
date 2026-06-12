@@ -29,7 +29,8 @@ from session import api, store, job_ctx
 def _apply(sid: str, op: dict) -> dict:
     """resume → apply one footage edit → return the post-edit scene state. Fail-loud
     (no internal except: a bad sid / op propagates to the caller)."""
-    ctx = job_ctx.build_ctx(topic=_topic_for(sid), sid=sid)
+    topic, target_length = _row_for(sid)
+    ctx = job_ctx.build_ctx(topic=topic, sid=sid, target_length=target_length)
     sess = api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)   # KeyError if no such session
     try:
         api.edit(sess, "footage", op)
@@ -63,6 +64,18 @@ def _topic_for(sid: str) -> str:
         if row is None:
             raise KeyError(f"no session {sid!r}")
         return row["topic"]
+    finally:
+        conn.close()
+
+
+def _row_for(sid: str) -> tuple[str, int]:
+    """Return (topic, target_length) from the stored session row."""
+    conn = store.connect(job_ctx.SESSIONS_DB)
+    try:
+        row = store.get_session(conn, sid)
+        if row is None:
+            raise KeyError(f"no session {sid!r}")
+        return row["topic"], row["target_length"]
     finally:
         conn.close()
 

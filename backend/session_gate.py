@@ -186,6 +186,7 @@ if __name__ == "__main__":
     ap.add_argument("--flag", choices=["true", "false"],
                     help="Boolean flag for set_auto_run (pass 'true' or 'false')")
     ap.add_argument("--target-length", type=int, default=60,
+                    choices=[30, 60, 180, 300],
                     help="Target video length in seconds (30/60/180/300; default 60)")
     args = ap.parse_args()
 

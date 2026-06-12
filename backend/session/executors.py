@@ -53,8 +53,9 @@ def run_script(ctx: EngineContext, inputs: dict) -> dict:
     # Pass extra_user_block ONLY when set, so the default call is byte-identical to
     # the pre-Studio-v2 signature (keeps existing stage stubs valid).
     kw = {"extra_user_block": ctx.extra_user_block} if ctx.extra_user_block else {}
-    # Pass system_prompt for the selected preset; omit when it equals SYSTEM_PROMPT
-    # so unpatched generate_grounded_script stubs (which accept **kw) stay valid.
+    # pass system_prompt only for non-default presets: at 60 it's byte-identical to
+    # SYSTEM_PROMPT, and omitting it keeps existing call signatures (and test stubs
+    # without **kw) stable.
     system_prompt = script_stage.system_prompt_for(ctx.target_length)
     if system_prompt != script_stage.SYSTEM_PROMPT:
         kw["system_prompt"] = system_prompt
