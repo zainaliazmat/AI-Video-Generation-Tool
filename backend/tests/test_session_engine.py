@@ -179,10 +179,19 @@ def test_invalidate_marks_downstream_stale(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_edit_without_rederive_leaves_downstream_stale(tmp_path, monkeypatch):
-    """edit(rederive=False): handler runs + downstream marked stale; NO executor re-ran."""
+    """edit(rederive=False): handler runs + downstream marked stale; NO executor re-ran.
+
+    §4.1 invariant: spec.json must remain byte-identical and have the same mtime_ns
+    because no assemble stage ran to rewrite it.
+    """
     calls = _fakes_with_counts(monkeypatch)
     sess = _session_all_done(tmp_path, monkeypatch)
     before = dict(calls)
+
+    # §4.1 — capture spec state before the deferred edit
+    spec_path = sess.engine.ctx.spec_out
+    spec_bytes_before = spec_path.read_bytes()
+    spec_mtime_before = spec_path.stat().st_mtime_ns
 
     sess.engine.edit("script", _edit_beat_op(0, "Edited line."), rederive=False)
 
@@ -191,6 +200,9 @@ def test_edit_without_rederive_leaves_downstream_stale(tmp_path, monkeypatch):
     # Downstream of script: voice, timing, footage, assemble all stale
     for st in ("voice", "timing", "footage", "assemble"):
         assert store.get_stage(sess.conn, sess.id, st)["status"] == "stale"
+    # §4.1 invariant: spec.json untouched (bytes and mtime_ns both unchanged)
+    assert spec_path.read_bytes() == spec_bytes_before, "spec.json was rewritten by a deferred edit"
+    assert spec_path.stat().st_mtime_ns == spec_mtime_before, "spec.json mtime changed during deferred edit"
 
 
 def test_rederive_stale_pays_once(tmp_path, monkeypatch):
