@@ -169,6 +169,9 @@ class Engine:
                 t0 = _time.monotonic()
                 if on_stage:
                     on_stage(st, "running", None)
+                # STAGE_ORDER is topological, so upstream is always done before we
+                # reach a downstream stale stage. If that invariant ever breaks,
+                # advance() raises RuntimeError from _inputs_for — loud, not silent.
                 self.advance(st)
                 if on_stage:
                     on_stage(st, "done", round(_time.monotonic() - t0, 1))

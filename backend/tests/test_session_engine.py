@@ -196,7 +196,8 @@ def test_edit_without_rederive_leaves_downstream_stale(tmp_path, monkeypatch):
     sess.engine.edit("script", _edit_beat_op(0, "Edited line."), rederive=False)
 
     # No new executor calls — only the script handler mutated DB directly
-    assert calls == before
+    for st in ("script", "voice", "timing", "footage", "assemble"):
+        assert calls[st] == before[st], f"{st} executor ran during a deferred edit"
     # Downstream of script: voice, timing, footage, assemble all stale
     for st in ("voice", "timing", "footage", "assemble"):
         assert store.get_stage(sess.conn, sess.id, st)["status"] == "stale"
