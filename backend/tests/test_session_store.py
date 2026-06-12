@@ -115,7 +115,6 @@ def test_upsert_provenance_allows_null_rank_for_legacy_clip(tmp_path):
 
 
 def test_upsert_provenance_accepts_uploaded_source(tmp_path):
-    from session import store
     conn = store.connect(tmp_path / "s.db")
     store.create_session(conn, id="s1", topic="T", now="t0")
     store.upsert_provenance(conn, "s1", 1, source="uploaded",
@@ -157,6 +156,7 @@ def test_gate_state_roundtrip_and_approved_at_preserved(tmp_path):
     store.upsert_gate_state(conn, "s1", "script", "stale", now="t3")
     g = store.get_gate_states(conn, "s1")["script"]
     assert g["state"] == "stale" and g["approved_at"] == "t2"
+    conn.close()
 
 
 def test_unknown_gate_state_rejected(tmp_path):
@@ -164,6 +164,7 @@ def test_unknown_gate_state_rejected(tmp_path):
     store.create_session(conn, id="s1", topic="t", now="t0")
     with pytest.raises(ValueError):
         store.upsert_gate_state(conn, "s1", "script", "pending", now="t1")
+    conn.close()
 
 
 def test_auto_run_defaults_false_and_flips(tmp_path):
@@ -172,6 +173,7 @@ def test_auto_run_defaults_false_and_flips(tmp_path):
     assert store.get_session(conn, "s1")["auto_run"] == 0
     store.set_auto_run(conn, "s1", True, now="t1")
     assert store.get_session(conn, "s1")["auto_run"] == 1
+    conn.close()
 
 
 def test_auto_run_column_migrates_pre_v3_db(tmp_path):
