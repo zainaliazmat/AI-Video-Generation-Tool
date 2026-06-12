@@ -45,7 +45,7 @@ export async function POST(req: Request, {params}: {params: Promise<{id: string}
     const isApply = body?.op === 'apply';
     const args = isApply
       ? ['--op', 'apply', '--sid', id, '--voice', voice, '--speed', String(speed)]
-      : ['--op', 'preview', '--voice', voice, '--speed', String(speed)];
+      : ['--op', 'preview', '--sid', id, '--voice', voice, '--speed', String(speed)];
 
     // apply re-synthesizes the whole narration + re-times — allow time. preview is one line.
     const {code, json} = await spawnJson('session_voice.py', args, isApply ? 300_000 : 120_000);
