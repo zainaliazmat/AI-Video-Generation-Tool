@@ -7,6 +7,7 @@
     "gen-manifests": "tsx scripts/gen-manifests.ts",
     "build-registry": "node scripts/build-registry.mjs",
     "build": "npm run gen-manifests && npm run build-registry",
+    "new-template": "node scripts/new-template.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
   },
