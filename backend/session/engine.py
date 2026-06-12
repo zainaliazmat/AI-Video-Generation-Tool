@@ -120,10 +120,15 @@ class Engine:
             if row is not None:
                 store.set_stage_status(self.conn, self.sid, st, "stale", now=_now())
 
-    def edit(self, stage, op):
+    def edit(self, stage, op, *, rederive=True):
         """Apply a stage-specific edit, persist the new stage output, invalidate
-        downstream, and re-derive the stale stages. Studio v2 adds script + assemble
-        edits on top of A.1's footage ops."""
+        downstream, and (by default) re-derive the stale stages. Studio v2 adds
+        script + assemble edits on top of A.1's footage ops.
+
+        The v3 gated reopen path passes rederive=False: edits accumulate, downstream
+        stays stale, and Re-approve pays with ONE rederive_stale() (PRD §4.1). The
+        default (rederive=True) is byte-identical to the pre-v3 behavior — all v2
+        callers that omit the kwarg continue to work unchanged."""
         handlers = {
             "footage": self._edit_footage,
             "script": self._edit_script,
@@ -135,11 +140,42 @@ class Engine:
             raise NotImplementedError(f"edit not implemented for stage {stage!r}")
         handler(op)
         self.invalidate(stage)
+        if not rederive:
+            return
         for st in stages.downstream(stage):
             if st == "render":
                 continue
             self.advance(st)
         self.materialize_spec()
+
+    def rederive_stale(self, on_stage=None):
+        """Re-derive every stale stage in DAG order, then re-materialize the spec.
+
+        The §4.1 Re-approve payment: one pass, regardless of how many edits
+        accumulated while the gate was reopened.
+
+        on_stage(stage, state, elapsed) emits REAL stage events (design ruling 1:
+        the Re-approve interstitial uses the same honest task-card contract as any
+        segment — never a synthetic 'rederive'). Called with state='running' and
+        elapsed=None before the stage runs, then state='done' and elapsed (seconds,
+        rounded to 1 decimal) after."""
+        import time as _time
+        ran = []
+        for st in stages.STAGE_ORDER:
+            if st == "render":
+                continue
+            row = store.get_stage(self.conn, self.sid, st)
+            if row is not None and row["status"] == "stale":
+                t0 = _time.monotonic()
+                if on_stage:
+                    on_stage(st, "running", None)
+                self.advance(st)
+                if on_stage:
+                    on_stage(st, "done", round(_time.monotonic() - t0, 1))
+                ran.append(st)
+        if ran:
+            self.materialize_spec()
+        return ran
 
     def _edit_script(self, op):
         """Studio v2 Script gate edit. Mutate the beats (text / data) or drop a beat,
