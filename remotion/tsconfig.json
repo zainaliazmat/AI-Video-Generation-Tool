@@ -27,5 +27,6 @@
       "lucide-react": ["node_modules/lucide-react/dist/lucide-react.d.ts"]
     }
   },
-  "include": ["src", "remotion.config.ts", "../templates/**/*.ts", "../templates/**/*.tsx"]
+  "include": ["src", "remotion.config.ts", "../templates/**/*.ts", "../templates/**/*.tsx"],
+  "exclude": ["../templates/scripts/fixtures"]
 }
