@@ -953,50 +953,142 @@ export async function doctor(srcZipOrDir, opts = {}) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [, , cmd, ...args] = process.argv;
 
+  const COMMANDS = ['install', 'uninstall', 'doctor', 'list', 'state', 'clear-last-error'];
+
   function printUsage() {
     process.stderr.write(
       'Usage: node scripts/install.mjs <command>\n\n' +
         'Commands:\n' +
+        '  install <zip|dir> [--update] [--confirm-replace] [--override-capability] [--sha256 <hex>]\n' +
+        '                    Install a template from a zip or directory source\n' +
+        '  uninstall <id>    Uninstall a template by id\n' +
+        '  doctor <zip|dir>  Dry-run the full install gate without installing\n' +
         '  list              List installed templates\n' +
         '  state             Print full installer state as JSON\n' +
-        '  clear-last-error  Remove the last-error record\n' +
-        '\n(install/uninstall/doctor are wired in later tasks)\n',
+        '  clear-last-error  Remove the last-error record\n',
     );
   }
 
-  if (!cmd || !['list', 'state', 'clear-last-error'].includes(cmd)) {
+  if (!cmd || !COMMANDS.includes(cmd)) {
     printUsage();
     process.exit(1);
   }
 
-  if (cmd === 'list') {
-    const installed = listInstalled();
-    if (installed.length === 0) {
-      console.log('(no templates installed)');
-    } else {
-      // Aligned table: id, version, kind, author
-      const colWidths = {
-        id: Math.max(2, ...installed.map((t) => t.id.length)),
-        version: Math.max(7, ...installed.map((t) => t.version.length)),
-        kind: Math.max(4, ...installed.map((t) => t.kind.length)),
-        author: Math.max(6, ...installed.map((t) => t.author.length)),
-      };
-      const pad = (s, n) => s.padEnd(n);
-      const header =
-        `  ${pad('ID', colWidths.id)}  ${pad('VERSION', colWidths.version)}  ${pad('KIND', colWidths.kind)}  ${pad('AUTHOR', colWidths.author)}`;
-      const sep = '  ' + '-'.repeat(header.length - 2);
-      console.log(header);
-      console.log(sep);
-      for (const t of installed) {
-        console.log(
-          `  ${pad(t.id, colWidths.id)}  ${pad(t.version, colWidths.version)}  ${pad(t.kind, colWidths.kind)}  ${pad(t.author, colWidths.author)}`,
-        );
+  async function main() {
+    if (cmd === 'install') {
+      const src = args.find((a) => !a.startsWith('--'));
+      if (!src) {
+        process.stderr.write('[install] error: missing <zip|dir> argument\n');
+        printUsage();
+        process.exit(1);
       }
+      const update = args.includes('--update');
+      const confirmReplace = args.includes('--confirm-replace');
+      const overrideCapability = args.includes('--override-capability');
+      let sha256;
+      const sha256Idx = args.indexOf('--sha256');
+      if (sha256Idx !== -1) {
+        sha256 = args[sha256Idx + 1];
+        if (!sha256) {
+          process.stderr.write('[install] error: --sha256 requires a hex argument\n');
+          process.exit(1);
+        }
+      }
+
+      // Print latency notice BEFORE calling install (the engine has no progress events)
+      process.stderr.write(`[install] installing ${src} — the preview render stage can take a couple of minutes…\n`);
+
+      const result = await install(src, {update, confirmReplace, overrideCapability, sha256});
+
+      const kindStr = result.kind;
+      const previewStr = result.preview;
+      if (result.updated) {
+        process.stderr.write(`[install] updated from v${result.updated.from}\n`);
+      }
+      console.log(`[install] installed ${result.id} v${result.version} (${kindStr}) — preview at ${previewStr}`);
+      console.log('[install] on disk, not yet committed — commit templates/' + result.id + ' when ready.');
+
+    } else if (cmd === 'uninstall') {
+      const id = args[0];
+      if (!id) {
+        process.stderr.write('[uninstall] error: missing <id> argument\n');
+        printUsage();
+        process.exit(1);
+      }
+
+      // Pre-scan references BEFORE calling uninstall (which removes the template)
+      const refs = scanReferences(id);
+
+      // Print reference warning
+      process.stderr.write(`[uninstall] "${id}" is referenced by ${refs.total} project spec(s):\n`);
+      for (const f of refs.files) {
+        process.stderr.write(`  ${f.path}\n`);
+      }
+      process.stderr.write('\n');
+
+      // §17.2 consequence copy — VERBATIM
+      process.stderr.write(
+        'Scenes and overlays will show the loud MissingTemplate placeholder; transitions fall back to a silent hard cut. Editing, assembling, or re-rendering those projects will fail loudly until the template is reinstalled or the scenes are re-templated.\n',
+      );
+
+      const result = await uninstall(id);
+      console.log(`[uninstall] removed ${result.id}`);
+
+    } else if (cmd === 'doctor') {
+      const src = args[0];
+      if (!src) {
+        process.stderr.write('[doctor] error: missing <zip|dir> argument\n');
+        printUsage();
+        process.exit(1);
+      }
+
+      process.stderr.write(
+        `[doctor] checking ${src} — runs the full install gate (tsc + preview render, a couple of minutes) without installing…\n`,
+      );
+
+      const result = await doctor(src);
+      console.log(`[doctor] OK: ${result.id} v${result.version} (${result.kind}) is installable`);
+
+    } else if (cmd === 'list') {
+      const installed = listInstalled();
+      if (installed.length === 0) {
+        console.log('(no templates installed)');
+      } else {
+        // Aligned table: id, version, kind, author
+        const colWidths = {
+          id: Math.max(2, ...installed.map((t) => t.id.length)),
+          version: Math.max(7, ...installed.map((t) => t.version.length)),
+          kind: Math.max(4, ...installed.map((t) => t.kind.length)),
+          author: Math.max(6, ...installed.map((t) => t.author.length)),
+        };
+        const pad = (s, n) => s.padEnd(n);
+        const header =
+          `  ${pad('ID', colWidths.id)}  ${pad('VERSION', colWidths.version)}  ${pad('KIND', colWidths.kind)}  ${pad('AUTHOR', colWidths.author)}`;
+        const sep = '  ' + '-'.repeat(header.length - 2);
+        console.log(header);
+        console.log(sep);
+        for (const t of installed) {
+          console.log(
+            `  ${pad(t.id, colWidths.id)}  ${pad(t.version, colWidths.version)}  ${pad(t.kind, colWidths.kind)}  ${pad(t.author, colWidths.author)}`,
+          );
+        }
+      }
+    } else if (cmd === 'state') {
+      console.log(JSON.stringify(installedState(), null, 2));
+    } else if (cmd === 'clear-last-error') {
+      clearLastError();
+      console.log('Last-error record cleared.');
     }
-  } else if (cmd === 'state') {
-    console.log(JSON.stringify(installedState(), null, 2));
-  } else if (cmd === 'clear-last-error') {
-    clearLastError();
-    console.log('Last-error record cleared.');
   }
+
+  // Top-level dispatch: catch InstallError (and unexpected errors) → print FAILED + exit 1
+  main().catch((e) => {
+    const stage = e.stage ?? cmd;
+    const cmdLabel = cmd === 'install' ? 'install'
+      : cmd === 'uninstall' ? 'uninstall'
+      : cmd === 'doctor' ? 'doctor'
+      : cmd;
+    process.stderr.write(`[${cmdLabel}] FAILED at ${stage}: ${e.message}\n`);
+    process.exit(1);
+  });
 }

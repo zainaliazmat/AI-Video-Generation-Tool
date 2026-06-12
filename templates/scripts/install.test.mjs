@@ -808,3 +808,91 @@ describe('doctor orchestration (§15.2)', () => {
     expect(registryContains('fixture-card')).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// CLI shell tests (§12 / Task 12)
+// ---------------------------------------------------------------------------
+
+describe('CLI', () => {
+  // Helper: run the CLI as a subprocess and return stdout as a string.
+  // On nonzero exit, execFileSync throws with .status and .stderr on the error.
+  const cli = (args, opts = {}) =>
+    execFileSync('node', [join(__dirname, 'install.mjs'), ...args], {
+      stdio: 'pipe',
+      ...opts,
+    }).toString();
+
+  it('list prints core ids', () => {
+    expect(cli(['list'])).toContain('enumeration');
+  });
+
+  it('state prints JSON with installedIds', () => {
+    expect(JSON.parse(cli(['state'])).installedIds).toContain('hook');
+  });
+
+  it('clear-last-error exits 0', () => {
+    // Must not throw (exit 0)
+    cli(['clear-last-error']);
+  });
+
+  it('no command prints usage and exits 1', () => {
+    let err;
+    try { cli([]); } catch (e) { err = e; }
+    expect(err.status).toBe(1);
+    // Usage mentions all commands
+    expect(String(err.stderr)).toContain('install');
+    expect(String(err.stderr)).toContain('uninstall');
+    expect(String(err.stderr)).toContain('doctor');
+  });
+
+  it('unknown command prints usage and exits 1', () => {
+    let err;
+    try { cli(['bogus-command']); } catch (e) { err = e; }
+    expect(err.status).toBe(1);
+  });
+
+  it('install of an envelope-bad zip exits nonzero and names the stage', () => {
+    // Build a bad zip (missing 'kind' field — fails at stage 2 envelope, BEFORE tsc/render)
+    const zip = zipFixture(FIX, {mutateManifest: (m) => { delete m.kind; return m; }});
+    let err;
+    try { cli(['install', zip]); } catch (e) { err = e; }
+    expect(err.status).not.toBe(0);
+    expect(String(err.stderr)).toContain('envelope');
+  });
+
+  it('uninstall of core template prints protection message and exits nonzero', () => {
+    let err;
+    try { cli(['uninstall', 'hook']); } catch (e) { err = e; }
+    expect(err).toBeTruthy();
+    expect(err.status).not.toBe(0);
+    expect(String(err.stderr)).toContain('core');
+  });
+
+  it('uninstall of unknown id exits nonzero', () => {
+    let err;
+    try { cli(['uninstall', 'zzz-nope']); } catch (e) { err = e; }
+    expect(err).toBeTruthy();
+    expect(err.status).not.toBe(0);
+  });
+
+  it('install without src argument exits nonzero', () => {
+    let err;
+    try { cli(['install']); } catch (e) { err = e; }
+    expect(err).toBeTruthy();
+    expect(err.status).not.toBe(0);
+  });
+
+  it('uninstall without id argument exits nonzero', () => {
+    let err;
+    try { cli(['uninstall']); } catch (e) { err = e; }
+    expect(err).toBeTruthy();
+    expect(err.status).not.toBe(0);
+  });
+
+  it('doctor without src argument exits nonzero', () => {
+    let err;
+    try { cli(['doctor']); } catch (e) { err = e; }
+    expect(err).toBeTruthy();
+    expect(err.status).not.toBe(0);
+  });
+});
