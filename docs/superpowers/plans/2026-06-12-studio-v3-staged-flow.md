@@ -1310,3 +1310,17 @@ M1 shipped on `studio-v3-staged-flow` (Tasks 1–10, ~30 commits): 392 backend t
 8. **Engine note for M5:** `rederive_stale()` relies on STAGE_ORDER being topological (commented in code); the §4.1 payment emits real per-stage events through it. M5's post-advance auto-fill hook and overrides-into-inputs seam land in `advance()`/engine context exactly as planned — nothing in M1 moved those seams.
 
 **M1 STATUS: DONE — exit gate green (suite/tsc/E2E), per-task two-stage reviews + holistic cross-task review CLEARED.**
+
+## M2 BUILD AMENDMENTS (2026-06-13)
+
+M2 shipped (6 commits + band_miss surfacing): 432 backend green, preview typecheck clean, all four exit-gate test families green (per-preset bands · segment bytes · golden 60 · caps math). Ruled deviations M3–M7 must honor:
+
+1. **No-bust hash (ruled):** `_input_hash` includes `target_length` ONLY when ≠60 — pre-M2 stage hashes stay valid at the default; preset flips still bust. Existing sessions pay nothing on resume.
+2. **v2 CLIs thread the stored preset** (session_script/voice/timing/assemble/edit read `target_length` off the session row into build_ctx) — a 180 session edited via any v2 route re-derives at 180, not 60.
+3. **Band retry is ALWAYS on for engine runs** (run_script passes target_length unconditionally; 60s band 5–8 = the frozen prompt's own instruction per OV-3). Direct legacy callers (main.py autopilot) keep parse-only retry.
+4. **Honest degradation, richer than plan:** out-of-band→unparseable returns the parseable attempt-1 script WITH band_miss (never a dead stage); parse-fail×2 → clean ValueError. `bandMiss` (camelCase) rides the script payload (`session_script._serialize`) for the M6 warn pill — backend/session_script.py joined the M2 file map for this.
+5. **Stub contract:** every fake of `generate_grounded_script` must accept `**kw` (target_length now always flows).
+6. **CLI guard:** `--target-length` has `choices=[30,60,180,300]`; M6 topic chips must send exactly these (route forwards numbers verbatim; non-preset → generic CLI error, consider a friendly 400 in M6-T1 if desired).
+7. Cosmetic debt (non-blocking): dead `_topic_for` in 5 CLIs; `verify_script`'s `max_targeted=3` literal vs MAX_TARGETED_BASE; no call-site pin test for the scaled cap.
+
+**M2 STATUS: DONE — exit gate green.**
