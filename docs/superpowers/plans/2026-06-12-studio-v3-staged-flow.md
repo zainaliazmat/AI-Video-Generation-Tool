@@ -1324,3 +1324,14 @@ M2 shipped (6 commits + band_miss surfacing): 432 backend green, preview typeche
 7. Cosmetic debt (non-blocking): dead `_topic_for` in 5 CLIs; `verify_script`'s `max_targeted=3` literal vs MAX_TARGETED_BASE; no call-site pin test for the scaled cap.
 
 **M2 STATUS: DONE — exit gate green.**
+
+## M3 BUILD AMENDMENTS (2026-06-13)
+
+M3 shipped (8d5e6a2 + stderr note): 440 backend green, typecheck clean, LIVE curl proof on :3100 — beat-1 preview synthesized once (24.6s cold, predicted hash 6d847a23c8bd in the filename), identical second call cache-hit (CLI 0.69s; route ~9s is pre-existing spawn+copy-assets overhead, not synth). Notes for M6:
+
+1. Voice route now passes `--sid` on every preview; bogus sid degrades to the canned line (proven live, ok:true) — M6-T4 voice cards can post the sid unconditionally.
+2. Cache filename: `voice_preview_{voice}_{sha1(text)[:12]}_{speed}.wav`; an edited beat 1 re-synthesizes on next preview automatically (new hash).
+3. `_beat1_text` failures log to stderr and fall back canned — codec drift surfaces in route logs, never breaks the preview.
+4. Route fixed overhead (~8s python spawn + copy-assets per POST) dominates cache hits — M6-T4 should show the spinner on FIRST play per voice and may reuse the returned path client-side for replays (the path is stable per (voice,text,speed)).
+
+**M3 STATUS: DONE — exit gate green (cache-hit + threading tests, curl passthrough proven).**

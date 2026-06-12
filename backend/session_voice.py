@@ -50,7 +50,11 @@ def _beat1_text(sid: str) -> str | None:
             return None
         words = beats[0].text.split()
         return " ".join(words[:12])
-    except Exception:
+    except Exception as e:
+        # degraded mode is canned-line fallback by design, but say why on
+        # stderr (codec drift would otherwise silently downgrade every
+        # preview; _spawn.ts keeps stderr off the stdout JSON protocol)
+        print(f"voice preview: beat-1 lookup failed for {sid!r}: {e}", file=sys.stderr)
         return None
     finally:
         conn.close()
