@@ -78,6 +78,7 @@ export function installedMetaToUnifiedItems(metas: TemplateMeta[]): UnifiedItem[
     uncommitted: m.uncommitted,
     mp4: m.mp4,
     poster: m.poster,
+    durationFrames: m.durationFrames,
   }));
 }
 

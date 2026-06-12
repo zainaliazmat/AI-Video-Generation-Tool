@@ -32,6 +32,8 @@ export interface UnifiedItem {
   updateAvailable?: boolean;
   mp4?: string | null;
   poster?: string | null;
+  /** Frame duration range — present for installed items, absent for catalog. */
+  durationFrames?: {min: number; max: number};
 }
 
 export interface DeriveInput {
