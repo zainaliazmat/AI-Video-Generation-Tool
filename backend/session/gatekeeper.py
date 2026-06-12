@@ -10,6 +10,21 @@ from session import gates, store
 from session.engine import _now
 
 
+def _reject_stale(states, gate, *, suffix=""):
+    """OV-2 / view-only guard: a stale gate is never an action target — the
+    action belongs to the reopened (awaiting_approval) gate; the error names it.
+    RuntimeError on the unreachable no-awaiting-gate state (DB inconsistency)."""
+    reopened = next(
+        (g for g in gates.GATE_ORDER
+         if states.get(g, {}).get("state") == "awaiting_approval"), None)
+    if reopened is None:
+        raise RuntimeError(
+            f"gate {gate!r} is stale but no gate is awaiting_approval "
+            f"in {sorted(states)!r} — gate-state invariant violated")
+    raise ValueError(
+        f"gate {gate!r} is stale{suffix} — re-approve gate {reopened!r} first")
+
+
 def _emit(on_stage, stage, state, t0=None):
     if on_stage is None:
         return
@@ -51,20 +66,7 @@ def approve(sess, gate, *, on_stage=None):
     if cur is None:
         raise ValueError(f"gate {gate!r} is not open yet")
     if cur["state"] == "stale":
-        reopened = next(
-            (g for g in gates.GATE_ORDER
-             if states.get(g, {}).get("state") == "awaiting_approval"),
-            None,
-        )
-        if reopened is None:
-            # Unreachable with consistent state: a stale gate implies some gate
-            # reopened (awaiting_approval). Fail loud rather than emit a '?'
-            # placeholder in a user-facing message.
-            raise RuntimeError(
-                f"gate {gate!r} is stale but no gate is awaiting_approval "
-                f"in {sorted(states)!r} — gate-state invariant violated")
-        raise ValueError(
-            f"gate {gate!r} is stale — re-approve gate {reopened!r} first")
+        _reject_stale(states, gate)
     nxt = gates.next_gate(gate)
     if cur["state"] == "approved":
         if nxt is not None and nxt not in states:
@@ -154,15 +156,7 @@ def edit(sess, stage, op):
         sess.engine.edit(stage, op)
         return view(sess)
     if row["state"] == "stale":
-        reopened = next(
-            (g for g in gates.GATE_ORDER
-             if states.get(g, {}).get("state") == "awaiting_approval"), None)
-        if reopened is None:
-            raise RuntimeError(
-                f"gate {gate!r} is stale but no gate is awaiting_approval "
-                f"in {sorted(states)!r} — gate-state invariant violated")
-        raise ValueError(
-            f"gate {gate!r} is stale (view-only) — re-approve gate {reopened!r} first")
+        _reject_stale(states, gate, suffix=" (view-only)")
     if row["state"] == "approved" or row["approved_at"]:
         # approved, or reopened (awaiting with a stamp): §4.1 territory
         if preview_reopen(sess, gate)["reruns"]:
@@ -221,15 +215,7 @@ def regenerate(sess, stage):
     if row is None:
         raise ValueError(f"gate {gate!r} has not been reached; nothing to regenerate")
     if row["state"] == "stale":
-        reopened = next(
-            (g for g in gates.GATE_ORDER
-             if states.get(g, {}).get("state") == "awaiting_approval"), None)
-        if reopened is None:
-            raise RuntimeError(
-                f"gate {gate!r} is stale but no gate is awaiting_approval "
-                f"in {sorted(states)!r} — gate-state invariant violated")
-        raise ValueError(
-            f"gate {gate!r} is stale (view-only) — re-approve gate {reopened!r} first")
+        _reject_stale(states, gate, suffix=" (view-only)")
     # stale-mark the stage row BEFORE invalidate+advance (donor pattern from api.regenerate)
     stage_row = store.get_stage(sess.conn, sess.id, stage)
     store.upsert_stage(sess.conn, sess.id, stage, status="stale", input_hash=None,
@@ -245,6 +231,11 @@ def regenerate(sess, stage):
         return view(sess)         # OV-11: nothing downstream ran — free, no reopen
     # true frontier: instant re-derive for stages that already ran
     sess.engine.rederive_stale()
+    if stage == "assemble":
+        # assemble has no non-render downstream: nothing goes stale, so
+        # rederive_stale can't re-materialize — but the regenerated output
+        # must reach spec.json immediately (same guard as edit()'s frontier)
+        sess.engine.materialize_spec()
     return view(sess)
 
 

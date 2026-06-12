@@ -383,3 +383,20 @@ def test_api_regenerate_seam_routes_gated_sessions(tmp_path, monkeypatch):
     assert store.get_gate_states(sess.conn, sess.id)["script"]["state"] == "awaiting_approval"
 
 
+def test_regenerate_assemble_at_terminal_gate_rematerializes(tmp_path, monkeypatch):
+    # assemble is terminal: frontier branch only. rederive_stale has nothing to
+    # re-materialize (no stale downstream), so the materialize_spec() guard in
+    # regenerate()'s frontier arm must fire to push the fresh output to spec.json.
+    _fakes(monkeypatch)
+    sess = _at_assemble_gate(tmp_path, monkeypatch)
+    assert sess.engine.ctx.spec_out.exists(), "spec.json must exist at the assemble gate"
+    mtime = sess.engine.ctx.spec_out.stat().st_mtime_ns
+    before_content = sess.engine.ctx.spec_out.read_text()
+    gatekeeper.regenerate(sess, "assemble")
+    assert store.get_stage(sess.conn, sess.id, "assemble")["status"] == "done"
+    assert sess.engine.ctx.spec_out.exists()
+    after_content = sess.engine.ctx.spec_out.read_text()
+    # spec.json was rewritten after the regenerate (mtime changed or content rewritten)
+    assert sess.engine.ctx.spec_out.stat().st_mtime_ns != mtime or after_content != before_content
+
+
