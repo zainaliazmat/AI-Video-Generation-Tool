@@ -148,10 +148,12 @@ function CatalogDrawer({
   onClose: () => void;
   onInstall?: (item: UnifiedItem) => void;
 }) {
+  const [posterFailed, setPosterFailed] = useState(false);
   const handleInstall = useCallback(() => {
     onInstall?.(item);
     onClose();
   }, [item, onInstall, onClose]);
+  const handlePosterError = useCallback(() => setPosterFailed(true), []);
 
   return (
     <>
@@ -166,14 +168,15 @@ function CatalogDrawer({
         <CloseButton onClose={onClose} />
       </div>
 
-      {/* Poster (static 9:16; kind-tone gradient placeholder when absent) */}
+      {/* Poster (static 9:16; kind-tone gradient placeholder when absent or failed) */}
       <div className="overflow-hidden rounded-[var(--radius-md)] bg-black">
-        {item.poster ? (
+        {item.poster && !posterFailed ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={item.poster}
             alt={item.name}
             className="aspect-[9/16] w-full object-cover"
+            onError={handlePosterError}
           />
         ) : (
           <div

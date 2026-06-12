@@ -1,6 +1,6 @@
 'use client';
 
-import {useState} from 'react';
+import {useState, useCallback} from 'react';
 import {motion, useReducedMotion} from 'framer-motion';
 import {Badge, Button} from './ui';
 import {kindTone, frameRange} from '@/lib/template-ui';
@@ -83,7 +83,9 @@ export interface TemplateCardProps {
  */
 export function TemplateCard({item, installState, onOpen, onInstall, onDismissError}: TemplateCardProps) {
   const [hover, setHover] = useState(false);
+  const [posterFailed, setPosterFailed] = useState(false);
   const reducedMotion = useReducedMotion();
+  const handlePosterError = useCallback(() => setPosterFailed(true), []);
 
   const isInstalled = item.source === 'installed' || item.installed;
   const isCatalog = item.source === 'catalog';
@@ -119,9 +121,15 @@ export function TemplateCard({item, installState, onOpen, onInstall, onDismissEr
             playsInline
             className="h-full w-full object-cover"
           />
-        ) : item.poster ? (
+        ) : item.poster && !posterFailed ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={item.poster} alt={item.name} loading="lazy" className="h-full w-full object-cover" />
+          <img
+            src={item.poster}
+            alt={item.name}
+            loading="lazy"
+            className="h-full w-full object-cover"
+            onError={handlePosterError}
+          />
         ) : (
           <div
             className="h-full w-full"
@@ -314,10 +322,10 @@ function CardFoot({
 }
 
 // ---------------------------------------------------------------------------
-// Stage checklist (§16.3)
+// Stage checklist (§16.3) — exported for reuse in the ZipInstallPanel
 // ---------------------------------------------------------------------------
 
-function StageChecklist({
+export function StageChecklist({
   currentStage,
   reducedMotion,
 }: {

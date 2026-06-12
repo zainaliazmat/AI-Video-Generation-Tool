@@ -2,10 +2,10 @@
 
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {useRouter} from 'next/navigation';
-import {motion} from 'framer-motion';
+import {motion, useReducedMotion} from 'framer-motion';
 import {cn} from '@/lib/cn';
 import {Eyebrow, Button} from './ui';
-import {TemplateCard} from './TemplateCard';
+import {TemplateCard, StageChecklist} from './TemplateCard';
 import {TemplateDrawer} from './TemplateDrawer';
 import type {TemplateMeta} from '@/lib/templates';
 import type {UnifiedItem, Tab} from '@/lib/marketplace-ui';
@@ -155,6 +155,9 @@ export function TemplateGallery({
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState<string>('all');
   const [installStates, setInstallStates] = useState<Record<string, InstallState>>({});
+  // Optimistic "just-installed" set: prevents flash of ghost "Install" button
+  // during the router.refresh() round-trip after a successful install (I1).
+  const [justInstalled, setJustInstalled] = useState<Set<string>>(new Set());
   // Drawer: hold the selected UnifiedItem directly (§16.9/§16.10)
   const [selected, setSelected] = useState<UnifiedItem | null>(null);
   // Drag overlay (lg-gated)
@@ -223,6 +226,9 @@ export function TemplateGallery({
   const startInstall = useCallback(
     (input: InstallInput, id: string) => {
       setInstallStates((prev) => ({...prev, [id]: {status: 'installing', stage: 'validating'}}));
+      // For catalog installs, the real template id equals the key.
+      // For zip installs the key is __zip__<filename> — no optimistic id available.
+      const catalogId = id.startsWith('__zip__') ? null : id;
       driveInstall(
         input,
         (stage) => setInstallStates((prev) => ({...prev, [id]: {status: 'installing', stage}})),
@@ -232,6 +238,11 @@ export function TemplateGallery({
             delete next[id];
             return next;
           });
+          // Optimistically mark as installed so the card shows "Installed ✓"
+          // during the router.refresh() round-trip — prevents flash of "Install" (I1).
+          if (catalogId) {
+            setJustInstalled((prev) => new Set(prev).add(catalogId));
+          }
           router.refresh();
         },
         (stage, error) => {
@@ -338,6 +349,16 @@ export function TemplateGallery({
     [templates],
   );
 
+  // Collect active zip-install entries for the ZIP install surface (B1).
+  // Keys are __zip__<filename>; these never match a catalog/installed item.id.
+  const zipInstalls = useMemo(
+    () =>
+      Object.entries(installStates)
+        .filter(([k]) => k.startsWith('__zip__'))
+        .map(([k, state]) => ({key: k, filename: k.slice('__zip__'.length), state})),
+    [installStates],
+  );
+
   const otherTab: Tab = tab === 'installed' ? 'marketplace' : 'installed';
   const otherTabLabel = tab === 'installed' ? 'Marketplace' : 'Installed';
 
@@ -361,9 +382,9 @@ export function TemplateGallery({
             className="rounded-[16px] px-14 py-10 text-center"
             style={{border: '2px dashed rgba(99,102,241,0.4)'}}
           >
-            <div className="font-ui text-[16px] font-semibold text-ink">Drop to install</div>
-            <div className="mt-1.5 font-ui text-[12px] text-ink-secondary">
-              .zip template package · validated before anything registers
+            <div className="font-ui text-[16px] font-semibold text-ink">Drop to install · .zip template package</div>
+            <div className="mt-2 max-w-[360px] font-ui text-[12px] leading-[1.5] text-ink-secondary">
+              Templates run code on your machine during install validation, preview, and export. Install only templates you trust.
             </div>
           </div>
         </div>
@@ -485,6 +506,20 @@ export function TemplateGallery({
         only templates you trust.
       </p>
 
+      {/* ZIP install surface (B1): renders a panel for each active __zip__* install */}
+      {zipInstalls.length > 0 && (
+        <div className="mt-5 flex flex-col gap-3">
+          {zipInstalls.map(({key, filename, state}) => (
+            <ZipInstallPanel
+              key={key}
+              filename={filename}
+              state={state}
+              onDismiss={() => handleDismissError(key)}
+            />
+          ))}
+        </div>
+      )}
+
       {/* Grid or zero-result */}
       {zeroResult.active ? (
         <ZeroResult
@@ -499,14 +534,28 @@ export function TemplateGallery({
       ) : (
         <div className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4">
           {items.map((item) => {
-            // Zip-based install keys use __zip__<filename>; find them by checking
-            const zipKey = `__zip__${item.id}.zip`;
-            const installState =
-              installStates[item.id] ?? installStates[zipKey] ?? {status: 'idle' as const};
+            // Catalog installs use item.id as key; zip installs use __zip__<filename>
+            const installState = installStates[item.id] ?? {status: 'idle' as const};
+            // Optimistic installed flag: treat as installed if server confirmed OR
+            // if the current session just installed it (prevents "Install" flash — I1).
+            // Once server payload confirms installed:true, prune from justInstalled.
+            const effectiveInstalled = item.installed || justInstalled.has(item.id);
+            if (item.installed && justInstalled.has(item.id)) {
+              // Server has confirmed; prune on next render tick
+              setJustInstalled((prev) => {
+                if (!prev.has(item.id)) return prev;
+                const next = new Set(prev);
+                next.delete(item.id);
+                return next;
+              });
+            }
+            const effectiveItem = effectiveInstalled !== item.installed
+              ? {...item, installed: effectiveInstalled}
+              : item;
             return (
               <TemplateCard
                 key={item.id}
-                item={item}
+                item={effectiveItem}
                 installState={installState}
                 onOpen={() => setSelected(item)}
                 onInstall={(i, opts) => handleInstallItem(i, opts)}
@@ -531,6 +580,79 @@ export function TemplateGallery({
         }}
       />
     </main>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ZIP install surface panel (B1)
+// Renders a dismissible panel for each active __zip__* install entry.
+// Shows the same StageChecklist or fail-box that catalog cards use.
+// ---------------------------------------------------------------------------
+
+function ZipInstallPanel({
+  filename,
+  state,
+  onDismiss,
+}: {
+  filename: string;
+  state: InstallState;
+  onDismiss: () => void;
+}) {
+  const reducedMotion = useReducedMotion() ?? false;
+  const hasFailed = state.status === 'failed';
+  const isInstalling = state.status === 'installing';
+
+  return (
+    <div
+      className={cn(
+        'rounded-[10px] border px-4 py-3',
+        hasFailed
+          ? 'border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.07)]'
+          : 'border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.04)]',
+      )}
+      role={hasFailed ? 'alert' : undefined}
+    >
+      {/* File name header */}
+      <div className="mb-2.5 flex items-center justify-between gap-3">
+        <span className="font-mono text-[11.5px] text-ink-secondary truncate">{filename}</span>
+        {hasFailed && (
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="focus-ring flex-shrink-0 rounded-sm font-ui text-[11px] text-ink-muted hover:text-ink"
+            aria-label={`Dismiss failed install for ${filename}`}
+          >
+            Dismiss
+          </button>
+        )}
+      </div>
+
+      {/* Progress / fail box */}
+      {isInstalling && (
+        <StageChecklist currentStage={state.stage} reducedMotion={reducedMotion} />
+      )}
+
+      {hasFailed && (() => {
+        const stage = state.stage ?? 'unknown';
+        const error = state.error ?? 'Unknown error';
+        const isLock = stage === 'lock';
+        return isLock ? (
+          <p className="font-ui text-[11.5px] text-ink-secondary">
+            An install is already running — one at a time.
+          </p>
+        ) : (
+          <>
+            <div className="font-mono text-[10px] uppercase tracking-[0.04em] text-[#f87171]">
+              ✕ {stage}
+            </div>
+            <div className="mt-1 font-ui text-[11.5px] leading-[1.4] text-ink-secondary">{error}</div>
+            <p className="mt-2 font-ui text-[10.5px] text-ink-muted">
+              Tip: install.mjs doctor ./&lt;dir&gt; runs this exact gate locally.
+            </p>
+          </>
+        );
+      })()}
+    </div>
   );
 }
 

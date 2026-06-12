@@ -92,11 +92,10 @@ export function installedMetaToUnifiedItems(metas: TemplateMeta[]): UnifiedItem[
  * from the installedIds set in deriveView (§16.6). catalogVersion is set from
  * the package's version field so the update triad can compare it.
  *
- * Poster: the catalog poster path is stored as a relative path inside the
- * marketplace/ directory (e.g. "packages/bold-stat/1.0.0/poster.jpg").
- * We serve catalog posters via the /api/marketplace/index route or as a static
- * path. For now we store the raw catalog path — Task 3 will wire the actual
- * serving path. The card falls back to a kind-tone placeholder when null.
+ * Poster: served via /api/marketplace/poster?id=<id> so Next.js can resolve
+ * the file from outside the public/ directory. null when the package has no
+ * poster declared. The card falls back to a kind-tone gradient placeholder
+ * when null (or on img onError).
  */
 export function catalogPackagesToUnifiedItems(packages: CatalogPackage[]): UnifiedItem[] {
   return packages.map((pkg) => ({
@@ -111,7 +110,7 @@ export function catalogPackagesToUnifiedItems(packages: CatalogPackage[]): Unifi
     source: 'catalog' as const,
     installed: false, // will be derived from installedIds in deriveView (§16.6)
     catalogVersion: pkg.version,
-    poster: pkg.preview?.poster ?? null,
+    poster: pkg.preview?.poster ? `/api/marketplace/poster?id=${encodeURIComponent(pkg.id)}` : null,
     mp4: null,
   }));
 }
