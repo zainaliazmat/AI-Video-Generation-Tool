@@ -7,10 +7,18 @@ import {Eyebrow} from './ui';
 import {TemplateCard} from './TemplateCard';
 import {TemplateDrawer} from './TemplateDrawer';
 import type {TemplateMeta} from '@/lib/templates';
+import type {UnifiedItem} from '@/lib/marketplace-ui';
 
 const KIND_ORDER = ['hook', 'scene', 'stat', 'lower-third', 'transition', 'overlay', 'outro'];
 
-export function TemplateGallery({templates}: {templates: TemplateMeta[]}) {
+/** Task-2 bag passed down from the server page; consumed fully in Task 3. */
+export interface GalleryBag {
+  installed: UnifiedItem[];
+  catalog: UnifiedItem[];
+  installedIds: string[];
+}
+
+export function TemplateGallery({templates, galleryBag: _galleryBag}: {templates: TemplateMeta[]; galleryBag?: GalleryBag}) {
   const [filter, setFilter] = useState<string>('all');
   const [selected, setSelected] = useState<TemplateMeta | null>(null);
 
