@@ -1,0 +1,18 @@
+{
+  "id": "fixture-tsc-error",
+  "name": "Fixture TSC Error",
+  "version": "1.0.0",
+  "author": "fixture-author",
+  "apiVersion": "1",
+  "kind": "scene",
+  "license": "MIT",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false
+  },
+  "sampleProps": {},
+  "durationFrames": {
+    "min": 30,
+    "max": 120
+  }
+}

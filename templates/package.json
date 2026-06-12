@@ -7,17 +7,23 @@
     "gen-manifests": "tsx scripts/gen-manifests.ts",
     "build-registry": "node scripts/build-registry.mjs",
     "build": "npm run gen-manifests && npm run build-registry",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "new-template": "node scripts/new-template.mjs",
+    "pack-template": "node scripts/install.mjs pack",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
   },
   "peerDependencies": {
-    "remotion": "^4.0.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "remotion": "^4.0.0"
   },
   "comment:devDependencies": "BUILD-TIME ONLY. zod authors each template's inputSchema (single source of truth); gen-manifests (tsx) exports it to manifest.json as JSON Schema for Python. zod is a TYPE-only import in components (z.infer), so it never enters the render bundle, and devDeps are not shipped — the npm-package trajectory is unaffected. .npmrc legacy-peer-deps keeps react/remotion OUT of this package's node_modules (single-copy dedupe in consumers).",
   "devDependencies": {
+    "adm-zip": "^0.5.17",
+    "ajv": "^8.20.0",
     "tsx": "^4.19.2",
     "typescript": "^5.9.3",
+    "vitest": "^3.2.6",
     "zod": "^3.23.8",
     "zod-to-json-schema": "^3.23.5"
   }

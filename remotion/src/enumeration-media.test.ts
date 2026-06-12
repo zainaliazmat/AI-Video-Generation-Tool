@@ -1,26 +1,41 @@
 import {describe, it, expect} from 'vitest';
+import {readFileSync} from 'node:fs';
+import {resolve, dirname} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {resolveMedia, iconNameFor, IMAGE_MANIFEST, ICON_MAP, monogram} from '../../templates/enumeration/media';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// Resolved asset map as the installer/harness would provide — keys are the
+// declared relPaths verbatim, values are the staticFile URLs.
+const ASSETS: Record<string, string> = {
+  'assets/sun.jpg': '/template-assets/enumeration/sun.jpg',
+  'assets/moon.jpg': '/template-assets/enumeration/moon.jpg',
+  'assets/planets.jpg': '/template-assets/enumeration/planets.jpg',
+  'assets/eclipse.jpg': '/template-assets/enumeration/eclipse.jpg',
+  'assets/phases.jpg': '/template-assets/enumeration/phases.jpg',
+};
 
 describe('resolveMedia cascade', () => {
   it('resolves a curated image label to an image (with alt = original label)', () => {
-    const r = resolveMedia('Sun');
+    const r = resolveMedia('Sun', ASSETS);
     expect(r.kind).toBe('image');
     if (r.kind === 'image') {
-      expect(r.src).toBe(IMAGE_MANIFEST['sun']);
+      expect(r.src).toBe(ASSETS[IMAGE_MANIFEST['sun']]);
       expect(r.alt).toBe('Sun');
     }
   });
   it('folds plurals to the singular image key (Planets -> planet)', () => {
-    const r = resolveMedia('Planets');
+    const r = resolveMedia('Planets', ASSETS);
     expect(r.kind).toBe('image');
-    if (r.kind === 'image') expect(r.src).toBe(IMAGE_MANIFEST['planet']);
+    if (r.kind === 'image') expect(r.src).toBe(ASSETS[IMAGE_MANIFEST['planet']]);
   });
   it('falls to a lucide icon for an icon-only label (Telescope)', () => {
-    const r = resolveMedia('Telescope');
+    const r = resolveMedia('Telescope', {});
     expect(r).toEqual({kind: 'icon', name: 'telescope'});
   });
   it('falls to a neutral mark for an unknown label', () => {
-    const r = resolveMedia('Xyzzy');
+    const r = resolveMedia('Xyzzy', {});
     expect(r).toEqual({kind: 'mark'});
   });
   it('INVARIANT: every image-manifest key has an icon-map key (image rows never show a blank mark)', () => {
@@ -43,7 +58,7 @@ describe('iconNameFor (icon-layer-only resolve, for list rows of image items)', 
 describe('ICON_MAP planet/common-term coverage (no bare dot for the obvious set)', () => {
   it('resolves the inner/outer planets to an icon, not a mark', () => {
     for (const p of ['Mercury', 'Venus', 'Jupiter', 'Saturn', 'Neptune', 'Uranus']) {
-      expect(resolveMedia(p).kind).toBe('icon');
+      expect(resolveMedia(p, {}).kind).toBe('icon');
     }
   });
 });
@@ -65,5 +80,19 @@ describe('monogram (the designed floor grapheme rule — never a blank badge)', 
     expect(monogram('')).toBeNull();
     expect(monogram('   ')).toBeNull();
     expect(monogram('!!!')).toBeNull();
+  });
+});
+
+describe('resolveMedia assets-prop contract', () => {
+  it('falls back to the icon layer when the assets prop lacks the image (fail-closed)', () => {
+    expect(resolveMedia('sun', {})).toEqual({kind: 'icon', name: 'sun'});
+  });
+  it('resolves image src THROUGH the assets prop, never a hand-built path', () => {
+    const r = resolveMedia('sun', {'assets/sun.jpg': '/template-assets/enumeration/sun.jpg'});
+    expect(r).toEqual({kind: 'image', src: '/template-assets/enumeration/sun.jpg', alt: 'sun'});
+  });
+  it('declares every IMAGE_MANIFEST value in the enumeration manifest assets', () => {
+    const manifest = JSON.parse(readFileSync(resolve(__dirname, '../../templates/enumeration/manifest.json'), 'utf8'));
+    for (const rel of Object.values(IMAGE_MANIFEST)) expect(manifest.assets).toContain(rel);
   });
 });

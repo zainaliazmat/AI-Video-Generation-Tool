@@ -1,5 +1,5 @@
 import React from 'react';
-import {AbsoluteFill, Img, staticFile, useCurrentFrame} from 'remotion';
+import {AbsoluteFill, Img, useCurrentFrame} from 'remotion';
 import type {TemplateProps} from '../sdk';
 import type {EnumerationData} from './schema';
 import {heroBackground, HERO_BREATH_PERIOD} from '../heroBackground';
@@ -27,7 +27,7 @@ function fallbackStartFrames(n: number, durationInFrames: number): number[] {
 const HERO_IMG = 640; // hero image box (px)
 const HERO_ICON = 360; // large lucide hero (px)
 
-const Component: React.FC<TemplateProps<EnumerationData>> = ({data, theme, timing, itemTimings}) => {
+const Component: React.FC<TemplateProps<EnumerationData>> = ({data, theme, timing, assets, itemTimings}) => {
   const frame = useCurrentFrame();
   const items = data.items;
   const synced = Boolean(itemTimings && itemTimings.length === items.length);
@@ -64,7 +64,7 @@ const Component: React.FC<TemplateProps<EnumerationData>> = ({data, theme, timin
           const labelOpacity = heroLabelOpacity(frame, i, starts);
           if (present <= 0) return null;
           const st = itemRevealState(frame, starts[i], i + 1 < starts.length ? starts[i + 1] : starts[i] + 24);
-          const media = resolveMedia(label);
+          const media = resolveMedia(label, assets);
           const mg = monogram(label);
           const ring = `0 0 0 6px ${theme.palette.accent}55, 0 30px 80px rgba(0,0,0,0.6)`;
           return (
@@ -86,7 +86,7 @@ const Component: React.FC<TemplateProps<EnumerationData>> = ({data, theme, timin
               <div style={{opacity: present, display: 'flex'}}>
                 {media.kind === 'image' ? (
                   <Img
-                    src={staticFile(media.src)}
+                    src={media.src}
                     alt={media.alt}
                     style={{
                       width: HERO_IMG,
@@ -166,7 +166,7 @@ const Component: React.FC<TemplateProps<EnumerationData>> = ({data, theme, timin
           // subtler appear (fade + small rise), NOT the hero overshoot
           const appear = Math.min(1, Math.max(0, (frame - starts[i]) / 8));
           const isActive = i === active;
-          const media = resolveMedia(label);
+          const media = resolveMedia(label, assets);
           const iconColor = isActive ? theme.palette.accent : theme.palette.muted;
           const textColor = isActive ? theme.palette.accent : theme.palette.foreground;
           return (
