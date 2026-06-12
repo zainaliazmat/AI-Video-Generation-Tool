@@ -181,6 +181,10 @@ def set_voice(sess, *, voice, speed=1.0):
     """Deferred voice/speed change at a reopened Voice gate. Voice has no edit
     handler (it's regenerate-shaped) — mirror api.regenerate's first half
     (backend/session/api.py:50-65) without the re-derive."""
+    states = store.get_gate_states(sess.conn, sess.id)
+    row = states.get("voice")
+    if row is not None and row["state"] == "stale":
+        _reject_stale(states, "voice", suffix=" (view-only)")
     from pipeline import projects as projects_mod
     from session import job_ctx
     projects_mod.write_voice(job_ctx.REPO_ROOT, sess.id, voice=voice, speed=speed)

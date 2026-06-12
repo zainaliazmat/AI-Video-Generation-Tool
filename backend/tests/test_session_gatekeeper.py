@@ -383,6 +383,35 @@ def test_api_regenerate_seam_routes_gated_sessions(tmp_path, monkeypatch):
     assert store.get_gate_states(sess.conn, sess.id)["script"]["state"] == "awaiting_approval"
 
 
+def test_set_voice_at_stale_gate_rejected(tmp_path, monkeypatch):
+    # Holistic fix: set_voice must reject a stale voice gate (e.g. script was
+    # reopened first), naming the awaiting gate to Re-approve rather than
+    # silently creating a second awaiting_approval gate.
+    _fakes(monkeypatch)
+    sess = _at_assemble_gate(tmp_path, monkeypatch)
+    gatekeeper.edit(sess, "script", _edit_beat_op(0, "Reopen script."))  # voice now stale
+    # Prevent set_voice from writing to the real repo filesystem
+    monkeypatch.setattr(
+        "pipeline.projects.write_voice",
+        lambda repo_root, sid, *, voice, speed: None,
+    )
+    with pytest.raises(ValueError, match=r"re-approve gate 'script'"):
+        gatekeeper.set_voice(sess, voice="af_bella", speed=1.0)
+
+
+def test_edit_voice_op_at_stale_voice_gate_rejected(tmp_path, monkeypatch):
+    # edit("voice", op) routes to set_voice — the same stale guard applies.
+    _fakes(monkeypatch)
+    sess = _at_assemble_gate(tmp_path, monkeypatch)
+    gatekeeper.edit(sess, "script", _edit_beat_op(0, "Reopen script."))  # voice now stale
+    monkeypatch.setattr(
+        "pipeline.projects.write_voice",
+        lambda repo_root, sid, *, voice, speed: None,
+    )
+    with pytest.raises(ValueError, match=r"re-approve gate 'script'"):
+        gatekeeper.edit(sess, "voice", {"op": "set_voice", "voice": "af_bella", "speed": 1.0})
+
+
 def test_regenerate_assemble_at_terminal_gate_rematerializes(tmp_path, monkeypatch):
     # assemble is terminal: frontier branch only. rederive_stale has nothing to
     # re-materialize (no stale downstream), so the materialize_spec() guard in

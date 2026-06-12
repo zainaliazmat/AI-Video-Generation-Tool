@@ -39,6 +39,15 @@ def build_state(sid: str) -> dict:
         # Read THIS session's own materialized spec (projects/<sid>/spec.json), not a
         # global slot — that is what makes re-opening an old project's gate work.
         spec_path = projects_mod.project_spec_path(job_ctx.REPO_ROOT, sid)
+        gate_states = store.get_gate_states(conn, sid)
+        session_row = store.get_session(conn, sid)
+        if not spec_path.exists():
+            # Pre-spec: gated session at the script/voice gate — spec materialises
+            # only when the scenes segment runs (ruling 1A). Return a partial-but-honest
+            # payload: gates + autoRun are available, spec-dependent keys are empty/null.
+            return {"sid": sid, "scenes": [],
+                    "gates": gate_states,
+                    "autoRun": bool(session_row["auto_run"])}
         spec = json.loads(spec_path.read_text(encoding="utf-8"))
         prov = store.get_media_provenance(conn, sid)
         beat_text = _beat_text_by_index(conn, sid)   # Studio v2: show the beat beside each clip
@@ -63,8 +72,6 @@ def build_state(sid: str) -> dict:
                 "provenance": (None if p is None else {
                     "source": p["source"], "query": p["query"], "rank": p["rank"],
                     "pexelsId": p["pexels_id"], "pexelsUrl": p["pexels_url"]})})
-        gate_states = store.get_gate_states(conn, sid)
-        session_row = store.get_session(conn, sid)
         return {"sid": sid, "scenes": scenes,
                 "gates": gate_states,
                 "autoRun": bool(session_row["auto_run"])}
