@@ -116,7 +116,7 @@ def test_approve_stale_gate_rejected_names_the_reopened_gate(tmp_path, monkeypat
     store.upsert_gate_state(sess.conn, sess.id, "voice", "stale", now="reopen")
     store.upsert_gate_state(sess.conn, sess.id, "scenes", "stale", now="reopen")
     store.upsert_gate_state(sess.conn, sess.id, "assemble", "stale", now="reopen")
-    with pytest.raises(ValueError, match="script"):
+    with pytest.raises(ValueError, match=r"re-approve gate 'script' first"):
         gatekeeper.approve(sess, "scenes")            # stale — not approvable
 
 

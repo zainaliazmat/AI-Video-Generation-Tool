@@ -51,8 +51,18 @@ def approve(sess, gate, *, on_stage=None):
     if cur is None:
         raise ValueError(f"gate {gate!r} is not open yet")
     if cur["state"] == "stale":
-        reopened = next((g for g in gates.GATE_ORDER
-                         if states.get(g, {}).get("state") == "awaiting_approval"), "?")
+        reopened = next(
+            (g for g in gates.GATE_ORDER
+             if states.get(g, {}).get("state") == "awaiting_approval"),
+            None,
+        )
+        if reopened is None:
+            # Unreachable with consistent state: a stale gate implies some gate
+            # reopened (awaiting_approval). Fail loud rather than emit a '?'
+            # placeholder in a user-facing message.
+            raise RuntimeError(
+                f"gate {gate!r} is stale but no gate is awaiting_approval "
+                f"in {sorted(states)!r} — gate-state invariant violated")
         raise ValueError(
             f"gate {gate!r} is stale — re-approve gate {reopened!r} first")
     nxt = gates.next_gate(gate)
@@ -65,6 +75,7 @@ def approve(sess, gate, *, on_stage=None):
         _reapprove(sess, states, on_stage)
     store.upsert_gate_state(sess.conn, sess.id, gate, "approved", now=_now())
     if nxt is not None:
+        # Re-read: _reapprove may have restored gate rows since the snapshot.
         nxt_state = store.get_gate_states(sess.conn, sess.id).get(nxt)
         if nxt_state is None or nxt_state["state"] != "approved":
             _run_segment(sess, nxt, on_stage)
