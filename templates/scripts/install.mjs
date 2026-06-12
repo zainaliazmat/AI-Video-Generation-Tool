@@ -74,6 +74,9 @@ import {
   InstallError,
 } from './install-paths.mjs';
 
+/** marketplace/ directory — the local store of available packages. */
+export const MARKETPLACE_DIR = resolve(REPO_ROOT, 'marketplace');
+
 // ---------------------------------------------------------------------------
 // Re-export validation stages + helpers from install-stages.mjs (backward compat)
 // ---------------------------------------------------------------------------
@@ -741,6 +744,64 @@ export async function install(srcZipOrDir, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// installFromMarketplace() — thin resolver (§6/§7)
+// ---------------------------------------------------------------------------
+
+/**
+ * Install a template by id from the local marketplace catalog.
+ *
+ * Reads marketplace/index.json, finds the entry by id, resolves the zip path,
+ * and delegates to install() with the catalog sha256 as the integrity gate.
+ * The existing install() sha256 pre-check is the only integrity check — no
+ * second install path.
+ *
+ * @param {string} id  Marketplace package id.
+ * @param {{
+ *   update?: boolean,
+ *   confirmReplace?: boolean,
+ *   runners?: Partial<typeof _defaultRunners>
+ * }} opts
+ */
+export async function installFromMarketplace(id, opts = {}) {
+  // Read the catalog
+  const indexPath = join(MARKETPLACE_DIR, 'index.json');
+  let catalog = {packages: []};
+  if (existsSync(indexPath)) {
+    try {
+      catalog = JSON.parse(readFileSync(indexPath, 'utf8'));
+    } catch (e) {
+      throw new InstallError('unpack', `cannot read marketplace/index.json: ${e.message}`);
+    }
+  }
+
+  // Find the entry
+  const entry = (catalog.packages ?? []).find((p) => p.id === id);
+  if (!entry) {
+    throw new InstallError(
+      'id',
+      `no marketplace package "${id}" in the catalog — run build-marketplace-index or check the id`,
+    );
+  }
+
+  // Resolve zip path
+  const zipPath = join(MARKETPLACE_DIR, entry.package);
+  if (!existsSync(zipPath)) {
+    throw new InstallError(
+      'unpack',
+      `marketplace package zip missing: ${entry.package} — run: node templates/scripts/build-marketplace-index.mjs`,
+    );
+  }
+
+  // Delegate to install() with the catalog sha256 as the integrity gate.
+  return install(zipPath, {
+    sha256: entry.sha256,
+    update: opts.update,
+    confirmReplace: opts.confirmReplace,
+    runners: opts.runners,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // uninstall() — §15.9
 // ---------------------------------------------------------------------------
 
@@ -930,6 +991,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         'Commands:\n' +
         '  install <zip|dir> [--update] [--confirm-replace] [--override-capability] [--sha256 <hex>]\n' +
         '                    Install a template from a zip or directory source\n' +
+        '  install --from-marketplace <id> [--update] [--confirm-replace]\n' +
+        '                    Install a template from the local marketplace catalog\n' +
         '  uninstall <id>    Uninstall a template by id\n' +
         '  doctor <zip|dir>  Dry-run the full install gate without installing\n' +
         '  list              List installed templates\n' +
@@ -945,14 +1008,36 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 
   async function main() {
     if (cmd === 'install') {
+      const update = args.includes('--update');
+      const confirmReplace = args.includes('--confirm-replace');
+
+      // --from-marketplace: positional is the package id, not a path
+      if (args.includes('--from-marketplace')) {
+        const fromMpIdx = args.indexOf('--from-marketplace');
+        const id = args[fromMpIdx + 1];
+        if (!id || id.startsWith('--')) {
+          process.stderr.write('[install] error: --from-marketplace requires an <id> argument\n');
+          printUsage();
+          process.exit(1);
+        }
+        process.stderr.write(`[install] installing from marketplace: ${id} — the preview render stage can take a couple of minutes…\n`);
+        const result = await installFromMarketplace(id, {update, confirmReplace});
+        const kindStr = result.kind;
+        const previewStr = result.preview;
+        if (result.updated) {
+          process.stderr.write(`[install] updated from v${result.updated.from}\n`);
+        }
+        console.log(`[install] installed ${result.id} v${result.version} (${kindStr}) — preview at ${previewStr}`);
+        console.log('[install] on disk, not yet committed — commit templates/' + result.id + ' when ready.');
+        return;
+      }
+
       const src = args.find((a) => !a.startsWith('--'));
       if (!src) {
         process.stderr.write('[install] error: missing <zip|dir> argument\n');
         printUsage();
         process.exit(1);
       }
-      const update = args.includes('--update');
-      const confirmReplace = args.includes('--confirm-replace');
       const overrideCapability = args.includes('--override-capability');
       let sha256;
       const sha256Idx = args.indexOf('--sha256');
