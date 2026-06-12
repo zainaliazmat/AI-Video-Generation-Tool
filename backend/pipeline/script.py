@@ -221,15 +221,19 @@ def _parse_with_retry(do_call) -> BeatsScript:
 def generate_script(
     topic: str, *, provider: str | None = None, client=None, model: str | None = None,
     evidence_block: str | None = None, extra_user_block: str | None = None,
+    system_prompt: str | None = None,
 ) -> BeatsScript:
     """Pure LLM generation. `evidence_block` (optional) injects retrieved grounding
     sources into the prompt; `generate_grounded_script` is the grounded entry point.
-    `extra_user_block` is the Studio v2 additive seam (style memory + feedback)."""
+    `extra_user_block` is the Studio v2 additive seam (style memory + feedback).
+    `system_prompt` (Studio v3 M2) overrides the system prompt for the selected
+    length preset; defaults to SYSTEM_PROMPT when None (byte-identical to 60s)."""
+    sp = system_prompt if system_prompt is not None else SYSTEM_PROMPT
     provider = provider or get_env("LLM_PROVIDER", "deepseek")
     if provider == "deepseek":
         return _generate_openai_compatible(
             topic, client=client, model=model, evidence_block=evidence_block,
-            extra_user_block=extra_user_block,
+            extra_user_block=extra_user_block, system_prompt=sp,
             default_model="deepseek-v4-flash",
             api_key_env="DEEPSEEK_API_KEY",
             base_url=get_env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
@@ -238,7 +242,7 @@ def generate_script(
     if provider == "ollama":
         return _generate_openai_compatible(
             topic, client=client, model=model, evidence_block=evidence_block,
-            extra_user_block=extra_user_block,
+            extra_user_block=extra_user_block, system_prompt=sp,
             default_model="llama3.1",
             api_key_env=None,
             base_url=get_env("OLLAMA_BASE_URL", "http://localhost:11434") + "/v1",
@@ -246,22 +250,24 @@ def generate_script(
         )
     if provider == "anthropic":
         return _generate_anthropic(topic, client=client, model=model,
-                                   evidence_block=evidence_block, extra_user_block=extra_user_block)
+                                   evidence_block=evidence_block, extra_user_block=extra_user_block,
+                                   system_prompt=sp)
     raise ValueError(f"Unknown LLM_PROVIDER: {provider!r}")
 
 
-def _generate_openai_compatible(topic, *, client, model, default_model, api_key_env, base_url, model_env, evidence_block=None, extra_user_block=None) -> BeatsScript:
+def _generate_openai_compatible(topic, *, client, model, default_model, api_key_env, base_url, model_env, evidence_block=None, extra_user_block=None, system_prompt=None) -> BeatsScript:
     if client is None:
         from openai import OpenAI
         api_key = require_env(api_key_env) if api_key_env else "ollama"
         client = OpenAI(api_key=api_key, base_url=base_url)
     model = model or get_env(model_env, default_model)
+    sp = system_prompt if system_prompt is not None else SYSTEM_PROMPT
 
     def do_call() -> str:
         resp = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": sp},
                 {"role": "user", "content": build_user_prompt(topic, evidence_block, extra_user_block)},
             ],
             response_format={"type": "json_object"},
@@ -272,17 +278,18 @@ def _generate_openai_compatible(topic, *, client, model, default_model, api_key_
     return _parse_with_retry(do_call)
 
 
-def _generate_anthropic(topic, *, client, model, evidence_block=None, extra_user_block=None) -> BeatsScript:
+def _generate_anthropic(topic, *, client, model, evidence_block=None, extra_user_block=None, system_prompt=None) -> BeatsScript:
     if client is None:
         import anthropic
         client = anthropic.Anthropic(api_key=require_env("ANTHROPIC_API_KEY"))
     model = model or get_env("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+    sp = system_prompt if system_prompt is not None else SYSTEM_PROMPT
 
     def do_call() -> str:
         msg = client.messages.create(
             model=model,
             max_tokens=1024,
-            system=SYSTEM_PROMPT,
+            system=sp,
             messages=[{"role": "user", "content": build_user_prompt(topic, evidence_block, extra_user_block)}],
         )
         return msg.content[0].text
@@ -302,6 +309,7 @@ def generate_grounded_script(
     verify: bool = True,
     verify_fn=None,
     extra_user_block: str | None = None,
+    system_prompt: str | None = None,
 ) -> BeatsScript:
     """Retrieval-grounded generation (3.1) + hook selection (3.2) + verification (3.3).
 
@@ -310,12 +318,14 @@ def generate_grounded_script(
     hook, then (default-on, `verify=False` to skip for reach-only runs) verify each
     claim is actually supported. `retrieve_fn`/`verify_fn` are injectable so this
     runs fully offline in tests; the LLM provider stays DeepSeek. `extra_user_block`
-    is the Studio v2 additive seam (style memory + regenerate feedback)."""
+    is the Studio v2 additive seam (style memory + regenerate feedback).
+    `system_prompt` (Studio v3 M2) overrides the system prompt for the selected
+    length preset; defaults to SYSTEM_PROMPT when None."""
     retrieve_fn = retrieve_fn or retrieval.retrieve
     ctx = retrieve_fn(topic, key=retrieval_key, cache_dir=cache_dir)
     script = generate_script(
         topic, provider=provider, client=client, model=model, evidence_block=ctx.prompt_block(),
-        extra_user_block=extra_user_block,
+        extra_user_block=extra_user_block, system_prompt=system_prompt,
     )
     _select_hook(script, ctx)
     _enforce_grounding(script, ctx)

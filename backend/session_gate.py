@@ -28,41 +28,43 @@ def _on_stage(stage: str, state: str, elapsed: float | None) -> None:
 
 # ── internal helpers ─────────────────────────────────────────────────────────
 
-def _topic_for(sid: str) -> str:
+
+def _resume(sid: str) -> "api.Session":
+    """Look up the session, thread any persisted voice/speed/target_length, and resume.
+
+    Ruling 3A: projects.read_voice() loads the persisted voice choice so that
+    approving the voice gate with a new voice carries the right synthesis params.
+    target_length is read back from the session row so a re-derive after resume
+    uses the STORED preset (not the default 60) — mirrors the ruling-3A voice pattern.
+    """
     conn = store.connect(job_ctx.SESSIONS_DB)
     try:
         row = store.get_session(conn, sid)
         if row is None:
             raise KeyError(f"no session {sid!r}")
-        return row["topic"]
+        topic = row["topic"]
+        target_length = row["target_length"]
     finally:
         conn.close()
-
-
-def _resume(sid: str) -> "api.Session":
-    """Look up the session, thread any persisted voice/speed, and resume.
-
-    Ruling 3A: projects.read_voice() loads the persisted voice choice so that
-    approving the voice gate with a new voice carries the right synthesis params.
-    """
-    topic = _topic_for(sid)  # raises KeyError("no session") if absent
     saved = projects_mod.read_voice(job_ctx.REPO_ROOT, sid)
     ctx = job_ctx.build_ctx(
         topic=topic,
         sid=sid,
         voice=saved["voice"],
         speed=saved["speed"],
+        target_length=target_length,
     )
     return api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)
 
 
 # ── gate operations ──────────────────────────────────────────────────────────
 
-def start(topic: str, *, auto_run: bool = False) -> dict:
+def start(topic: str, *, auto_run: bool = False, target_length: int = 60) -> dict:
     """Start a new gated session.
 
     Design ruling 2: the sid line is printed FIRST, before any stage runs,
     so the SSE interstitial can open its EventSource immediately.
+    target_length is stored on the session row so _resume can re-thread it.
     """
     sid = f"v3-{uuid4().hex}"
     # ruling 2: emit sid event BEFORE building ctx or running any stage
@@ -78,8 +80,9 @@ def start(topic: str, *, auto_run: bool = False) -> dict:
             last_running.clear()
         _on_stage(stage, state, elapsed)
 
-    ctx = job_ctx.build_ctx(topic=topic, sid=sid)
-    sess = api.create(job_ctx.SESSIONS_DB, ctx, session_id=sid, topic=topic)
+    ctx = job_ctx.build_ctx(topic=topic, sid=sid, target_length=target_length)
+    sess = api.create(job_ctx.SESSIONS_DB, ctx, session_id=sid, topic=topic,
+                      target_length=target_length)
     try:
         projects_mod.bootstrap(job_ctx.REPO_ROOT, sid, topic=topic)
         try:
@@ -183,14 +186,15 @@ if __name__ == "__main__":
     ap.add_argument("--flag", choices=["true", "false"],
                     help="Boolean flag for set_auto_run (pass 'true' or 'false')")
     ap.add_argument("--target-length", type=int, default=60,
-                    help="Target video length in seconds (parsed but ignored until M2)")
+                    help="Target video length in seconds (30/60/180/300; default 60)")
     args = ap.parse_args()
 
     try:
         if args.op == "start":
             if not args.topic:
                 raise ValueError("--topic is required for start")
-            result = start(args.topic, auto_run=args.auto_run)
+            result = start(args.topic, auto_run=args.auto_run,
+                           target_length=args.target_length)
         elif args.op == "approve":
             if not args.sid or not args.gate:
                 raise ValueError("--sid and --gate are required for approve")

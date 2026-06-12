@@ -24,7 +24,7 @@ SESSIONS_DB = REPO_ROOT / "backend" / ".sessions" / "sessions.db"
 
 def build_ctx(*, topic: str, fps: int = 30, sid: str | None = None,
               voice: str | None = None, speed: float | None = None,
-              extra_user_block: str = "") -> EngineContext:
+              extra_user_block: str = "", target_length: int = 60) -> EngineContext:
     spd = 1.0
     if sid is None:
         spec_out, sources_out, voiceover_path = SPEC_OUT, SOURCES_OUT, ASSETS_DIR / "voiceover.wav"
@@ -43,7 +43,8 @@ def build_ctx(*, topic: str, fps: int = 30, sid: str | None = None,
         assets_dir=ASSETS_DIR, cache_dir=RETRIEVAL_CACHE,
         voiceover_path=voiceover_path,
         spec_out=spec_out, sources_out=sources_out,
-        voice=vc, speed=spd, extra_user_block=extra_user_block)
+        voice=vc, speed=spd, extra_user_block=extra_user_block,
+        target_length=target_length)
 
 
 STYLE_MEMORY_PATH = REPO_ROOT / "style_memory.json"

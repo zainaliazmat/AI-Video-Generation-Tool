@@ -190,6 +190,31 @@ def test_auto_run_column_migrates_pre_v3_db(tmp_path):
     assert store.get_session(conn, "old1")["auto_run"] == 0
 
 
+def test_target_length_defaults_60_and_roundtrips(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="t", now="t0")
+    assert store.get_session(conn, "s1")["target_length"] == 60
+
+    store.create_session(conn, id="s2", topic="t", now="t0", target_length=180)
+    assert store.get_session(conn, "s2")["target_length"] == 180
+    conn.close()
+
+
+def test_target_length_column_migrates_pre_v3_db(tmp_path):
+    # simulate a pre-v3 DB: sessions table with auto_run but no target_length
+    import sqlite3
+    db = tmp_path / "old.db"
+    raw = sqlite3.connect(db)
+    raw.execute("""CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, topic TEXT NOT NULL, created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL, current_stage TEXT, spec_path TEXT,
+        auto_run INTEGER NOT NULL DEFAULT 0)""")
+    raw.execute("INSERT INTO sessions VALUES ('old1','t','c','u',NULL,NULL,0)")
+    raw.commit(); raw.close()
+    conn = store.connect(db)   # must ALTER to add target_length, not crash
+    assert store.get_session(conn, "old1")["target_length"] == 60
+
+
 def test_delete_session_purges_all_tables_structural(tmp_path):
     """Structural delete test: populate every session_id-keyed table, delete,
     then enumerate sqlite_master and assert zero rows for the sid remain.

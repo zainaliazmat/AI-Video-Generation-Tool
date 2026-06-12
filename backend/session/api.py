@@ -19,10 +19,11 @@ class Session:
     id: str
 
 
-def create(db_path, ctx, *, session_id, topic) -> Session:
+def create(db_path, ctx, *, session_id, topic, target_length: int = 60) -> Session:
     conn = store.connect(db_path)
     if store.get_session(conn, session_id) is None:
-        store.create_session(conn, id=session_id, topic=topic, now="created")
+        store.create_session(conn, id=session_id, topic=topic, now="created",
+                             target_length=target_length)
     return Session(conn=conn, engine=_engine.Engine(conn, ctx, session_id=session_id), id=session_id)
 
 

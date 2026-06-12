@@ -67,6 +67,7 @@ class Engine:
 
     def _input_hash(self, stage, inputs):
         payload = {"stage": stage, "topic": self.ctx.topic, "fps": self.ctx.fps,
+                   "target_length": self.ctx.target_length,
                    "inputs": {d: CODECS[d][0](v) for d, v in inputs.items()}}
         # No default=str: codec outputs are JSON-native by contract, so json.dumps
         # raises loudly if a codec ever returns a non-serializable object. That guard

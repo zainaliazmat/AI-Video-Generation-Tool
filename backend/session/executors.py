@@ -36,6 +36,8 @@ class EngineContext:
     voice: str = "af_heart"            # Voice gate selection (Kokoro voice id)
     speed: float = 1.0                 # Voice gate speed (0.8x-1.2x)
     extra_user_block: str = ""         # Script gate regenerate-with-feedback + style memory
+    # Studio v3 M2: target video length in seconds (drives system_prompt_for preset)
+    target_length: int = 60            # default 60 → system_prompt_for(60) == SYSTEM_PROMPT
 
 
 def run_script(ctx: EngineContext, inputs: dict) -> dict:
@@ -45,10 +47,17 @@ def run_script(ctx: EngineContext, inputs: dict) -> dict:
     `inputs` is unused — script is the source stage with no upstream deps.
     `ctx.extra_user_block` (Studio v2) injects style memory + regenerate feedback as
     an additive USER-prompt block; empty by default → byte-identical to a plain run.
+    `ctx.target_length` (Studio v3 M2) selects the system prompt preset via
+    system_prompt_for(); default 60 → system_prompt_for(60) == SYSTEM_PROMPT (golden).
     """
     # Pass extra_user_block ONLY when set, so the default call is byte-identical to
     # the pre-Studio-v2 signature (keeps existing stage stubs valid).
     kw = {"extra_user_block": ctx.extra_user_block} if ctx.extra_user_block else {}
+    # Pass system_prompt for the selected preset; omit when it equals SYSTEM_PROMPT
+    # so unpatched generate_grounded_script stubs (which accept **kw) stay valid.
+    system_prompt = script_stage.system_prompt_for(ctx.target_length)
+    if system_prompt != script_stage.SYSTEM_PROMPT:
+        kw["system_prompt"] = system_prompt
     script = script_stage.generate_grounded_script(ctx.topic, cache_dir=ctx.cache_dir, **kw)
     plan = recipe_stage.plan(script, theme=ctx.theme, manifests=ctx.catalog)
     return {"script": script, "plan": plan}

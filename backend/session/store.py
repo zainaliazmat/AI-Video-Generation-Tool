@@ -74,12 +74,16 @@ CREATE TABLE IF NOT EXISTS gates (
 
 def _migrate(conn) -> None:
     """Column additions for DBs created before v3. CREATE TABLE IF NOT EXISTS
-    can't add columns, so each new sessions column gets a guarded ALTER here
-    (target_length rides M2 through this same helper)."""
+    can't add columns, so each new sessions column gets a guarded ALTER here."""
     cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
     if "auto_run" not in cols:
         conn.execute(
             "ALTER TABLE sessions ADD COLUMN auto_run INTEGER NOT NULL DEFAULT 0"
+        )
+        conn.commit()
+    if "target_length" not in cols:
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN target_length INTEGER NOT NULL DEFAULT 60"
         )
         conn.commit()
 
@@ -96,11 +100,13 @@ def connect(db_path) -> sqlite3.Connection:
     return conn
 
 
-def create_session(conn, *, id, topic, now, spec_path=None, current_stage=None) -> None:
+def create_session(conn, *, id, topic, now, spec_path=None, current_stage=None,
+                   target_length: int = 60) -> None:
     conn.execute(
-        "INSERT INTO sessions (id, topic, created_at, updated_at, current_stage, spec_path)"
-        " VALUES (?,?,?,?,?,?)",
-        (id, topic, now, now, current_stage, spec_path),
+        "INSERT INTO sessions"
+        " (id, topic, created_at, updated_at, current_stage, spec_path, target_length)"
+        " VALUES (?,?,?,?,?,?,?)",
+        (id, topic, now, now, current_stage, spec_path, target_length),
     )
     conn.commit()
 
