@@ -157,3 +157,74 @@ scroll. Capture hero frames before merge.
   aspect + gap, verify in browser.
 - Many hover videos could be heavy if a scene had many eligible templates; in
   practice eligibility caps this at 2-3, and only the hovered/active card plays.
+
+---
+
+## Review addenda (2026-06-14)
+
+Folded in after plan-review approval. Items 1–4 are mandatory in the plan; 5–6
+are baked into the component; 7 is the merge gate.
+
+### Ground-truth verifications (done before planning)
+
+- **(3) `scene` is ALWAYS eligible** — `pipeline/eligibility.py` returns `scene`
+  for every beat ("any beat can be a footage scene"). So on a clipless hook/hero
+  beat, `eligibleTemplates` includes `scene` as **eligible-but-gated** (a
+  hero→scene switch needs footage the hero lacks, M5 amend 2). The
+  `heroClipless` disabled card branch is therefore **live, not dead code** —
+  build it. Verified, not assumed.
+- **(4) The `/previews/*` assets are STALE on this branch.** `remotion`'s
+  `gen-previews.mjs --dry-run` reports **all eight templates STALE**
+  (`previews.lock.json` hashes differ from current, e.g. `stat`: lock
+  `c01f2ef3…` vs current `a0ec118c…`). They predate the current renderer (the
+  hero-card-background / text-motion work). **The plan MUST regenerate previews
+  first** (`cd remotion && npm run gen-previews`) and commit the refreshed
+  `preview/public/previews/*` + `previews.lock.json`, otherwise a card shows a
+  template look that no longer matches what the left preview renders on pick.
+  This is a plan prerequisite (step 0), not optional.
+
+### Mandatory design changes
+
+- **(1) Reduce Motion gates the card loops.** The hover/active `<video>` loops
+  are loops, and Reduce Motion is a design-system invariant that kills loops
+  (same lever that freezes the mini-player and ambient field). Under the OS
+  `prefers-reduced-motion: reduce` preference, cards are **poster-only** — no
+  hover play, no active autoplay. Detect via the project's existing reduced-
+  motion mechanism (match how the mini-player/ambient field already gate); do
+  not roll a new one. Confirm the existing hook/util during implementation.
+- **(2) The 1.5-row clamp needs per-breakpoint values, not one magic number.**
+  3-col tiles (mobile) are taller than 4-col tiles (`sm:`), so a single
+  `max-h-[…]` is 1.5 rows at only one breakpoint. Use responsive variants
+  (`max-h-[X] sm:max-h-[Y]`) or derive the clamp from tile width. The
+  per-breakpoint nature is explicit, not "tuned during eyes-on."
+
+### Clarity items baked into the component
+
+- **(5) "See it in real time" is gate-dependent.** Immediate left-preview update
+  is the **approved-gate** path. At a **reopened** gate the pick defers (existing
+  affordance): the card reflects pending state, not an instant swap. No behavior
+  change — state it so the headline promise is not read as unconditional.
+- **(6) Accessibility.** The template rail is single-select → use **radio
+  semantics** (`role="radiogroup"` on the rail, `role="radio"` +
+  `aria-checked` on cards), not `aria-pressed`. The disabled-card tooltip
+  ("pick a clip first…") must reach **keyboard/SR users** — expose it as
+  accessible text (e.g. `aria-describedby` / visible-on-focus), not hover-only
+  `title`.
+
+### Eyes-on is a MOTION review (the merge gate)
+
+- **(7)** This gate is motion, so stills do not settle it. On real scene 04,
+  upload a screen capture to `/mnt/user-data/uploads` showing: hover → loop
+  plays; active card loops; click → left preview swaps to the **real** footage;
+  the pool showing ~1.5 rows scrolling; **plus a Reduce-Motion pass** confirming
+  poster-only (no loops). The jsdom tests cover structure/wiring only
+  (card-per-eligible, active/disabled state, `ScrollPool` clamp present, click
+  calls handler) — they cannot touch hover/active/swap/scroll/reduced-motion,
+  which is exactly why the motion eyes-on is the real gate.
+
+### Files touched (updated)
+
+- Step 0: `preview/public/previews/*` + `previews.lock.json` (regenerated via
+  `remotion`'s `gen-previews`).
+- `preview/components/scenes/SceneControls.tsx`, its new test, and a reduced-
+  motion gate wired to the existing project mechanism.
