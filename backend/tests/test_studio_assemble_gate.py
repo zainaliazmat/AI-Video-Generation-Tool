@@ -167,6 +167,34 @@ def test_engine_assemble_edit_applies_patch_and_materializes(tmp_path, monkeypat
     conn.close()
 
 
+def test_engine_assemble_edit_atomic_on_validation_failure(tmp_path, monkeypatch):
+    """A catalog-invalid patch (validate_spec raises) must leave the stage output
+    AND the patch history untouched. Otherwise a bad template id (e.g. 'clip') is
+    baked into the stage output, and since every later edit re-validates the whole
+    spec at materialize, the session is permanently stuck on 'unknown template id'.
+    Regression for the stuck-session bug."""
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="T", now="t0")
+    store.upsert_stage(conn, "s1", "assemble", status="done", input_hash="h",
+                       output_json=json.dumps(codecs.spec_to_json(_spec())), now="t0")
+
+    def _reject(spec, catalog):
+        raise ValueError("scene 'scene-1': unknown template id 'clip' (not in catalog)")
+    monkeypatch.setattr("pipeline.validate.validate_spec", _reject)
+
+    eng = engine.Engine(conn, _ctx(tmp_path), session_id="s1")
+    before = json.dumps(codecs.spec_to_json(eng._load_output("assemble")), sort_keys=True)
+
+    with pytest.raises(ValueError, match="unknown template id"):
+        eng.edit("assemble", {"patch": [
+            {"op": "replace", "path": "/scenes/1/template", "value": "clip"}]})
+
+    after = json.dumps(codecs.spec_to_json(eng._load_output("assemble")), sort_keys=True)
+    assert after == before                            # stage output NOT mutated
+    assert store.get_spec_patches(conn, "s1") == []   # no history row appended
+    conn.close()
+
+
 # ---- F-5: patch history + derived spec version + revert ----
 
 def _session_with_assemble(tmp_path, monkeypatch):

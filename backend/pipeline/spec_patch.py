@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Dict, List, Tuple
 
 from schema import Spec
+from pipeline.validate import SCENE_KINDS
 
 ALLOWED_SCENE_FIELDS = {"template", "templateProps", "media", "transition"}
 FORBIDDEN_SCENE_FIELDS = {"id", "startFrame", "durationInFrames"}
@@ -84,6 +85,69 @@ def validate_patch(patch) -> Tuple[bool, str]:
             check_path(op["path"])
         except PatchError as e:
             return False, str(e)
+    return True, ""
+
+
+def _scene_template_ids(catalog) -> List[str]:
+    return sorted(mid for mid, m in catalog.items() if m.kind in SCENE_KINDS)
+
+
+def _transition_template_ids(catalog) -> List[str]:
+    return sorted(mid for mid, m in catalog.items() if m.kind == "transition")
+
+
+def _check_template_id(template_id, catalog, *, slot: str, where: str) -> str:
+    """Return an error string if `template_id` is not a catalog id valid for `slot`
+    ('scene' or 'transition'), else "". Mirrors render-time validate_spec's rules so
+    a bad id is caught at propose time, not deferred to apply/render."""
+    if not isinstance(template_id, str) or not template_id:
+        return f"{where}: template id must be a non-empty string"
+    manifest = catalog.get(template_id)
+    if manifest is None:
+        valid = _scene_template_ids(catalog) if slot == "scene" else _transition_template_ids(catalog)
+        return (f"{where}: unknown template id {template_id!r} (not in catalog) — "
+                f"valid {slot} templates are {valid}")
+    if slot == "scene" and manifest.kind not in SCENE_KINDS:
+        return (f"{where}: template {template_id!r} has kind {manifest.kind!r}, "
+                f"which cannot fill a scene slot — valid scene templates are "
+                f"{_scene_template_ids(catalog)}")
+    if slot == "transition" and manifest.kind != "transition":
+        return (f"{where}: template {template_id!r} has kind {manifest.kind!r}, "
+                f"but a transition slot requires a transition template — valid ones are "
+                f"{_transition_template_ids(catalog)}")
+    return ""
+
+
+def validate_template_ops(patch, catalog) -> Tuple[bool, str]:
+    """Catalog membership for any template-id the patch sets. The path whitelist
+    (`validate_patch`) proves WHERE an op may write; this proves the template VALUE
+    it writes is a real, slot-appropriate catalog id. Without it the chat 'valid'
+    badge lies and a hallucinated id (e.g. 'clip') only fails at apply/render."""
+    for op in patch:
+        if not isinstance(op, dict) or "value" not in op:
+            continue  # shape errors are validate_patch's job
+        parts = _parts(op.get("path", ""))
+        value = op["value"]
+        # /scenes/{i}/template — the scene slot
+        if len(parts) == 3 and parts[0] == "scenes" and parts[2] == "template":
+            err = _check_template_id(value, catalog, slot="scene",
+                                     where=f"scenes[{parts[1]}].template")
+            if err:
+                return False, err
+        # /scenes/{i}/transition/template — the transition slot (leaf form)
+        elif len(parts) == 4 and parts[0] == "scenes" and parts[2] == "transition" \
+                and parts[3] == "template":
+            err = _check_template_id(value, catalog, slot="transition",
+                                     where=f"scenes[{parts[1]}].transition.template")
+            if err:
+                return False, err
+        # /scenes/{i}/transition — whole-object replace carrying a template id
+        elif len(parts) == 3 and parts[0] == "scenes" and parts[2] == "transition" \
+                and isinstance(value, dict) and "template" in value:
+            err = _check_template_id(value["template"], catalog, slot="transition",
+                                     where=f"scenes[{parts[1]}].transition.template")
+            if err:
+                return False, err
     return True, ""
 
 
@@ -181,8 +245,12 @@ _CHAT_SYSTEM = (
 )
 
 
-def build_chat_messages(message: str, spec: Spec) -> list:
-    """The messages for the chat->patch LLM call (a compact spec summary + request)."""
+def build_chat_messages(message: str, spec: Spec, catalog=None) -> list:
+    """The messages for the chat->patch LLM call (a compact spec summary + request).
+
+    When `catalog` is given, the system prompt is grounded with the exact valid
+    template ids per slot, so the model cannot invent a non-existent id (the 'clip'
+    hallucination that only failed at apply time)."""
     data = spec.model_dump(by_alias=True)
     summary = {
         "theme": data.get("theme"),
@@ -191,9 +259,21 @@ def build_chat_messages(message: str, spec: Spec) -> list:
                     "transition": (s.get("transition") or {}).get("template")}
                    for i, s in enumerate(data.get("scenes", []))],
     }
+    system = _CHAT_SYSTEM
+    if catalog:
+        system = (
+            f"{_CHAT_SYSTEM}\n"
+            f"Valid scene template ids (for /scenes/{{i}}/template) — use ONLY these, "
+            f"never invent one: {_scene_template_ids(catalog)}.\n"
+            f"Valid transition template ids (for a transition's 'template'): "
+            f"{_transition_template_ids(catalog)}.\n"
+            f"To put video footage on a scene, do NOT change its template — set "
+            f"/scenes/{{i}}/templateProps/backgroundClip (hero/stat) or "
+            f"/scenes/{{i}}/media (footage scenes) instead."
+        )
     import json
     return [
-        {"role": "system", "content": _CHAT_SYSTEM},
+        {"role": "system", "content": system},
         {"role": "user", "content": f"Current spec summary:\n{json.dumps(summary)}\n\n"
                                      f"Request: {message}\n\nReturn the JSON object."},
     ]

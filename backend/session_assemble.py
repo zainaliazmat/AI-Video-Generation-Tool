@@ -118,7 +118,8 @@ def chat(sid: str, *, message: str, llm=None) -> dict:
         if spec is None:
             raise RuntimeError("assemble stage has not completed")
         call = llm or _llm_call
-        messages = spec_patch.build_chat_messages(message, spec)
+        catalog = ctx.catalog
+        messages = spec_patch.build_chat_messages(message, spec, catalog)
         last_err = ""
         for attempt in range(2):                  # one bounded retry with the error in context
             content = call(messages)
@@ -127,6 +128,13 @@ def chat(sid: str, *, message: str, llm=None) -> dict:
                 valid, err = spec_patch.validate_patch(ops) if ops else (True, "")
                 if ops and not valid:
                     raise spec_patch.PatchError(err)
+                # Catalog membership: a hallucinated/slot-wrong template id (e.g.
+                # 'clip') passes the path whitelist but must NOT be shown as 'valid'
+                # — catch it here so the retry can fix it, not at apply/render.
+                if ops:
+                    tvalid, terr = spec_patch.validate_template_ops(ops, catalog)
+                    if not tvalid:
+                        raise spec_patch.PatchError(terr)
                 diff = spec_patch.diff_lines(spec, ops) if ops else []
                 return {"ok": True, "sid": sid, "ops": ops, "reply": reply,
                         "diff": diff, "valid": True}
