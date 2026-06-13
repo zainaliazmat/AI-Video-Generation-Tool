@@ -16,7 +16,7 @@ export function Eyebrow({children, className}: {children: React.ReactNode; class
   );
 }
 
-type BadgeTone = 'green' | 'amber' | 'red' | 'purple' | 'blue' | 'dim';
+export type BadgeTone = 'green' | 'amber' | 'red' | 'purple' | 'blue' | 'dim';
 
 const BADGE_TONES: Record<BadgeTone, string> = {
   green: 'bg-[rgba(16,185,129,0.15)] text-[#34d399]',
