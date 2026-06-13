@@ -176,3 +176,43 @@ clip. Capture to `/mnt/user-data/uploads`.
   promotes to an image footage Clip; the `scene` template must render images
   (it already does via the Media image branch). Confirm during eyes-on if an image
   bg is used; videos are the common case.
+
+---
+
+## Parity addendum (2026-06-14) — stat behaves like hook/outro
+
+Approved follow-up after eyes-on: hook/outro auto-fill a background clip
+(`HERO_BACKGROUND_POLICY` "auto"), so their `scene` card is enabled out of the
+box; a stat keeps its gradient ("gradient" policy, no auto background), so its
+`scene` card stayed gated and could only switch after an explicit Background pick.
+The user wants the stat to switch in one click like hook/outro. Two changes:
+
+**Backend — auto-promote the top pool candidate when nothing is pinned.** Extend
+the `_pick_template` no-footage branch: if there is no pinned/auto
+`background_override`, fall back to the scene's **background candidate pool**
+(`footage_out["candidates"][scene]`), choose the lowest-rank row (rank 1 = the AI
+pick), DOWNLOAD it via `self._download_background_clip(chosen, slug, rank)` (mirrors
+`_edit_background` pick, L702-709 — the unpinned candidate isn't on disk yet), build
+a footage `Clip` from the downloaded path + the row's `query/duration_frames/rank/
+pexels_id/pexels_url`, append it to the footage output. Only raise the "pick a
+background clip first" error when there is neither a pinned override NOR any pool
+candidate (truly empty). Unify both promote sources (override / pool) so the switch
+succeeds whenever any clip is available.
+
+**Frontend — enable the `scene` card when the pool has clips.** Widen the gate so
+a hero is "clipless" only when it has no footage candidates AND no pinned background
+AND an empty background pool:
+`heroClipless = !scene.needsFootage && scene.candidates.length === 0 &&
+scene.backgroundProvenance == null && scene.backgroundPool.rows.length === 0`.
+So scene 04 (15 pool clips) enables the `scene` card immediately; the visible
+"pick a clip" reason now only appears in the genuinely-empty-pool case.
+
+**Tests:** backend — a hero with no pinned override but a non-empty candidate pool
+switches to `scene`, auto-promoting the rank-1 candidate into a footage `Clip`
+(download stubbed via `pipeline.footage._download`); the truly-empty case
+(no override, no candidates) still raises. Frontend — `scene` card ENABLED when
+`backgroundPool.rows` is non-empty even with `backgroundProvenance == null`.
+
+**Eyes-on:** on stat scene 04 with the gradient kept — the `scene` card is enabled;
+clicking it renders a footage scene of the rank-1 background clip; the footage pool
+then lets you swap the clip.
