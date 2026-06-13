@@ -159,3 +159,23 @@ def test_scene_media_emits_kind_and_gates_loop():
                duration_frames=5, kind="image")
     mi = _scene_media(img, span_frames=30)
     assert mi.type == "image" and mi.loop is False
+
+
+def test_loop_does_not_mutate_scene_duration():
+    """M4 T4 loop-math contract: a short clip that triggers loop=True must NOT change
+    the scene's durationInFrames. The scene boundary is driven by narration timing
+    (gap-filling from voiceover offsets), never by the clip length.
+
+    Concretely: with a clip shorter than its span (d1=60, T=30 → span=90, clip=45),
+    the scene's durationInFrames must still equal 60 (the narration-derived span d1),
+    and media.loop must be True."""
+    spec = _build(_plan(scene_transition=TransitionIntent("fade", {})),
+                  clips=[Clip(index=1, query="ocean", path="assets/ocean.mp4",
+                               duration_frames=45)])
+    scene = spec.scenes[1]
+    # durationInFrames is narration-derived (60), unchanged by the short clip
+    assert scene.durationInFrames == 60, (
+        f"durationInFrames was mutated to {scene.durationInFrames} by clip length (expected 60)"
+    )
+    # The clip IS shorter than span (60 + 30 = 90), so loop must be True
+    assert scene.templateProps["media"]["loop"] is True, "short clip must set loop=True"
