@@ -84,10 +84,16 @@ def test_hero_with_keywords_uses_hardened_keywords():
 def test_hero_pool_fetched_and_stored_no_download(tmp_path, monkeypatch):
     """Hero pool is stored in candidates; hero clip is NOT downloaded.
 
-    The download fake counts calls — it must be zero for hero (index 0 and 2) scenes.
+    Script: hook(0) · footage(1) · stat(2) · outro(3)
+    The download fake counts calls — it must be zero for hero scenes
+    (indices 0, 2, 3); only the footage scene at index 1 downloads.
     """
     script = BeatsScript(title="Reefs", beats=[
-        Beat(text="hook"), Beat(text="mid", keywords="coral reef"), Beat(text="outro")])
+        Beat(text="hook"),
+        Beat(text="mid", keywords="coral reef"),
+        Beat(text="stat beat", data={"value": "42%", "label": "reefs bleached"}),
+        Beat(text="outro"),
+    ])
     plan = recipe_plan(script, theme=Theme())
     offsets = _offsets(script)
 
@@ -111,11 +117,13 @@ def test_hero_pool_fetched_and_stored_no_download(tmp_path, monkeypatch):
     out = executors.run_footage(ctx, {
         "script": {"script": script, "plan": plan}, "voice": offsets})
 
-    # Hero pools (scene 0 and 2) are stored
+    # Hero pools (hook=0, stat=2, outro=3) are stored
     assert 0 in out["candidates"], "hook pool missing"
-    assert 2 in out["candidates"], "outro pool missing"
+    assert 2 in out["candidates"], "stat pool missing"
+    assert 3 in out["candidates"], "outro pool missing"
     assert len(out["candidates"][0]) > 0, "hook pool is empty"
-    assert len(out["candidates"][2]) > 0, "outro pool is empty"
+    assert len(out["candidates"][2]) > 0, "stat pool is empty"
+    assert len(out["candidates"][3]) > 0, "outro pool is empty"
 
     # Hero rows: selected == 0 (no clip bound)
     for row in out["candidates"][0]:

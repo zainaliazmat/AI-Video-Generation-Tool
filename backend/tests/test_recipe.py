@@ -15,6 +15,7 @@ import pytest
 
 from manifest import Manifest
 from pipeline.content import BeatsScript
+from pipeline.footage_query import harden
 from pipeline.recipe import plan
 from schema import Theme
 
@@ -76,7 +77,7 @@ def test_middle_value_labeled_data_becomes_stat_no_footage():
     assert _roles(p) == ["hook", "stat", "outro"]
     stat = p.scenes[1]
     assert stat.needs_footage is False
-    assert stat.query is None
+    assert stat.query is not None  # stat gets a pool query (gradient policy, pool ready)
 
 
 def test_value_without_label_is_not_a_stat_falls_back_to_scene():
@@ -116,17 +117,19 @@ def test_scene_query_falls_back_to_title_not_sentence():
 
 def test_hook_stat_outro_carry_no_footage():
     """needs_footage stays False for hook/stat/outro — no clip is downloaded.
-    D4: hook and outro now carry a query for pool-fetching; stat has none."""
+    D4: hook, stat, and outro all carry a query for pool-fetching (stat gets
+    the same hardened fallback as hook/outro — gradient policy, pool ready)."""
     p = plan(
         _script(_beat("open"), _beat("f", data={"value": "5", "label": "x"}), _beat("close")),
         theme=Theme(),
     )
     for s in p.scenes:
         assert s.needs_footage is False
-    # stat has no query (not pool-fetched)
+    # stat carries a hardened query for pool-fetching (gradient policy, pool ready)
     stat = p.scenes[1]
     assert stat.role == "stat"
-    assert stat.query is None
+    assert stat.query is not None
+    assert stat.query == harden("My Title", title="My Title")  # no keywords → hardened title
     # hook and outro carry a hardened query for pool-fetching (D4)
     hook, outro = p.scenes[0], p.scenes[2]
     assert hook.role == "hook" and hook.query is not None

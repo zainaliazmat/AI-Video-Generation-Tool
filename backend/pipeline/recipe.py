@@ -164,7 +164,8 @@ def plan(
             hero_query = harden(beat.keywords or script.title, title=script.title)
             scenes.append(PlannedScene(role, catalog["outro"], {"title": beat.text}, needs_footage=False, query=hero_query))
         elif role == "stat":
-            scenes.append(PlannedScene(role, catalog["stat"], _stat_props(beat), needs_footage=False))
+            hero_query = harden(beat.keywords or script.title, title=script.title)
+            scenes.append(PlannedScene(role, catalog["stat"], _stat_props(beat), needs_footage=False, query=hero_query))
         else:  # middle, not stat: enumeration (if a template consumes it) else footage scene
             cap = _required_capability(beat)
             enum_id = _template_for_capability(manifests, cap) if cap else None
