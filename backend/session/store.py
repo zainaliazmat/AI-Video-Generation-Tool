@@ -69,6 +69,35 @@ CREATE TABLE IF NOT EXISTS gates (
   updated_at  TEXT NOT NULL,
   PRIMARY KEY (session_id, gate)
 );
+CREATE TABLE IF NOT EXISTS template_overrides (
+  session_id  TEXT    NOT NULL,
+  scene_index INTEGER NOT NULL,
+  value       TEXT    NOT NULL,  -- JSON
+  source      TEXT    NOT NULL CHECK(source IN ('auto','pinned')),
+  picked_rank INTEGER,
+  updated_at  TEXT    NOT NULL,
+  PRIMARY KEY (session_id, scene_index)
+);
+CREATE TABLE IF NOT EXISTS background_overrides (
+  session_id  TEXT    NOT NULL,
+  scene_index INTEGER NOT NULL,
+  value       TEXT    NOT NULL,  -- JSON
+  source      TEXT    NOT NULL CHECK(source IN ('auto','pinned')),
+  picked_rank INTEGER,
+  updated_at  TEXT    NOT NULL,
+  PRIMARY KEY (session_id, scene_index)
+);
+CREATE TABLE IF NOT EXISTS pick_log (
+  session_id  TEXT    NOT NULL,
+  seq         INTEGER NOT NULL,
+  scene_index INTEGER NOT NULL,
+  kind        TEXT    NOT NULL CHECK(kind IN ('footage','background')),
+  query       TEXT,
+  auto_rank   INTEGER,
+  human_rank  INTEGER,
+  ts          TEXT    NOT NULL,
+  PRIMARY KEY (session_id, seq)
+);
 """
 
 
@@ -312,10 +341,135 @@ def set_auto_run(conn, session_id, flag: bool, *, now) -> None:
     conn.commit()
 
 
+# ── v3-M5: template_overrides and background_overrides ──────────────────────
+
+_OVERRIDE_SOURCES = {"auto", "pinned"}
+
+
+def upsert_template_override(conn, session_id, scene_index, *, value, source,
+                             picked_rank=None, now) -> None:
+    """Persist the template override for one scene (one row per scene, upsert)."""
+    if source not in _OVERRIDE_SOURCES:
+        raise ValueError(
+            f"unknown template override source {source!r} (valid: {sorted(_OVERRIDE_SOURCES)})")
+    conn.execute(
+        "INSERT INTO template_overrides"
+        " (session_id, scene_index, value, source, picked_rank, updated_at)"
+        " VALUES (?,?,?,?,?,?)"
+        " ON CONFLICT(session_id, scene_index) DO UPDATE SET"
+        " value=excluded.value, source=excluded.source,"
+        " picked_rank=excluded.picked_rank, updated_at=excluded.updated_at",
+        (session_id, scene_index, _json.dumps(value), source, picked_rank, now),
+    )
+    conn.commit()
+
+
+def get_template_overrides(conn, session_id) -> dict:
+    """{scene_index: {value, source, picked_rank, updated_at}} for the session."""
+    rows = conn.execute(
+        "SELECT scene_index, value, source, picked_rank, updated_at"
+        " FROM template_overrides WHERE session_id=? ORDER BY scene_index",
+        (session_id,),
+    ).fetchall()
+    return {
+        r["scene_index"]: {
+            "value": _json.loads(r["value"]),
+            "source": r["source"],
+            "picked_rank": r["picked_rank"],
+            "updated_at": r["updated_at"],
+        }
+        for r in rows
+    }
+
+
+def upsert_background_override(conn, session_id, scene_index, *, value, source,
+                               picked_rank=None, now) -> None:
+    """Persist the background override for one scene (one row per scene, upsert)."""
+    if source not in _OVERRIDE_SOURCES:
+        raise ValueError(
+            f"unknown background override source {source!r} (valid: {sorted(_OVERRIDE_SOURCES)})")
+    conn.execute(
+        "INSERT INTO background_overrides"
+        " (session_id, scene_index, value, source, picked_rank, updated_at)"
+        " VALUES (?,?,?,?,?,?)"
+        " ON CONFLICT(session_id, scene_index) DO UPDATE SET"
+        " value=excluded.value, source=excluded.source,"
+        " picked_rank=excluded.picked_rank, updated_at=excluded.updated_at",
+        (session_id, scene_index, _json.dumps(value), source, picked_rank, now),
+    )
+    conn.commit()
+
+
+def get_background_overrides(conn, session_id) -> dict:
+    """{scene_index: {value, source, picked_rank, updated_at}} for the session."""
+    rows = conn.execute(
+        "SELECT scene_index, value, source, picked_rank, updated_at"
+        " FROM background_overrides WHERE session_id=? ORDER BY scene_index",
+        (session_id,),
+    ).fetchall()
+    return {
+        r["scene_index"]: {
+            "value": _json.loads(r["value"]),
+            "source": r["source"],
+            "picked_rank": r["picked_rank"],
+            "updated_at": r["updated_at"],
+        }
+        for r in rows
+    }
+
+
+# ── v3-M5: pick_log (②b append-only pick evidence) ──────────────────────────
+
+_PICK_LOG_KINDS = {"footage", "background"}
+
+
+def append_pick_log(conn, session_id, *, scene_index, kind, query=None,
+                    auto_rank=None, human_rank=None, ts) -> int:
+    """Append one pick-log entry; returns its seq (1-based, per session).
+
+    seq uses the MAX(seq)+1-per-session-in-a-transaction idiom from
+    spec_patches (OV-14: NOT SQLite AUTOINCREMENT which is table-global).
+    ts is a required passed-in timestamp (OV-9: engine._now() returns a fixed
+    token; genuine time is stamped at the CLI boundary and passed through).
+    """
+    if kind not in _PICK_LOG_KINDS:
+        raise ValueError(
+            f"unknown pick_log kind {kind!r} (valid: {sorted(_PICK_LOG_KINDS)})")
+    with conn:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(seq), 0) + 1 FROM pick_log WHERE session_id=?",
+            (session_id,),
+        ).fetchone()
+        seq = row[0]
+        conn.execute(
+            "INSERT INTO pick_log"
+            " (session_id, seq, scene_index, kind, query, auto_rank, human_rank, ts)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (session_id, seq, scene_index, kind, query, auto_rank, human_rank, ts),
+        )
+    return seq
+
+
+def get_pick_log(conn, session_id, scene_index=None) -> list:
+    """Return pick_log rows in seq order, optionally filtered by scene_index."""
+    if scene_index is None:
+        return conn.execute(
+            "SELECT * FROM pick_log WHERE session_id=? ORDER BY seq",
+            (session_id,),
+        ).fetchall()
+    return conn.execute(
+        "SELECT * FROM pick_log WHERE session_id=? AND scene_index=? ORDER BY seq",
+        (session_id, scene_index),
+    ).fetchall()
+
+
 def delete_session(conn, session_id) -> None:
     """Remove a session and ALL its rows across every keyed table.
     One transaction so a crash can't leave half the session behind. Idempotent."""
     with conn:
+        conn.execute("DELETE FROM pick_log WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM background_overrides WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM template_overrides WHERE session_id=?", (session_id,))
         conn.execute("DELETE FROM gates WHERE session_id=?", (session_id,))
         conn.execute("DELETE FROM spec_patches WHERE session_id=?", (session_id,))
         conn.execute("DELETE FROM media_provenance WHERE session_id=?", (session_id,))

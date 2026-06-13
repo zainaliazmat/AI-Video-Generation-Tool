@@ -233,6 +233,11 @@ def test_delete_session_purges_all_tables_structural(tmp_path):
     store.append_spec_patch(conn, sid, kind="patch", patch=[{"op": "add", "path": "/x", "value": 1}],
                             diff=[{"path": "/x", "before": None, "after": 1}], now="t0")
     store.upsert_gate_state(conn, sid, "script", "approved", now="t0")
+    store.upsert_template_override(conn, sid, 0, value={"template": "basic"}, source="auto", now="t0")
+    store.upsert_background_override(conn, sid, 0, value={"color": "#000"}, source="pinned",
+                                     picked_rank=1, now="t0")
+    store.append_pick_log(conn, sid, scene_index=0, kind="footage", query="coral",
+                          auto_rank=1, human_rank=2, ts="2026-06-13T00:00:00")
 
     def _session_keyed_tables(connection):
         """Return list of (table, id_col) for every table that carries a
@@ -276,3 +281,212 @@ def test_delete_session_purges_all_tables_structural(tmp_path):
             f"delete_session left {count} orphan row(s) in table '{table}' "
             f"for session '{sid}' — add it to delete_session()"
         )
+
+
+# ── v3-M5: template_overrides and background_overrides ──────────────────────
+
+def test_template_override_roundtrip(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="t", now="t0")
+    store.upsert_template_override(conn, "s1", 0, value={"template": "basic"}, source="auto", now="t1")
+    got = store.get_template_overrides(conn, "s1")
+    assert got == {0: {"value": {"template": "basic"}, "source": "auto",
+                       "picked_rank": None, "updated_at": "t1"}}
+    conn.close()
+
+
+def test_template_override_upsert_overwrites(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="t", now="t0")
+    store.upsert_template_override(conn, "s1", 0, value={"template": "basic"}, source="auto", now="t1")
+    store.upsert_template_override(conn, "s1", 0, value={"template": "cinema"}, source="pinned",
+                                   picked_rank=3, now="t2")
+    got = store.get_template_overrides(conn, "s1")
+    assert got[0]["value"] == {"template": "cinema"}
+    assert got[0]["source"] == "pinned"
+    assert got[0]["picked_rank"] == 3
+    assert got[0]["updated_at"] == "t2"
+    conn.close()
+
+
+def test_template_override_rejects_bad_source(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    with pytest.raises(ValueError, match="unknown template override source"):
+        store.upsert_template_override(conn, "s1", 0, value={}, source="bogus", now="t0")
+    conn.close()
+
+
+def test_template_override_picked_rank_nullable(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    store.upsert_template_override(conn, "s1", 2, value={"x": 1}, source="auto",
+                                   picked_rank=None, now="t0")
+    assert store.get_template_overrides(conn, "s1")[2]["picked_rank"] is None
+    conn.close()
+
+
+def test_background_override_roundtrip(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="t", now="t0")
+    store.upsert_background_override(conn, "s1", 1, value={"color": "#fff"}, source="pinned",
+                                     picked_rank=2, now="t1")
+    got = store.get_background_overrides(conn, "s1")
+    assert got == {1: {"value": {"color": "#fff"}, "source": "pinned",
+                       "picked_rank": 2, "updated_at": "t1"}}
+    conn.close()
+
+
+def test_background_override_upsert_overwrites(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="t", now="t0")
+    store.upsert_background_override(conn, "s1", 0, value={"color": "#000"}, source="auto", now="t1")
+    store.upsert_background_override(conn, "s1", 0, value={"color": "#red"}, source="pinned",
+                                     picked_rank=1, now="t2")
+    got = store.get_background_overrides(conn, "s1")
+    assert got[0]["value"] == {"color": "#red"}
+    assert got[0]["source"] == "pinned"
+    assert got[0]["updated_at"] == "t2"
+    conn.close()
+
+
+def test_background_override_rejects_bad_source(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    with pytest.raises(ValueError, match="unknown background override source"):
+        store.upsert_background_override(conn, "s1", 0, value={}, source="invalid", now="t0")
+    conn.close()
+
+
+def test_background_override_picked_rank_nullable(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    store.upsert_background_override(conn, "s1", 3, value={"x": 2}, source="auto",
+                                     picked_rank=None, now="t0")
+    assert store.get_background_overrides(conn, "s1")[3]["picked_rank"] is None
+    conn.close()
+
+
+# ── v3-M5: pick_log (②b append-only pick evidence) ──────────────────────────
+
+def test_pick_log_appends_preserve_order(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    store.append_pick_log(conn, "s1", scene_index=0, kind="footage",
+                          query="coral", auto_rank=1, human_rank=2,
+                          ts="2026-06-13T00:00:01")
+    store.append_pick_log(conn, "s1", scene_index=1, kind="background",
+                          query="ocean", auto_rank=3, human_rank=3,
+                          ts="2026-06-13T00:00:02")
+    store.append_pick_log(conn, "s1", scene_index=0, kind="footage",
+                          query="reef", auto_rank=2, human_rank=1,
+                          ts="2026-06-13T00:00:03")
+    rows = store.get_pick_log(conn, "s1")
+    assert [r["seq"] for r in rows] == [1, 2, 3]
+    assert [r["scene_index"] for r in rows] == [0, 1, 0]
+    conn.close()
+
+
+def test_pick_log_seq_is_per_session(tmp_path):
+    """Two different sessions both get seq starting at 1 (OV-14 point)."""
+    conn = store.connect(tmp_path / "s.db")
+    store.append_pick_log(conn, "sA", scene_index=0, kind="footage",
+                          query="q1", ts="2026-06-13T00:00:01")
+    store.append_pick_log(conn, "sA", scene_index=1, kind="footage",
+                          query="q2", ts="2026-06-13T00:00:02")
+    store.append_pick_log(conn, "sB", scene_index=0, kind="background",
+                          query="q3", ts="2026-06-13T00:00:03")
+    rows_a = store.get_pick_log(conn, "sA")
+    rows_b = store.get_pick_log(conn, "sB")
+    assert [r["seq"] for r in rows_a] == [1, 2]
+    assert [r["seq"] for r in rows_b] == [1]
+    conn.close()
+
+
+def test_pick_log_ts_stored_verbatim(tmp_path):
+    """ts is whatever the caller passes — not derived from engine._now()."""
+    conn = store.connect(tmp_path / "s.db")
+    ts = "2026-06-13T12:34:56.789Z"
+    store.append_pick_log(conn, "s1", scene_index=0, kind="footage", ts=ts)
+    rows = store.get_pick_log(conn, "s1")
+    assert rows[0]["ts"] == ts
+    conn.close()
+
+
+def test_pick_log_scene_filter(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    store.append_pick_log(conn, "s1", scene_index=0, kind="footage", ts="t1")
+    store.append_pick_log(conn, "s1", scene_index=2, kind="background", ts="t2")
+    store.append_pick_log(conn, "s1", scene_index=0, kind="footage", ts="t3")
+    filtered = store.get_pick_log(conn, "s1", scene_index=0)
+    assert all(r["scene_index"] == 0 for r in filtered)
+    assert len(filtered) == 2
+    conn.close()
+
+
+def test_pick_log_optional_fields_nullable(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    store.append_pick_log(conn, "s1", scene_index=0, kind="footage", ts="t1")
+    row = store.get_pick_log(conn, "s1")[0]
+    assert row["query"] is None
+    assert row["auto_rank"] is None
+    assert row["human_rank"] is None
+    conn.close()
+
+
+def test_pick_log_rejects_bad_kind(tmp_path):
+    conn = store.connect(tmp_path / "s.db")
+    with pytest.raises(ValueError, match="unknown pick_log kind"):
+        store.append_pick_log(conn, "s1", scene_index=0, kind="video", ts="t1")
+    conn.close()
+
+
+def test_pick_log_migration_safety_new_tables_on_pre_m5_db(tmp_path):
+    """A pre-M5 DB (all previous tables, no override/pick_log tables) connects
+    cleanly — IF NOT EXISTS means new tables are created on first connect."""
+    import sqlite3 as _sqlite3
+    db = tmp_path / "pre_m5.db"
+    raw = _sqlite3.connect(db)
+    # Create only the tables that existed before M5
+    raw.executescript("""
+        CREATE TABLE sessions (
+            id TEXT PRIMARY KEY, topic TEXT NOT NULL, created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL, current_stage TEXT, spec_path TEXT,
+            auto_run INTEGER NOT NULL DEFAULT 0,
+            target_length INTEGER NOT NULL DEFAULT 60
+        );
+        CREATE TABLE stages (
+            session_id TEXT NOT NULL, stage TEXT NOT NULL, status TEXT NOT NULL,
+            input_hash TEXT, output_json TEXT, updated_at TEXT NOT NULL,
+            PRIMARY KEY (session_id, stage)
+        );
+        CREATE TABLE footage_candidates (
+            session_id TEXT NOT NULL, scene_index INTEGER NOT NULL, rank INTEGER NOT NULL,
+            query TEXT NOT NULL, clip_path TEXT, duration_frames INTEGER,
+            thumb_url TEXT, selected INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (session_id, scene_index, rank)
+        );
+        CREATE TABLE media_provenance (
+            session_id TEXT NOT NULL, scene_index INTEGER NOT NULL,
+            source TEXT NOT NULL, query TEXT, rank INTEGER,
+            pexels_id INTEGER, pexels_url TEXT,
+            PRIMARY KEY (session_id, scene_index)
+        );
+        CREATE TABLE spec_patches (
+            session_id TEXT NOT NULL, seq INTEGER NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'patch', patch_json TEXT NOT NULL,
+            diff_json TEXT NOT NULL, reverted INTEGER NOT NULL DEFAULT 0,
+            reverts_seq INTEGER, created_at TEXT NOT NULL,
+            PRIMARY KEY (session_id, seq)
+        );
+        CREATE TABLE gates (
+            session_id TEXT NOT NULL, gate TEXT NOT NULL, state TEXT NOT NULL,
+            approved_at TEXT, updated_at TEXT NOT NULL,
+            PRIMARY KEY (session_id, gate)
+        );
+    """)
+    raw.execute("INSERT INTO sessions VALUES ('old1','t','c','u',NULL,NULL,0,60)")
+    raw.commit()
+    raw.close()
+    conn = store.connect(db)   # must create new tables without error
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    assert {"template_overrides", "background_overrides", "pick_log"} <= tables
+    # existing session still readable
+    assert store.get_session(conn, "old1")["topic"] == "t"
+    conn.close()
