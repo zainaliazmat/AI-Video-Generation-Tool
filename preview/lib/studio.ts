@@ -18,6 +18,11 @@ export type ScriptBeat = {
 
 export type FactFloor = {supported: number; total: number; level: 'ok' | 'warn' | 'hard_fail'};
 
+// M2 amend 4: out-of-band scripts ride a `bandMiss` (camelCase) on the read
+// payload — `requested` is the [min,max] beat band, `got` is the actual count.
+// null when the script landed in-band. Drives the T3 warn pill.
+export type BandMiss = {requested: [number, number]; got: number};
+
 export type ScriptGate = {
   ok: boolean;
   sid: string;
@@ -26,6 +31,7 @@ export type ScriptGate = {
   sources: {url: string; title: string | null}[];
   verifyReport: {text: string; verdict: string}[];
   factFloor: FactFloor;
+  bandMiss?: BandMiss | null;
 };
 
 export type Voice = {id: string; name: string; character: string; lang: string};

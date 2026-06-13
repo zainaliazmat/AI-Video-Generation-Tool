@@ -13,7 +13,8 @@
 // `#bar { gap:8px } .stp { padding:7px 8px } .stp span.lbl { display:none }`
 // and `#autorun span.lbl { display:none }` rule.
 
-import {useCallback, useEffect, useRef} from 'react';
+import {useCallback, useRef} from 'react';
+import Link from 'next/link';
 import {cn} from '@/lib/cn';
 import type {GatesDict} from '@/lib/studio';
 
@@ -161,11 +162,13 @@ export function GateStepper({
 
       {/* Gate steps */}
       <div className="flex items-center gap-0.5" role="list">
-        {/* Topic — non-gate home step (always accessible via back nav, dim here) */}
-        <span
-          className="flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-[7px] font-ui text-[12.5px] font-semibold text-ink-muted"
+        {/* Topic — non-gate home step. Links Home (the global Nav is hidden on
+            /video routes, so this is the route back to the topic screen). */}
+        <Link
+          href="/"
+          className="flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-[7px] font-ui text-[12.5px] font-semibold text-ink-muted transition-colors duration-[250ms] hover:bg-white/[0.08] hover:text-ink-secondary"
           role="listitem"
-          aria-label="Topic (start)"
+          aria-label="Topic — back to home"
         >
           <span
             className={cn(
@@ -177,7 +180,7 @@ export function GateStepper({
             ✦
           </span>
           <span className="lbl sm:inline hidden">Topic</span>
-        </span>
+        </Link>
 
         <span className="px-[1px] text-[11px] text-ink-muted opacity-50" aria-hidden="true">›</span>
 

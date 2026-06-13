@@ -192,6 +192,14 @@ export default function HubPage() {
     <div>
       {/* Title bar */}
       <div className="glass mb-4 flex items-center gap-3 rounded-[var(--radius-xl)] px-4 py-3">
+        {/* Home crumb — the global Nav is hidden on /video routes (v3 chrome). */}
+        <Link
+          href="/"
+          aria-label="Back to home"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/[0.06] text-accent-1 transition hover:bg-white/[0.1]"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 5l-7 7 7 7" /></svg>
+        </Link>
         <div className="min-w-0">
           <Eyebrow className="mb-1">Editing hub</Eyebrow>
           <h1 className="truncate font-ui text-[18px] font-semibold tracking-tight text-ink">
