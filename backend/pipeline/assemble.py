@@ -38,6 +38,8 @@ from schema import Spec, Meta, Audio, Scene, Media, KenBurns, Caption, Theme, Tr
 from manifest import Manifest
 from pipeline.frames import seconds_to_frames
 from pipeline.recipe import ScenePlan, TransitionIntent, _stat_props, _enumeration_props
+from pipeline.validate import SCENE_KINDS
+from pipeline.contracts import Clip as _Clip
 
 
 def scene_spans(line_offsets, fps: int):
@@ -112,8 +114,6 @@ def build_spec(
     bg_overrides = {int(k): v for k, v in bg_overrides.items()}
     tmpl_overrides = {int(k): v for k, v in tmpl_overrides.items()}
 
-    import sys as _sys
-
     scenes = []
     for i, ps in enumerate(scenes_plan):
         dur_i = durations[i]
@@ -134,14 +134,14 @@ def build_spec(
                 print(
                     f"assemble: template_override scene {i}: unknown template id "
                     f"{override_id!r} — skipping (catalog has: {sorted(catalog)})",
-                    file=_sys.stderr,
+                    file=sys.stderr,
                 )
-            elif m.kind not in ("hook", "scene", "stat", "outro", "lower-third"):
+            elif m.kind not in SCENE_KINDS:
                 # Transitions and overlays are not valid scene templates — reject.
                 print(
                     f"assemble: template_override scene {i}: template {override_id!r} "
                     f"has kind={m.kind!r} which is not a scene-template kind — skipping",
-                    file=_sys.stderr,
+                    file=sys.stderr,
                 )
             else:
                 template = override_id
@@ -208,7 +208,7 @@ def build_spec(
                     print(
                         f"assemble: template_override scene {i}: 'stat' override but "
                         f"beat has no stat data — keeping original props",
-                        file=_sys.stderr,
+                        file=sys.stderr,
                     )
                     template = ps.template
             elif catalog.get(override_id) and catalog[override_id].consumes == "enumeration":
@@ -220,7 +220,7 @@ def build_spec(
                     print(
                         f"assemble: template_override scene {i}: enumeration override but "
                         f"beat has no items data — keeping original props",
-                        file=_sys.stderr,
+                        file=sys.stderr,
                     )
                     template = ps.template
             elif new_kind == "hook":
@@ -250,15 +250,16 @@ def build_spec(
             clip_value = bg_row.get("value") if isinstance(bg_row, dict) else None
             if clip_value:
                 # Reconstitute a Clip from the stored value dict (the auto-fill hook
-                # wrote it as {path, query, rank, pexels_id, pexels_url, duration_frames}).
-                from pipeline.contracts import Clip as _Clip
+                # wrote it as {path, query, rank, pexels_id, pexels_url, duration_frames,
+                # kind}).  Use the stored kind so an uploaded image renders via <Img>
+                # rather than OffthreadVideo (Fix 1).
                 span = dur_i + t_frames
                 bg_clip = _Clip(
                     index=i,
                     query=clip_value.get("query", ""),
                     path=clip_value["path"],
                     duration_frames=clip_value.get("duration_frames"),
-                    kind="video",  # background overrides are always video clips
+                    kind=clip_value.get("kind", "video"),
                 )
                 bg_media = _scene_media(bg_clip, span)
                 props["backgroundClip"] = bg_media.model_dump(by_alias=True)

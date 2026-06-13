@@ -245,26 +245,18 @@ class Engine:
             if chosen_row is None:
                 continue  # shouldn't happen; defensive
 
-            # Download the clip (same assets dir + same naming idiom as _edit_footage).
+            # Download the clip via the shared helper (fail-loud-safe: returns None on
+            # missing link or download failure → no override row, no crash).
             slug = footage_stage.query_slug(chosen_row.get("query", ""))
             rank = sel.rank
-            dest = self.ctx.assets_dir / f"footage_bg_{slug}_{rank}.mp4"
-            self.ctx.assets_dir.mkdir(parents=True, exist_ok=True)
-            if not dest.exists():
-                try:
-                    footage_stage._download(sel.link, dest)
-                except Exception:
-                    continue  # download failed → no override row, no crash
+            # _download_background_clip needs a "link" key; chosen_row already has it.
+            dest_path = self._download_background_clip(
+                {**chosen_row, "link": sel.link}, slug, rank)
+            if dest_path is None:
+                continue  # download failed or no link → no override row, no crash
 
-            # Build the Media-shaped clip dict for the override value.
-            clip_value = {
-                "path": f"assets/{dest.name}",
-                "query": chosen_row.get("query"),
-                "rank": rank,
-                "pexels_id": chosen_row.get("pexels_id"),
-                "pexels_url": chosen_row.get("pexels_url"),
-                "duration_frames": chosen_row.get("duration_frames"),
-            }
+            chosen_row["_dest_path"] = dest_path
+            clip_value = self._clip_value_from_row(chosen_row, kind="video")
 
             # Write the background_overrides row (upsert — idempotent on re-fire).
             ts = datetime.now(timezone.utc).isoformat()  # OV-9: real time in-process hook
@@ -536,13 +528,21 @@ class Engine:
 
         if op["op"] == "re_query":
             from pipeline.footage_query import harden
-            # broaden=True → use the topic title (the autopilot whiff-fallback idiom,
-            # §5.3.3: ground-truth in executors._footage_requests, harden(plan.title, title=...))
+            # broaden=True → use plan.title (the autopilot whiff-fallback idiom,
+            # §5.3.3: ground-truth in executors._footage_requests, harden(plan.title, title=...)).
+            # Use plan.title (LLM-generated) not ctx.topic (raw user input) to mirror autopilot.
+            script_bundle = self._load_output("script")
+            plan_title = (script_bundle["plan"].title
+                          if script_bundle and script_bundle.get("plan") is not None
+                          else self.ctx.topic)
             if op.get("broaden"):
-                raw_q = self.ctx.topic
+                raw_q = plan_title
             else:
                 raw_q = op["query"]
-            q = harden(raw_q, title=self.ctx.topic)
+            q = harden(raw_q, title=plan_title)
+            # NOTE: footage re_query does NOT use _requery_pool — the pool write for
+            # the footage path is shared with the pick path in the unified tail below
+            # (both converge on `rows` + `chosen` then do the single store write).
             key = footage_stage.require_env("PEXELS_API_KEY")
             data = footage_stage.search_pexels(q, key)
             rows = footage_stage.candidate_rows(data.get("videos", []), query=q, fps=self.ctx.fps)
@@ -596,6 +596,69 @@ class Engine:
             query=chosen["query"], rank=chosen["rank"],
             pexels_id=chosen.get("pexels_id"), pexels_url=chosen.get("pexels_url"))
 
+    # ── shared pool-refresh helper (Fix 6) ───────────────────────────────────────
+
+    def _requery_pool(self, q: str, scene: int, out: dict) -> list:
+        """Search Pexels for `q`, replace the candidate pool for `scene` in `out` and
+        in the DB, and persist the updated footage output.  Returns the new rows list.
+
+        Both footage re_query and background re_query share this prologue; callers
+        branch on the tail (footage rebinds a clip; background auto-follows per Fix 5)."""
+        from pipeline import footage as footage_stage
+
+        key = footage_stage.require_env("PEXELS_API_KEY")
+        data = footage_stage.search_pexels(q, key)
+        rows = footage_stage.candidate_rows(data.get("videos", []), query=q, fps=self.ctx.fps)
+        for r in rows:
+            r["selected"] = 0
+            r.setdefault("clip_path", None)
+        out["candidates"][scene] = rows
+        store.replace_footage_candidates(self.conn, self.sid, scene_index=scene, candidates=rows)
+        to_json, _ = CODECS["footage"]
+        store.upsert_stage(self.conn, self.sid, "footage", status="done",
+                           input_hash=store.get_stage(self.conn, self.sid, "footage")["input_hash"],
+                           output_json=json.dumps(to_json(out), default=str), now=_now())
+        return rows
+
+    # ── background clip helpers (Fix 4) ──────────────────────────────────────────
+
+    @staticmethod
+    def _clip_value_from_row(row: dict, *, kind: str = "video") -> dict:
+        """Build the Media-shaped dict stored in background_overrides.value from a
+        pool row.  `kind` is explicit so callers never silently inherit a wrong default:
+        pass 'video' for Pexels results, the probed kind for uploads."""
+        return {
+            "path": row["_dest_path"],   # set by _download_background_clip
+            "query": row.get("query"),
+            "rank": row.get("rank"),
+            "pexels_id": row.get("pexels_id"),
+            "pexels_url": row.get("pexels_url"),
+            "duration_frames": row.get("duration_frames"),
+            "kind": kind,
+        }
+
+    def _download_background_clip(self, row: dict, slug: str, rank) -> "str | None":
+        """Download a background clip to assets_dir and return the `assets/<name>` path,
+        or None on missing link OR download failure (fail-loud-safe so callers can never
+        write a background_override pointing at a file that was never downloaded).
+
+        The dest filename follows the same `footage_bg_{slug}_{rank}.mp4` idiom used by
+        the auto-fill hook and the pick path so all three share the same cache on disk."""
+        from pipeline import footage as footage_stage
+
+        dest = self.ctx.assets_dir / f"footage_bg_{slug}_{rank}.mp4"
+        self.ctx.assets_dir.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            return f"assets/{dest.name}"
+        link = row.get("link")
+        if not link:
+            return None
+        try:
+            footage_stage._download(link, dest)
+        except Exception:
+            return None
+        return f"assets/{dest.name}"
+
     def _edit_background(self, out, scene, op):
         """Background overrides for hero scenes: pick/re_query/upload write to
         background_overrides + pick_log instead of clips/provenance.
@@ -607,7 +670,7 @@ class Engine:
                   (never touch pinned). pick_log entry records the query change (human_rank=None).
         upload:   probe/stage the file (reuse _upload_footage's idiom), write background_overrides
                   {source:"pinned", picked_rank:None} + pick_log row.
-        broaden:  if op.get("broaden") is True, query := topic title (for re_query ops).
+        broaden:  if op.get("broaden") is True, query := plan.title (for re_query ops).
         """
         from pipeline import footage as footage_stage
         from pipeline.footage_query import harden
@@ -630,25 +693,14 @@ class Engine:
                                if existing_row and existing_row.get("source") == "auto"
                                else None)
 
-            # Download (same naming idiom as _auto_fill_hero_backgrounds)
+            # Download via shared helper; raise loud on missing link (pick is deterministic).
             slug = footage_stage.query_slug(chosen.get("query", ""))
-            dest = self.ctx.assets_dir / f"footage_bg_{slug}_{rank}.mp4"
-            self.ctx.assets_dir.mkdir(parents=True, exist_ok=True)
-            if not dest.exists():
-                link = chosen.get("link")
-                if not link:
-                    raise RuntimeError(
-                        f"background pick: no download link for scene {scene} rank {rank}")
-                footage_stage._download(link, dest)
-
-            clip_value = {
-                "path": f"assets/{dest.name}",
-                "query": chosen.get("query"),
-                "rank": rank,
-                "pexels_id": chosen.get("pexels_id"),
-                "pexels_url": chosen.get("pexels_url"),
-                "duration_frames": chosen.get("duration_frames"),
-            }
+            dest_path = self._download_background_clip(chosen, slug, rank)
+            if dest_path is None:
+                raise RuntimeError(
+                    f"background pick: no download link for scene {scene} rank {rank}")
+            chosen["_dest_path"] = dest_path
+            clip_value = self._clip_value_from_row(chosen, kind="video")
             store.upsert_background_override(
                 self.conn, self.sid, scene,
                 value=clip_value, source="pinned", picked_rank=rank, now=ts)
@@ -659,62 +711,76 @@ class Engine:
                 auto_rank=prior_auto_rank, human_rank=rank, ts=ts)
 
         elif op["op"] == "re_query":
-            # broaden=True → use topic title (gate-op form of the autopilot whiff-fallback)
+            # broaden=True → use plan.title (gate-op form of the autopilot whiff-fallback).
+            # Use plan.title (LLM-generated) not ctx.topic (raw user input) to mirror autopilot.
+            script_bundle = self._load_output("script")
+            plan_title = (script_bundle["plan"].title
+                          if script_bundle and script_bundle.get("plan") is not None
+                          else self.ctx.topic)
             if op.get("broaden"):
-                raw_q = self.ctx.topic
+                raw_q = plan_title
             else:
                 raw_q = op["query"]
-            q = harden(raw_q, title=self.ctx.topic)
-            key = footage_stage.require_env("PEXELS_API_KEY")
-            data = footage_stage.search_pexels(q, key)
-            rows = footage_stage.candidate_rows(data.get("videos", []), query=q, fps=self.ctx.fps)
+            q = harden(raw_q, title=plan_title)
+            # Replace pool via shared helper (search+candidates+upsert_stage).
+            rows = self._requery_pool(q, scene, out)
 
-            # Replace the pool for this scene in the footage output and DB
-            for r in rows:
-                r["selected"] = 0
-                r.setdefault("clip_path", None)
-            out["candidates"][scene] = rows
-            store.replace_footage_candidates(self.conn, self.sid, scene_index=scene, candidates=rows)
-
-            to_json, _ = CODECS["footage"]
-            store.upsert_stage(self.conn, self.sid, "footage", status="done",
-                               input_hash=store.get_stage(self.conn, self.sid, "footage")["input_hash"],
-                               output_json=json.dumps(to_json(out), default=str), now=_now())
-
-            # Update the AUTO row to the new rank-1 only if current row is source=auto
-            # (never touch a pinned row — the policy contract for background re_query)
+            # Update the AUTO row only if current row is source=auto
+            # (never touch a pinned row — the policy contract for background re_query).
+            # Fix 5: use select_clip with the same K-floor the auto-fill hook uses so
+            # a pool whose rank-1 is too short doesn't auto-follow to a broken clip.
             existing_overrides = store.get_background_overrides(self.conn, self.sid)
             existing_row = existing_overrides.get(scene)
             if existing_row is None or existing_row.get("source") == "auto":
                 if rows:
-                    new_rank1 = rows[0]
-                    # Download the new rank-1 clip for the auto row
-                    slug = footage_stage.query_slug(new_rank1.get("query", ""))
-                    rank = new_rank1.get("rank", 1)
-                    dest = self.ctx.assets_dir / f"footage_bg_{slug}_{rank}.mp4"
-                    self.ctx.assets_dir.mkdir(parents=True, exist_ok=True)
-                    if not dest.exists():
-                        link = new_rank1.get("link")
-                        if link:
-                            try:
-                                footage_stage._download(link, dest)
-                            except Exception:
-                                dest = None  # download failed → skip row update
-                    if dest is not None:
-                        clip_value = {
-                            "path": f"assets/{dest.name}",
-                            "query": new_rank1.get("query"),
-                            "rank": rank,
-                            "pexels_id": new_rank1.get("pexels_id"),
-                            "pexels_url": new_rank1.get("pexels_url"),
-                            "duration_frames": new_rank1.get("duration_frames"),
+                    from pipeline import assemble as assemble_stage
+
+                    # Reconstruct min_frames the same way _auto_fill_hero_backgrounds does.
+                    offsets = self._load_output("voice")
+                    _, durations, _ = assemble_stage.scene_spans(offsets, self.ctx.fps)
+                    headroom = max(
+                        (m.durationFrames.max for m in self.ctx.catalog.values()
+                         if m.kind == "transition"),
+                        default=0,
+                    )
+                    fps = self.ctx.fps
+                    min_frames = (durations[scene] + headroom) // 2
+
+                    # Reconstruct minimal Pexels video shape for select_clip.
+                    def _row_to_pexels_video(r):
+                        dur_frames = r.get("duration_frames")
+                        dur_s = (dur_frames / fps) if (dur_frames and fps) else None
+                        return {
+                            "duration": dur_s,
+                            "video_files": [{"link": r.get("link", ""), "width": 1080,
+                                             "height": 1920, "file_type": "video/mp4"}],
+                            "id": r.get("pexels_id"),
+                            "url": r.get("pexels_url"),
                         }
-                        store.upsert_background_override(
-                            self.conn, self.sid, scene,
-                            value=clip_value, source="auto", picked_rank=rank, now=ts)
-                else:
-                    # Empty pool — leave existing auto row in place (no download, no row update)
-                    pass
+
+                    videos = [_row_to_pexels_video(r) for r in rows]
+                    sel = footage_stage.select_clip(videos, min_frames=min_frames, fps=fps)
+
+                    if sel.link is not None:
+                        # Bind the pool row whose rank matches the K-floor selection.
+                        chosen_row = next(
+                            (r for r in rows if r.get("rank") == sel.rank), None)
+                        if chosen_row is not None:
+                            slug = footage_stage.query_slug(chosen_row.get("query", ""))
+                            rank = sel.rank
+                            # Use shared download helper (fail-loud-safe).
+                            dest_path = self._download_background_clip(
+                                {**chosen_row, "link": sel.link}, slug, rank)
+                            if dest_path is not None:
+                                chosen_row["_dest_path"] = dest_path
+                                clip_value = self._clip_value_from_row(
+                                    chosen_row, kind="video")
+                                store.upsert_background_override(
+                                    self.conn, self.sid, scene,
+                                    value=clip_value, source="auto", picked_rank=rank,
+                                    now=ts)
+                # else: empty pool or no usable clip → leave existing auto row in place
+
             # Record re_query in pick_log (human_rank=None — not a human pick, a pool refresh)
             store.append_pick_log(
                 self.conn, self.sid,
@@ -747,14 +813,17 @@ class Engine:
             if not dest.exists():
                 dest.write_bytes(data)
 
-            clip_value = {
-                "path": f"assets/{name}",
+            # Build clip_value via shared helper; upload carries the probed kind
+            # so assemble.py renders images via <Img>, not OffthreadVideo.
+            upload_row = {
+                "_dest_path": f"assets/{name}",
                 "query": basename,
                 "rank": None,
                 "pexels_id": None,
                 "pexels_url": None,
                 "duration_frames": duration_frames,
             }
+            clip_value = self._clip_value_from_row(upload_row, kind=kind)
             store.upsert_background_override(
                 self.conn, self.sid, scene,
                 value=clip_value, source="pinned", picked_rank=None, now=ts)

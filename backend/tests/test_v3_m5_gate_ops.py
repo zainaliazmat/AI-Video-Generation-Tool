@@ -355,6 +355,256 @@ def test_broaden_true_uses_topic_title_for_background_requery(tmp_path, monkeypa
     conn.close()
 
 
+# ── 6b. broaden uses plan.title, not ctx.topic (Fix 2) ───────────────────────
+
+def test_broaden_uses_plan_title_not_topic_for_footage_requery(tmp_path, monkeypatch):
+    """broaden=True on footage re_query uses plan.title (LLM title), not ctx.topic (raw input).
+
+    The script fake returns a title that differs from the ctx.topic so the test fails
+    if the engine uses ctx.topic instead of plan.title."""
+    raw_topic = "ocean"               # ctx.topic — raw user input
+    plan_title = "Coral Reef Wonders"  # plan.title — LLM-generated (differs from topic)
+    expected_q = harden(plan_title, title=plan_title)
+    searched = {"q": None}
+
+    def fake_search(q, key):
+        searched["q"] = q
+        return {"videos": [_fake_video(link="b.mp4", duration_s=6.0, pexels_id=1)]}
+
+    # Script fake returns a title different from raw_topic
+    from pipeline.content import Beat, BeatsScript
+    script = BeatsScript(title=plan_title, beats=[
+        Beat(text="hook"),
+        Beat(text="mid reef", keywords="coral reef"),
+        Beat(text="outro"),
+    ])
+    monkeypatch.setattr("pipeline.script.generate_grounded_script",
+                        lambda t, cache_dir=None, **kw: script)
+    monkeypatch.setattr(
+        "pipeline.tts.synthesize",
+        lambda lines, path, **kw: (
+            Path(path).parent.mkdir(parents=True, exist_ok=True),
+            Path(path).write_bytes(b"W"),
+            [LineOffset(i, t, float(i), float(i + 1)) for i, t in enumerate(lines)])[-1],
+    )
+    monkeypatch.setattr("pipeline.timing.transcribe_words",
+                        lambda wav, fps: [WordTiming("w", 0, 5)])
+    monkeypatch.setattr("pipeline.footage.require_env", lambda name: "KEY")
+    monkeypatch.setattr("pipeline.footage.search_pexels", fake_search)
+    monkeypatch.setattr("pipeline.footage.fetch_footage",
+                        lambda reqs, out_dir, *, fps=30, **kw: [
+                            Clip(index=r.index, query=r.query,
+                                 path=f"assets/f{r.index}.mp4", duration_frames=300)
+                            for r in reqs
+                        ])
+    monkeypatch.setattr("pipeline.footage._download",
+                        lambda url, dest: Path(dest).write_bytes(b"clip"))
+
+    catalog = validate_stage.load_catalog(_TEMPLATES)
+    ctx = EngineContext(
+        topic=raw_topic, fps=30, theme=Theme(), catalog=catalog,
+        assets_dir=tmp_path / "a", cache_dir=tmp_path / "c",
+        voiceover_path=tmp_path / "a" / "v.wav",
+        spec_out=tmp_path / "spec.json", sources_out=tmp_path / "src.json",
+    )
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic=raw_topic, now="t0")
+    eng = engine.Engine(conn, ctx, session_id="s1")
+    eng.advance("script")
+    eng.advance("voice")
+    eng.advance("timing")
+    eng.advance("footage")
+    searched["q"] = None  # reset — we only care about the re_query call
+
+    eng.edit("footage", {"op": "re_query", "scene_index": 1, "broaden": True})
+
+    assert searched["q"] == expected_q, (
+        f"broaden=True must use harden(plan.title); "
+        f"expected {expected_q!r}, got {searched['q']!r}. "
+        f"ctx.topic={raw_topic!r} — if that matches, broaden is using ctx.topic instead.")
+    conn.close()
+
+
+def test_broaden_uses_plan_title_not_topic_for_background_requery(tmp_path, monkeypatch):
+    """broaden=True on background re_query uses plan.title (LLM title), not ctx.topic."""
+    raw_topic = "ocean"
+    plan_title = "Coral Reef Wonders"
+    expected_q = harden(plan_title, title=plan_title)
+    searched = {"q": None}
+
+    def fake_search(q, key):
+        searched["q"] = q
+        return {"videos": [_fake_video(link="b.mp4", duration_s=6.0, pexels_id=1)]}
+
+    from pipeline.content import Beat, BeatsScript
+    script = BeatsScript(title=plan_title, beats=[
+        Beat(text="hook"),
+        Beat(text="mid reef", keywords="coral reef"),
+        Beat(text="outro"),
+    ])
+    monkeypatch.setattr("pipeline.script.generate_grounded_script",
+                        lambda t, cache_dir=None, **kw: script)
+    monkeypatch.setattr(
+        "pipeline.tts.synthesize",
+        lambda lines, path, **kw: (
+            Path(path).parent.mkdir(parents=True, exist_ok=True),
+            Path(path).write_bytes(b"W"),
+            [LineOffset(i, t, float(i), float(i + 1)) for i, t in enumerate(lines)])[-1],
+    )
+    monkeypatch.setattr("pipeline.timing.transcribe_words",
+                        lambda wav, fps: [WordTiming("w", 0, 5)])
+    monkeypatch.setattr("pipeline.footage.require_env", lambda name: "KEY")
+    monkeypatch.setattr("pipeline.footage.search_pexels", fake_search)
+    monkeypatch.setattr("pipeline.footage.fetch_footage",
+                        lambda reqs, out_dir, *, fps=30, **kw: [
+                            Clip(index=r.index, query=r.query,
+                                 path=f"assets/f{r.index}.mp4", duration_frames=300)
+                            for r in reqs
+                        ])
+    monkeypatch.setattr("pipeline.footage._download",
+                        lambda url, dest: Path(dest).write_bytes(b"clip"))
+
+    catalog = validate_stage.load_catalog(_TEMPLATES)
+    ctx = EngineContext(
+        topic=raw_topic, fps=30, theme=Theme(), catalog=catalog,
+        assets_dir=tmp_path / "a", cache_dir=tmp_path / "c",
+        voiceover_path=tmp_path / "a" / "v.wav",
+        spec_out=tmp_path / "spec.json", sources_out=tmp_path / "src.json",
+    )
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic=raw_topic, now="t0")
+    eng = engine.Engine(conn, ctx, session_id="s1")
+    eng.advance("script")
+    eng.advance("voice")
+    eng.advance("timing")
+    eng.advance("footage")
+    searched["q"] = None  # reset
+
+    eng.edit("footage", {"op": "re_query", "scene_index": 0, "broaden": True,
+                          "target": "background"})
+
+    assert searched["q"] == expected_q, (
+        f"broaden=True must use harden(plan.title) for background; "
+        f"expected {expected_q!r}, got {searched['q']!r}. "
+        f"ctx.topic={raw_topic!r} — if that matches, broaden is using ctx.topic instead.")
+    conn.close()
+
+
+# ── 5b. re_query bg auto-follow respects K-floor (Fix 5) ─────────────────────
+
+def test_requery_bg_autofill_follows_kfloor_not_rank1(tmp_path, monkeypatch):
+    """Background re_query auto-follow respects the K-floor: when rank-1 is below the
+    floor, the auto row is updated to the K-floor's longer pick, not rank-1.
+
+    Setup: TTS gives scene 0 a 1-second duration → floor = (30 + headroom) // 2.
+    With real catalog (fade=30, slide=40 max), headroom=40 → floor=35 frames.
+    New pool from re_query: rank-1 ~6 frames (0.2s, below floor), rank-2 ~300 frames.
+    Expected: auto row updated to rank-2 (K-floor displaced rank-1)."""
+    from pipeline.content import Beat, BeatsScript
+
+    short_vid = _fake_video(link="short.mp4", duration_s=0.2, pexels_id=11)   # ~6 frames
+    long_vid  = _fake_video(link="long.mp4",  duration_s=10.0, pexels_id=22)  # ~300 frames
+
+    script = BeatsScript(title="Coral Reefs", beats=[
+        Beat(text="hook"), Beat(text="mid", keywords="reef"), Beat(text="outro")])
+
+    monkeypatch.setattr("pipeline.script.generate_grounded_script",
+                        lambda t, cache_dir=None, **kw: script)
+    monkeypatch.setattr(
+        "pipeline.tts.synthesize",
+        lambda lines, path, **kw: (
+            Path(path).parent.mkdir(parents=True, exist_ok=True),
+            Path(path).write_bytes(b"W"),
+            [LineOffset(i, t, float(i), float(i + 1)) for i, t in enumerate(lines)])[-1],
+    )
+    monkeypatch.setattr("pipeline.timing.transcribe_words",
+                        lambda wav, fps: [WordTiming("w", 0, 5)])
+    monkeypatch.setattr("pipeline.footage.require_env", lambda name: "KEY")
+    monkeypatch.setattr("pipeline.footage.fetch_footage",
+                        lambda reqs, out_dir, *, fps=30, **kw: [
+                            Clip(index=r.index, query=r.query,
+                                 path=f"assets/f{r.index}.mp4", duration_frames=300)
+                            for r in reqs
+                        ])
+    # Initial pool: something valid so auto-fill succeeds
+    monkeypatch.setattr("pipeline.footage.search_pexels",
+                        lambda q, key: {"videos": [long_vid]})
+    monkeypatch.setattr("pipeline.footage._download",
+                        lambda url, dest: Path(dest).write_bytes(b"clip"))
+
+    catalog = validate_stage.load_catalog(_TEMPLATES)
+    ctx = EngineContext(
+        topic="Coral Reefs", fps=30, theme=Theme(), catalog=catalog,
+        assets_dir=tmp_path / "a", cache_dir=tmp_path / "c",
+        voiceover_path=tmp_path / "a" / "v.wav",
+        spec_out=tmp_path / "spec.json", sources_out=tmp_path / "src.json",
+    )
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="Coral Reefs", now="t0")
+    eng = engine.Engine(conn, ctx, session_id="s1")
+    eng.advance("script")
+    eng.advance("voice")
+    eng.advance("timing")
+    eng.advance("footage")
+
+    # Scene 0 (hook) has an auto row after advance — verify it exists
+    overrides_before = store.get_background_overrides(conn, "s1")
+    assert 0 in overrides_before and overrides_before[0]["source"] == "auto"
+
+    # re_query background for hook (scene 0) — new pool: rank-1 short, rank-2 long
+    def re_search(q, key):
+        return {"videos": [short_vid, long_vid]}
+    monkeypatch.setattr("pipeline.footage.search_pexels", re_search)
+
+    eng.edit("footage", {"op": "re_query", "scene_index": 0, "query": "new query",
+                          "target": "background"})
+
+    overrides = store.get_background_overrides(conn, "s1")
+    assert 0 in overrides, "auto row must still exist after re_query"
+    # rank-1 is short (6 frames < floor 35) → K-floor displaces to rank-2 (pexels_id=22)
+    assert overrides[0]["value"]["pexels_id"] == 22, (
+        f"K-floor must displace rank-1 (pexels_id=11) to rank-2 (pexels_id=22); "
+        f"got pexels_id={overrides[0]['value'].get('pexels_id')}")
+    assert overrides[0]["picked_rank"] == 2, (
+        f"auto row picked_rank must be 2 (K-floor pick); got {overrides[0]['picked_rank']}")
+    conn.close()
+
+
+# ── Fix 1: uploaded image background → spec backgroundClip.type == 'image' ────
+
+def test_uploaded_image_background_produces_image_type_in_spec(tmp_path, monkeypatch):
+    """Uploading a .png as a background clip must produce backgroundClip.type == 'image'
+    in the assembled spec (not 'video' which would route through OffthreadVideo)."""
+    from pipeline import media_probe as mp_mod
+
+    eng, conn, ctx, catalog = _make_session(tmp_path, monkeypatch)
+
+    # Create a fake PNG file to upload as background
+    fake_png = tmp_path / "backdrop.png"
+    fake_png.write_bytes(b"\x89PNG\r\n")  # minimal PNG-ish header
+
+    # No ffprobe needed for images — kind_from_extension returns 'image' directly
+    eng.edit("footage", {"op": "upload", "scene_index": 0, "file": str(fake_png),
+                          "target": "background"})
+
+    # Check background_overrides row carries kind='image'
+    overrides = store.get_background_overrides(conn, "s1")
+    assert 0 in overrides, "background_overrides row must be written for scene 0"
+    clip_val = overrides[0]["value"]
+    assert clip_val.get("kind") == "image", (
+        f"uploaded PNG background must store kind='image'; got kind={clip_val.get('kind')!r}")
+
+    # Check assembled spec has backgroundClip.type == 'image'
+    spec = json.loads((tmp_path / "spec.json").read_text())
+    hook_props = spec["scenes"][0].get("templateProps", {})
+    assert "backgroundClip" in hook_props, (
+        "hook scene templateProps must contain backgroundClip after upload")
+    assert hook_props["backgroundClip"]["type"] == "image", (
+        f"backgroundClip.type must be 'image' for a PNG upload; "
+        f"got type={hook_props['backgroundClip']['type']!r}")
+    conn.close()
+
+
 # ── 7. pick_template happy path ──────────────────────────────────────────────
 
 def test_pick_template_happy_path(tmp_path, monkeypatch):
