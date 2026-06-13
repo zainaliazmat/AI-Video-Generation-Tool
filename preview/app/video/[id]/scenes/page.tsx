@@ -78,7 +78,8 @@ export default function ScenesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [reapproving, setReapproving] = useState(false);
+  // null = editing; 'approve' = frontier approval → advance to assemble; 'reapprove' = §4.1 pay → stay.
+  const [approveMode, setApproveMode] = useState<null | 'approve' | 'reapprove'>(null);
 
   // T9 §4.1: at an APPROVED scenes gate, the first pool/template edit opens the
   // blast-radius sheet; Reopen fires the withheld POST (gatekeeper defers + reopens).
@@ -150,28 +151,38 @@ export default function ScenesPage() {
     );
   }
 
-  // ── re-approving: the rederive interstitial replaces the accordion ──────────
-  if (reapproving) {
+  // ── approving / re-approving: the interstitial replaces the accordion ───────
+  if (approveMode) {
+    const isReapprove = approveMode === 'reapprove';
     return (
       <div>
         <GateHeader id={id} gate="scenes" gates={gates} />
         <GateInterstitial
           stream={() => studio.session.approve(id, 'scenes')}
-          tasks={REAPPROVE_TASKS}
+          tasks={isReapprove ? REAPPROVE_TASKS : []}
           sid={id}
-          leaveCopy="rebuilding the stale steps once — you can leave, it keeps running"
+          leaveCopy={
+            isReapprove
+              ? 'rebuilding the stale steps once — you can leave, it keeps running'
+              : 'locking the scenes — the assemble gate opens next'
+          }
           onDone={(doneGates?: GatesDict) => {
-            // Ruling 4: stay on the reopened gate; toast links the frontier.
             notifySpecChanged();
-            setReapproving(false);
-            void afterEdit();
-            const next = doneGates && frontierGate(doneGates);
-            if (next) {
-              const label = next.charAt(0).toUpperCase() + next.slice(1);
-              toast.success(`Rebuilt — ${label} is ready →`, {
-                action: {label: 'Go', onClick: () => router.push(`/video/${id}/${next}`)},
-                duration: 8000,
-              });
+            if (isReapprove) {
+              // Ruling 4: stay on the reopened gate; toast links the frontier.
+              setApproveMode(null);
+              void afterEdit();
+              const next = doneGates && frontierGate(doneGates);
+              if (next) {
+                const label = next.charAt(0).toUpperCase() + next.slice(1);
+                toast.success(`Rebuilt — ${label} is ready →`, {
+                  action: {label: 'Go', onClick: () => router.push(`/video/${id}/${next}`)},
+                  duration: 8000,
+                });
+              }
+            } else {
+              const next = (doneGates && frontierGate(doneGates)) ?? 'assemble';
+              router.push(`/video/${id}/${next}`);
             }
           }}
         />
@@ -182,10 +193,15 @@ export default function ScenesPage() {
   const total = scenes.length;
   const fps = spec?.meta.fps ?? 30;
   const justArrived = openSceneIndex === null && arrivedSids.has(id);
-  const reapproveAction = reopened ? (
-    <TintedButton onClick={() => setReapproving(true)} variant="amber">
+  // One tinted action: reopened → amber Re-approve · approved → none (advanced) ·
+  // frontier (awaiting, no stamp) → Approve to advance to assemble.
+  const scenesApproved = scenesGate?.state === 'approved';
+  const action = reopened ? (
+    <TintedButton onClick={() => setApproveMode('reapprove')} variant="amber">
       Re-approve
     </TintedButton>
+  ) : scenesApproved ? undefined : gateReady ? (
+    <TintedButton onClick={() => setApproveMode('approve')}>Approve</TintedButton>
   ) : undefined;
 
   return (
@@ -196,7 +212,7 @@ export default function ScenesPage() {
         gate="scenes"
         gates={gates}
         status={scenesGate ? <Badge tone="purple" dot>{total} scenes</Badge> : null}
-        action={reapproveAction}
+        action={action}
       />
 
       {scenesGate && (

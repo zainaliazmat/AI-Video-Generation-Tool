@@ -319,6 +319,7 @@ export default function VoicePage() {
                   <div className="mt-2 font-mono text-[11px] text-ink-muted">{v.id}</div>
                   <button
                     type="button"
+                    aria-label={`Play ${v.name} reading your beat 1`}
                     onClick={(e) => {
                       e.stopPropagation();
                       if (!busy) preview(v.id);
