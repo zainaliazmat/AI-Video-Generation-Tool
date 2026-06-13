@@ -148,3 +148,86 @@ def test_enumeration_props_validate_against_generated_inputschema():
     # invalid: extra key (additionalProperties false)
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate({"items": ["Sun", "Moon"], "icon": "x"}, m.inputSchema)
+
+
+# ── v3-M4: backgroundClip contract (T1 tests) ───────────────────────────────
+
+def _real_catalog():
+    """Load the real template catalog from the repo templates/ folder."""
+    import pathlib
+    templates_dir = pathlib.Path(__file__).resolve().parents[2] / "templates"
+    return load_catalog(templates_dir)
+
+
+def _hero_spec(template_id: str, extra_props: dict):
+    """A minimal Spec with one hero scene carrying the given templateProps."""
+    base_props = {
+        "hook": {"title": "Test hook"},
+        "stat": {"value": "42%", "label": "of tests green"},
+        "outro": {"title": "Follow for more"},
+    }
+    props = {**base_props[template_id], **extra_props}
+    return _spec([
+        Scene(id="h0", startFrame=0, durationInFrames=60,
+              template=template_id, templateProps=props)
+    ])
+
+
+_VALID_BACKGROUND_CLIP = {
+    "type": "video",
+    "src": "assets/hero-bg.mp4",
+    "fit": "cover",
+    "kenBurns": {"from": 1.0, "to": 1.12, "originX": 0.5, "originY": 0.5},
+    "loop": False,
+}
+
+_VALID_BACKGROUND_CLIP_IMAGE = {
+    "type": "image",
+    "src": "assets/hero-bg.jpg",
+}
+
+
+@pytest.mark.parametrize("template_id", ["hook", "stat", "outro"])
+def test_hero_backgroundClip_valid_video_passes(template_id):
+    """A hero scene with a fully-specified backgroundClip video passes validate_spec."""
+    catalog = _real_catalog()
+    spec = _hero_spec(template_id, {"backgroundClip": _VALID_BACKGROUND_CLIP})
+    validate_spec(spec, catalog)  # no raise
+
+
+@pytest.mark.parametrize("template_id", ["hook", "stat", "outro"])
+def test_hero_backgroundClip_valid_image_minimal_passes(template_id):
+    """backgroundClip with only type+src (fit/kenBurns/loop optional) passes."""
+    catalog = _real_catalog()
+    spec = _hero_spec(template_id, {"backgroundClip": _VALID_BACKGROUND_CLIP_IMAGE})
+    validate_spec(spec, catalog)  # no raise
+
+
+@pytest.mark.parametrize("template_id", ["hook", "stat", "outro"])
+def test_hero_backgroundClip_absent_still_passes(template_id):
+    """backgroundClip is optional — existing specs without it still pass."""
+    catalog = _real_catalog()
+    spec = _hero_spec(template_id, {})
+    validate_spec(spec, catalog)  # no raise
+
+
+@pytest.mark.parametrize("template_id", ["hook", "stat", "outro"])
+def test_hero_backgroundClip_with_duration_is_rejected(template_id):
+    """backgroundClip must not carry durationInFrames — the strict Media schema
+    (additionalProperties:false) makes extra keys fail (PRD §6.2)."""
+    import jsonschema
+    catalog = _real_catalog()
+    # Inject durationInFrames inside the backgroundClip object — must be rejected.
+    bad_clip = {**_VALID_BACKGROUND_CLIP, "durationInFrames": 90}
+    spec = _hero_spec(template_id, {"backgroundClip": bad_clip})
+    with pytest.raises((ValueError, jsonschema.ValidationError)):
+        validate_spec(spec, catalog)
+
+
+@pytest.mark.parametrize("template_id", ["hook", "stat", "outro"])
+def test_hero_templateProps_extra_key_still_rejected(template_id):
+    """Unrelated extra keys on templateProps are still rejected (strict schemas)."""
+    catalog = _real_catalog()
+    spec = _hero_spec(template_id, {"bogusField": "should-fail"})
+    with pytest.raises(ValueError):
+        validate_spec(spec, catalog)

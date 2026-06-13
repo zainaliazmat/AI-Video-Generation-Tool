@@ -19,6 +19,69 @@
       },
       "cta": {
         "type": "string"
+      },
+      "backgroundClip": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "video",
+              "image"
+            ]
+          },
+          "src": {
+            "type": "string"
+          },
+          "fit": {
+            "type": "string",
+            "enum": [
+              "cover",
+              "contain"
+            ],
+            "default": "cover"
+          },
+          "kenBurns": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "number"
+                  },
+                  "to": {
+                    "type": "number"
+                  },
+                  "originX": {
+                    "type": "number"
+                  },
+                  "originY": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "from",
+                  "to",
+                  "originX",
+                  "originY"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "loop": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "type",
+          "src"
+        ],
+        "additionalProperties": false
       }
     },
     "required": [
