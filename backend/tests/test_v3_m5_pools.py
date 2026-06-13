@@ -304,10 +304,17 @@ def test_run_footage_exhaustion_stage_completes_downstream_ok(tmp_path, monkeypa
 
 def test_autopilot_spec_unaffected_by_hero_pools(tmp_path, monkeypatch):
     """Hero pools are stored in session-DB / pool_errors — spec.json content must
-    be identical whether pools are present or empty (golden autopilot contract).
+    be identical whether pools are present or empty (T1 isolation contract: pool
+    fetching does not itself touch the render contract).
 
     Monkeypatches fetch_pool (not search_pexels) so fetch_footage's own search
     for the footage-scene clip download is unaffected in both variants.
+
+    Note: _auto_fill_hero_backgrounds (T2) consumes pool rows and seeds
+    background_overrides, which T5 injects into the spec.  This test isolates the
+    T1 pool-fetching contract by stubbing out the T2 hook so that the spec
+    comparison stays clean — the T2+T5 end-to-end is covered by
+    test_autofill_injects_backgroundclip_into_hero_scenes in test_v3_m5_autofill.py.
     """
     script = BeatsScript(title="Coral Reefs", beats=[
         Beat(text="Coral reefs cover under one percent of the ocean floor."),
@@ -345,7 +352,11 @@ def test_autopilot_spec_unaffected_by_hero_pools(tmp_path, monkeypatch):
             spec_out=d / "spec.json", sources_out=d / "src.json")
         conn = store.connect(d / "s.db")
         store.create_session(conn, id="s1", topic="Coral Reefs", now="t0")
-        engine.Engine(conn, ctx, session_id="s1").run_all()
+        eng = engine.Engine(conn, ctx, session_id="s1")
+        # Stub out T2 auto-fill: this test isolates T1 (pool-fetching only).
+        # T2+T5 end-to-end is tested in test_v3_m5_autofill.py.
+        monkeypatch.setattr(eng, "_auto_fill_hero_backgrounds", lambda out: None)
+        eng.run_all()
         conn.close()
         return (d / "spec.json").read_text()
 
@@ -365,4 +376,5 @@ def test_autopilot_spec_unaffected_by_hero_pools(tmp_path, monkeypatch):
 
     assert json.loads(spec_with) == json.loads(spec_without), (
         "spec.json content changed when pools are present vs absent — "
-        "pools must NOT touch the render contract")
+        "pool fetching (T1) must NOT touch the render contract; T2+T5 "
+        "injection is tested separately in test_v3_m5_autofill.py")

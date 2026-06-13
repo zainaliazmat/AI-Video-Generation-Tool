@@ -572,10 +572,13 @@ def test_run_all_spec_valid_after_autofill(tmp_path, monkeypatch):
     assert spec["scenes"][1]["template"] == "scene"  # middle beat → footage scene
 
 
-def test_autofill_does_not_change_spec_json(tmp_path, monkeypatch):
-    """Background override rows must NOT appear in spec.json (T5 injects them at
-    assemble — NOT this task).  spec.json content must be identical whether the
-    auto-fill hook fires or is stubbed out."""
+def test_autofill_injects_backgroundclip_into_hero_scenes(tmp_path, monkeypatch):
+    """T5 is now complete: auto-fill (T2) seeds background_overrides rows, and
+    assemble (T5) consumes them.  run_all() with auto-fill active must produce
+    a spec whose hero scenes carry backgroundClip in templateProps; run_all()
+    with auto-fill stubbed out must produce a spec WITHOUT backgroundClip.
+
+    This is the end-to-end T2+T5 integration test."""
     script = BeatsScript(title="Coral Reefs", beats=[
         Beat(text="Coral reefs cover under one percent of the ocean floor."),
         Beat(text="Yet they shelter a quarter of all marine species.", keywords="coral reef fish"),
@@ -619,16 +622,33 @@ def test_autofill_does_not_change_spec_json(tmp_path, monkeypatch):
         eng = engine.Engine(conn, ctx, session_id="s1")
 
         if not with_autofill:
-            # Stub out the auto-fill hook to produce a "no autofill" run
+            # Stub out the auto-fill hook so NO background_overrides rows are seeded.
             monkeypatch.setattr(eng, "_auto_fill_hero_backgrounds", lambda out: None)
 
         eng.run_all()
         conn.close()
-        return (d / "spec.json").read_text()
+        return json.loads((d / "spec.json").read_text())
 
     spec_with = run_once(True, "with_fill", monkeypatch)
     spec_without = run_once(False, "no_fill", monkeypatch)
 
-    assert json.loads(spec_with) == json.loads(spec_without), (
-        "spec.json must be identical whether auto-fill hook fires or not — "
-        "T5 injects background overrides at assemble, NOT T2")
+    # With auto-fill: hero scenes (hook=scene 0, outro=scene 2) must carry backgroundClip
+    # (T2 seeded background_overrides rows → T5 assemble consumed them).
+    hook_props_with = spec_with["scenes"][0]["templateProps"]
+    outro_props_with = spec_with["scenes"][2]["templateProps"]
+    assert "backgroundClip" in hook_props_with, (
+        "run_all() with auto-fill active must inject backgroundClip into hook scene "
+        f"(T2+T5 end-to-end); got keys: {list(hook_props_with.keys())}")
+    assert "backgroundClip" in outro_props_with, (
+        "run_all() with auto-fill active must inject backgroundClip into outro scene "
+        f"(T2+T5 end-to-end); got keys: {list(outro_props_with.keys())}")
+
+    # Without auto-fill: no background_overrides rows → no backgroundClip in hero scenes.
+    hook_props_without = spec_without["scenes"][0]["templateProps"]
+    outro_props_without = spec_without["scenes"][2]["templateProps"]
+    assert "backgroundClip" not in hook_props_without, (
+        "run_all() with auto-fill stubbed must NOT have backgroundClip in hook scene; "
+        f"got keys: {list(hook_props_without.keys())}")
+    assert "backgroundClip" not in outro_props_without, (
+        "run_all() with auto-fill stubbed must NOT have backgroundClip in outro scene; "
+        f"got keys: {list(outro_props_without.keys())}")

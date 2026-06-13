@@ -63,11 +63,30 @@ class Engine:
                 raise RuntimeError(
                     f"cannot advance {stage!r}: upstream stage {d!r} has not completed")
             inputs[d] = out
+        if stage == "assemble":
+            # OV-4: inject both override tables into assemble inputs so they participate
+            # in _input_hash (changing an override correctly invalidates the assemble cache;
+            # a pin survives re-derives only while unchanged — existing caching contract).
+            #
+            # No-bust normalization: OMIT the "overrides" key when BOTH dicts are empty.
+            # Pre-M5 sessions that resume with no override rows keep their assemble hash
+            # exactly (zero one-time re-derive cost). Any session with actual overrides
+            # gets the key → one-time bust is correct and expected.
+            bg = store.get_background_overrides(self.conn, self.sid)
+            tmpl = store.get_template_overrides(self.conn, self.sid)
+            if bg or tmpl:
+                # json.dumps(sort_keys=True) handles int→string key coercion for scene
+                # indices; we normalize consciously: scene_index ints from the DB become
+                # string keys in JSON, which is consistent across all serialize paths.
+                inputs["overrides"] = {"template": tmpl, "background": bg}
         return inputs
 
     def _input_hash(self, stage, inputs):
+        # Non-stage keys (e.g. "overrides" injected by _inputs_for for assemble) are
+        # JSON-native already (decoded from DB); pass them through without a codec.
         payload = {"stage": stage, "topic": self.ctx.topic, "fps": self.ctx.fps,
-                   "inputs": {d: CODECS[d][0](v) for d, v in inputs.items()}}
+                   "inputs": {d: CODECS[d][0](v) if d in CODECS else v
+                               for d, v in inputs.items()}}
         # default-60 omits the key so every pre-M2 stage hash stays valid — no silent
         # re-derive cost on resumed sessions; non-default presets still bust the cache.
         if self.ctx.target_length != 60:

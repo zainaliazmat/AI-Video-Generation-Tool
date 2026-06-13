@@ -87,6 +87,7 @@ def build_spec(
     fps: int = 30,
     music: str | None = None,
     voiceover_rel: str = "assets/voiceover.wav",
+    overrides: Optional[Dict] = None,
 ) -> Spec:
     scenes_plan = plan.scenes
     n = len(scenes_plan)
@@ -97,10 +98,50 @@ def build_spec(
     starts, durations, total = scene_spans(line_offsets, fps)
     clips_by_index = {c.index: c for c in clips}
 
+    # OV-4: extract override dicts — both default to empty when not provided (pre-M5
+    # callers and main.py autopilot pass nothing → no backgroundClip → gradient cards).
+    bg_overrides: Dict = {}
+    tmpl_overrides: Dict = {}
+    if overrides:
+        bg_overrides = overrides.get("background") or {}
+        tmpl_overrides = overrides.get("template") or {}
+
+    # The store returns {int: row} but json round-trip (via inputs hash) converts int
+    # keys to strings; normalise to int for consistent lookup regardless of path.
+    bg_overrides = {int(k): v for k, v in bg_overrides.items()}
+    tmpl_overrides = {int(k): v for k, v in tmpl_overrides.items()}
+
+    import sys as _sys
+
     scenes = []
     for i, ps in enumerate(scenes_plan):
         dur_i = durations[i]
         dur_next = durations[i + 1] if i + 1 < n else dur_i
+
+        # OV-4 template_overrides: apply BEFORE transition resolution so the correct
+        # template's durationFrames range is used when resolving the transition.
+        template = ps.template
+        tmpl_row = tmpl_overrides.get(i)
+        if tmpl_row is not None:
+            # value is the template id string stored by the gate UI.
+            override_id = tmpl_row.get("value") if isinstance(tmpl_row, dict) else tmpl_row
+            m = catalog.get(override_id)
+            if m is None:
+                print(
+                    f"assemble: template_override scene {i}: unknown template id "
+                    f"{override_id!r} — skipping (catalog has: {sorted(catalog)})",
+                    file=_sys.stderr,
+                )
+            elif m.kind not in ("hook", "scene", "stat", "outro", "lower-third"):
+                # Transitions and overlays are not valid scene templates — reject.
+                print(
+                    f"assemble: template_override scene {i}: template {override_id!r} "
+                    f"has kind={m.kind!r} which is not a scene-template kind — skipping",
+                    file=_sys.stderr,
+                )
+            else:
+                template = override_id
+
         transition = _resolve_transition(ps.transition, dur_i, dur_next, catalog)
         t_frames = transition.durationInFrames if transition else 0
 
@@ -113,12 +154,33 @@ def build_spec(
         else:
             props = dict(ps.props)
 
+        # OV-4 background_overrides: inject backgroundClip into hero (non-footage)
+        # scene props when an override row exists.  Footage scenes carry their media
+        # via the "media" key above — background override does not apply there.
+        bg_row = bg_overrides.get(i)
+        if bg_row is not None and not ps.needs_footage:
+            clip_value = bg_row.get("value") if isinstance(bg_row, dict) else None
+            if clip_value:
+                # Reconstitute a Clip from the stored value dict (the auto-fill hook
+                # wrote it as {path, query, rank, pexels_id, pexels_url, duration_frames}).
+                from pipeline.contracts import Clip as _Clip
+                span = dur_i + t_frames
+                bg_clip = _Clip(
+                    index=i,
+                    query=clip_value.get("query", ""),
+                    path=clip_value["path"],
+                    duration_frames=clip_value.get("duration_frames"),
+                    kind="video",  # background overrides are always video clips
+                )
+                bg_media = _scene_media(bg_clip, span)
+                props["backgroundClip"] = bg_media.model_dump(by_alias=True)
+
         scenes.append(
             Scene(
                 id=f"scene-{i}",
                 startFrame=starts[i],
                 durationInFrames=max(1, dur_i),
-                template=ps.template,
+                template=template,
                 templateProps=props,
                 transition=transition,
             )

@@ -193,12 +193,20 @@ def run_assemble(ctx: EngineContext, inputs: dict) -> Any:
         spec = assemble_stage.build_spec(
             plan, offsets, words, clips, catalog=catalog, fps=fps)
     All kwargs match exactly.
+
+    OV-4: when the engine has seeded override rows, _inputs_for injects an
+    "overrides" key ({"template": {...}, "background": {...}}) into inputs.
+    We extract and forward it to build_spec; missing key → None (pre-M5 callers
+    and main.py autopilot pass nothing → no backgroundClip → gradient cards,
+    which is the v2-byte-identical contract for the non-session autopilot path).
     """
     plan = inputs["script"]["plan"]
     offsets = inputs["voice"]
     words = inputs["timing"]
     clips = inputs["footage"]["clips"]
+    overrides = inputs.get("overrides")
     return assemble_stage.build_spec(
         plan, offsets, words, clips, catalog=ctx.catalog, fps=ctx.fps,
         voiceover_rel=f"assets/{ctx.voiceover_path.name}",
+        overrides=overrides,
     )
