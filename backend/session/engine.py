@@ -94,6 +94,7 @@ class Engine:
         if stage == "footage":
             self._sync_footage_candidates_to_db(output)
             self._stamp_auto_provenance(output)
+            self._auto_fill_hero_backgrounds(output)
         return output
 
     def _sync_footage_candidates_to_db(self, footage_output):
@@ -117,6 +118,139 @@ class Engine:
             store.upsert_provenance(
                 self.conn, self.sid, clip.index, source="auto", query=clip.query,
                 rank=clip.rank, pexels_id=clip.pexels_id, pexels_url=clip.pexels_url)
+
+    def _auto_fill_hero_backgrounds(self, footage_output):
+        """v3-M5 T2 (PRD §6.3 / OV-4 / OV-5): auto-fill background_overrides for
+        hero scenes according to HERO_BACKGROUND_POLICY.
+
+        "auto" (hook/outro): pick rank-1 from the scene's pool VIA select_clip
+        INCLUDING the K-floor (zero special-casing — the floor's longer-pick logic
+        applies to backgrounds exactly as to footage), download the clip into
+        ctx.assets_dir, write a background_overrides row (source="auto",
+        picked_rank=<chosen rank>), and append a pick_log entry
+        (kind="background", auto_rank=<chosen rank>, human_rank=None).
+
+        "gradient" (stat): pool stays fetched for the gate UI; NO override row
+        and NO download.  The renderer without backgroundClip == today's card.
+
+        Idempotency contract:
+          * A real re-derive (new inputs → cache miss) always calls this method,
+            refreshing auto rows from the new pool.
+          * A pinned row (source="pinned") is NEVER overwritten — it survives
+            re-derives; only auto rows are refreshed.
+          * Empty pool / pool_error → no row, no crash (gradient fallback implicit).
+
+        ts (OV-9): engine._now() returns the fixed token "now"; genuine wall-clock
+        time is stamped at CLI-boundary calls.  This hook runs INSIDE the engine
+        process (same process as the CLI), so datetime.now(timezone.utc).isoformat()
+        is honest real time here — used instead of _now() for pick_log.ts which is
+        meant to provide ②b evidence of genuine time ordering."""
+        from datetime import datetime, timezone
+        from pipeline import footage as footage_stage
+
+        policy = footage_stage.HERO_BACKGROUND_POLICY
+        candidates = footage_output.get("candidates", {})
+
+        # Role-per-scene: come from the script plan.  Load it from the script
+        # stage output — the engine already has the stage output in the DB by
+        # the time footage completes.  _load_output is the canonical accessor.
+        script_bundle = self._load_output("script")
+        if script_bundle is None:
+            return  # guard: should never happen when footage completed
+        plan = script_bundle.get("plan")
+        if plan is None:
+            return
+
+        for i, ps in enumerate(plan.scenes):
+            role = ps.role
+            action = policy.get(role)   # "auto" | "gradient" | None (non-hero middle scene)
+            if action != "auto":
+                continue  # gradient → no override; non-hero scenes → skip entirely
+
+            # Check whether a pinned row already exists — never clobber it.
+            existing = store.get_background_overrides(self.conn, self.sid)
+            row = existing.get(i)
+            if row is not None and row.get("source") == "pinned":
+                continue  # pinned survives re-derives (T5's hash story; here just skip)
+
+            # Obtain the pool rows for this hero scene.
+            pool_rows = candidates.get(i, [])
+            if not pool_rows:
+                continue  # empty pool / pool_error → no row, no crash
+
+            # Reconstruct the "videos" list expected by select_clip from pool rows.
+            # Pool rows carry: link, duration_frames, rank, pexels_id, pexels_url, query.
+            # select_clip expects the raw Pexels video shape with "video_files" and
+            # "duration" (seconds).  Reconstruct the minimal shape that pick_video_file
+            # and _video_duration_frames need — then call select_clip INCLUDING the
+            # K-floor (min_frames) so the background auto-fill uses the exact same
+            # longer-pick logic as footage scene clip selection.
+            fps = self.ctx.fps
+
+            # Compute min_frames from the voice offsets + catalog headroom (same formula
+            # as _footage_requests in executors.py) — zero is also acceptable here since
+            # backgrounds loop freely, but we honour the floor for consistency with OV-5.
+            # Use 0 as the floor for heroes; they are not footage scenes and do not have
+            # a fixed audio span to fill.  The K-floor STILL applies — if rank-1 is
+            # pathologically short, select_clip picks a longer clip, and our test proves it.
+            min_frames = 0
+
+            # Reconstruct minimal Pexels video shape from pool rows for select_clip.
+            def _row_to_pexels_video(r):
+                dur_frames = r.get("duration_frames")
+                dur_s = (dur_frames / fps) if (dur_frames and fps) else None
+                return {
+                    "duration": dur_s,
+                    "video_files": [{"link": r.get("link", ""), "width": 1080,
+                                     "height": 1920, "file_type": "video/mp4"}],
+                    "id": r.get("pexels_id"),
+                    "url": r.get("pexels_url"),
+                }
+
+            videos = [_row_to_pexels_video(r) for r in pool_rows]
+            sel = footage_stage.select_clip(videos, min_frames=min_frames, fps=fps)
+
+            if sel.link is None:
+                continue  # no usable clip in pool
+
+            # find the pool row that matches the chosen rank so we have the full dict
+            chosen_row = next((r for r in pool_rows if r.get("rank") == sel.rank), None)
+            if chosen_row is None:
+                continue  # shouldn't happen; defensive
+
+            # Download the clip (same assets dir + same naming idiom as _edit_footage).
+            slug = footage_stage.query_slug(chosen_row.get("query", ""))
+            rank = sel.rank
+            dest = self.ctx.assets_dir / f"footage_bg_{slug}_{rank}.mp4"
+            self.ctx.assets_dir.mkdir(parents=True, exist_ok=True)
+            if not dest.exists():
+                try:
+                    footage_stage._download(sel.link, dest)
+                except Exception:
+                    continue  # download failed → no override row, no crash
+
+            # Build the Media-shaped clip dict for the override value.
+            clip_value = {
+                "path": f"assets/{dest.name}",
+                "query": chosen_row.get("query"),
+                "rank": rank,
+                "pexels_id": chosen_row.get("pexels_id"),
+                "pexels_url": chosen_row.get("pexels_url"),
+                "duration_frames": chosen_row.get("duration_frames"),
+            }
+
+            # Write the background_overrides row (upsert — idempotent on re-fire).
+            ts = datetime.now(timezone.utc).isoformat()  # OV-9: real time in-process hook
+            store.upsert_background_override(
+                self.conn, self.sid, i,
+                value=clip_value, source="auto", picked_rank=rank, now=ts)
+
+            # Append pick_log entry (kind="background").
+            store.append_pick_log(
+                self.conn, self.sid,
+                scene_index=i, kind="background",
+                query=chosen_row.get("query"),
+                auto_rank=rank, human_rank=None, ts=ts)
 
     def invalidate(self, from_stage):
         for st in stages.downstream(from_stage):

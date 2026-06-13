@@ -38,6 +38,17 @@ Selection = namedtuple("Selection", "link duration_frames rank pexels_id pexels_
 
 PEXELS_VIDEO_SEARCH = "https://api.pexels.com/videos/search"
 
+# v3-M5 T2 (OV-5): hero scene background auto-fill policy.
+# "auto"     → pick rank-1 from the scene's pool (with K-floor) and download it.
+# "gradient" → pool stays fetched for the gate UI; NO override row, NO download.
+# Policy-as-data lives here, next to select_clip and fetch_pool (its mechanism),
+# NOT in main.py (which imports torch-heavy pipeline.tts at module level).
+HERO_BACKGROUND_POLICY: dict[str, str] = {
+    "hook": "auto",
+    "outro": "auto",
+    "stat": "gradient",
+}
+
 
 def query_slug(query: str) -> str:
     return hashlib.sha1(query.strip().lower().encode("utf-8")).hexdigest()[:8]
