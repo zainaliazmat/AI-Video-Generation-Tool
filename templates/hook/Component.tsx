@@ -1,8 +1,8 @@
 import React from 'react';
-import {AbsoluteFill, interpolate, useCurrentFrame} from 'remotion';
+import {interpolate, useCurrentFrame} from 'remotion';
 import type {TemplateProps} from '../sdk';
 import type {HookData} from './schema';
-import {heroBackground, HERO_BREATH_PERIOD} from '../heroBackground';
+import HeroBackdrop from '../HeroBackdrop';
 import {splitDisplayWords} from '../../remotion/src/word-alignment';
 import {wordRevealState} from '../../remotion/src/hook-reveal';
 
@@ -37,7 +37,7 @@ const CLAMP = {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'} as const;
 const HOOK_UNDERLINE_MODE: 'completion' | 'sweep' =
   'completion' as 'completion' | 'sweep';
 
-const Component: React.FC<TemplateProps<HookData>> = ({data, theme, wordTimings}) => {
+const Component: React.FC<TemplateProps<HookData>> = ({data, theme, timing, wordTimings}) => {
   const frame = useCurrentFrame();
   const words = splitDisplayWords(data.title);
   // Fail-closed: only sync when we have exactly one timing per display word.
@@ -57,14 +57,12 @@ const Component: React.FC<TemplateProps<HookData>> = ({data, theme, wordTimings}
   };
 
   return (
-    <AbsoluteFill
-      style={{
-        backgroundColor: theme.palette.background,
-        backgroundImage: heroBackground(theme.palette, frame / HERO_BREATH_PERIOD),
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '0 96px',
-      }}
+    <HeroBackdrop
+      clip={data.backgroundClip}
+      palette={theme.palette}
+      frame={frame}
+      durationInFrames={timing.durationInFrames}
+      containerStyle={{alignItems: 'center', justifyContent: 'center', padding: '0 96px'}}
     >
       <div style={{textAlign: 'center', maxWidth: 900}}>
         {data.subtitle ? (
@@ -105,7 +103,7 @@ const Component: React.FC<TemplateProps<HookData>> = ({data, theme, wordTimings}
           lastEnd={synced ? wordTimings![wordTimings!.length - 1].endFrame : 0}
         />
       </div>
-    </AbsoluteFill>
+    </HeroBackdrop>
   );
 };
 
