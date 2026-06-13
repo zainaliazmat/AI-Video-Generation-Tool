@@ -1,5 +1,8 @@
 // preview/lib/projects.ts
-import path from 'node:path';
+// CLIENT-SAFE: types + pure helpers only. The node:path filesystem helpers live
+// in lib/projects-server.ts — keeping this module free of node: imports so client
+// components (HistoryList → app/page.tsx) can import ProjectMeta/discriminateStub
+// without webpack dragging `node:path` into the browser bundle (UnhandledScheme).
 
 export type ProjectMeta = {
   id: string;
@@ -50,17 +53,4 @@ const ID_RE = /^[A-Za-z0-9_-]+$/;
 
 export function isValidProjectId(id: string): boolean {
   return ID_RE.test(id);
-}
-
-// The preview dev server's cwd is preview/; the repo root is its parent.
-export function repoRoot(): string {
-  return path.resolve(process.cwd(), '..');
-}
-
-export function projectsDir(): string {
-  return path.join(repoRoot(), 'projects');
-}
-
-export function projectDir(id: string): string {
-  return path.join(projectsDir(), id);
 }

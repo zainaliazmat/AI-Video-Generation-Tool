@@ -2,7 +2,8 @@
 import {createReadStream, statSync, existsSync} from 'node:fs';
 import {Readable} from 'node:stream';
 import path from 'node:path';
-import {isValidProjectId, projectDir} from '@/lib/projects';
+import {isValidProjectId} from '@/lib/projects';
+import {projectDir} from '@/lib/projects-server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
