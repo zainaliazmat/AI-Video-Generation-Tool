@@ -266,6 +266,7 @@ export default function ScriptGatePage() {
               : 'locking the script — the voice gate opens next'
           }
           onDone={(doneGates?: GatesDict) => {
+            notifySpecChanged(); // auto-run builds the whole spec; harmless otherwise
             const next = (doneGates && frontierGate(doneGates)) ?? 'voice';
             router.push(`/video/${id}/${next}`);
           }}
