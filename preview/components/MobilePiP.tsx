@@ -2,6 +2,8 @@
 
 import {useCallback, useEffect, useState} from 'react';
 import {PlayerClient} from './PlayerClient';
+import {useVideoLayout} from './VideoChrome';
+import {shouldMountPiP} from '@/lib/playerBudget';
 
 // Mobile player — Decision 2A (locked mobile pattern; scheduling ratified in
 // docs/superpowers/specs/2026-06-12-design-ratifications.md §5). Below lg the
@@ -17,6 +19,9 @@ export function MobilePiP({id}: {id: string}) {
   const [spec, setSpec] = useState<any>(null);
   const [fetchCount, setFetchCount] = useState(0);
   const [full, setFull] = useState(false);
+  // T6 mount budget: the PiP unmounts while a scene row is open (the per-scene
+  // player takes over on mobile), so we never mount two players at once.
+  const {openSceneIndex} = useVideoLayout();
 
   const load = useCallback(async () => {
     try {
@@ -58,6 +63,9 @@ export function MobilePiP({id}: {id: string}) {
   }, [full]);
 
   if (!spec) return null;
+  // Unmount entirely while a scene row is open (mount-budget partner is the
+  // per-scene player). Closing the fullscreen view first avoids a stuck overlay.
+  if (!shouldMountPiP(openSceneIndex)) return null;
 
   return (
     <div className="lg:hidden">
