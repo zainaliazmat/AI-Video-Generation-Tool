@@ -19,14 +19,30 @@ import {useParams} from 'next/navigation';
 import {toast} from 'sonner';
 import {studio, type SceneState, type GatesDict} from '@/lib/studio';
 import type {Spec} from '@remotion-src/schema';
-import {GateHeader} from '@/components/GateHeader';
+import {useRouter} from 'next/navigation';
+import {GateHeader, TintedButton} from '@/components/GateHeader';
+import {GateInterstitial, type GateTask} from '@/components/GateInterstitial';
 import {StatefulStamp} from '@/components/StatefulStamp';
 import {StatusPills} from '@/components/StatusPills';
 import {ScenePlayerClient} from '@/components/ScenePlayerClient';
+import {useEditIntent} from '@/components/EditIntent';
 import {useVideoLayout} from '@/components/VideoChrome';
 import {notifySpecChanged, notifyRailPlay} from '@/components/PreviewRail';
+import {frontierGate} from '@/lib/studio';
 import {Eyebrow, Badge} from '@/components/ui';
 import {SceneControls} from '@/components/scenes/SceneControls';
+
+function isReopenedGate(g: {state: string; approved_at: string | null} | undefined): boolean {
+  if (!g) return false;
+  return g.state === 'reopened' || (g.state === 'awaiting_approval' && g.approved_at != null);
+}
+
+const REAPPROVE_TASKS: GateTask[] = [
+  {key: 'voice', label: 'Re-synthesizing narration'},
+  {key: 'timing', label: 'Word timing'},
+  {key: 'footage', label: 'Footage'},
+  {key: 'assemble', label: 'Re-assembling'},
+];
 
 // Module-level guard so the arrival auto-play fires once per sid per session.
 const arrivedSids = new Set<string>();
@@ -51,15 +67,22 @@ export default function ScenesPage() {
   const params = useParams<{id: string}>();
   const id = params.id;
 
+  const router = useRouter();
   const {gates, openSceneIndex, setOpenSceneIndex, refresh} = useVideoLayout();
   const scenesGate = gates.scenes;
   const gateReady = !!scenesGate;
+  const reopened = isReopenedGate(scenesGate);
 
   const [scenes, setScenes] = useState<SceneState[]>([]);
   const [spec, setSpec] = useState<Spec | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [reapproving, setReapproving] = useState(false);
+
+  // T9 §4.1: at an APPROVED scenes gate, the first pool/template edit opens the
+  // blast-radius sheet; Reopen fires the withheld POST (gatekeeper defers + reopens).
+  const {intend, sheet} = useEditIntent({sid: id, gate: 'scenes', gateState: scenesGate});
 
   const loadState = useCallback(async () => {
     try {
@@ -127,13 +150,54 @@ export default function ScenesPage() {
     );
   }
 
+  // ── re-approving: the rederive interstitial replaces the accordion ──────────
+  if (reapproving) {
+    return (
+      <div>
+        <GateHeader id={id} gate="scenes" gates={gates} />
+        <GateInterstitial
+          stream={() => studio.session.approve(id, 'scenes')}
+          tasks={REAPPROVE_TASKS}
+          sid={id}
+          leaveCopy="rebuilding the stale steps once — you can leave, it keeps running"
+          onDone={(doneGates?: GatesDict) => {
+            // Ruling 4: stay on the reopened gate; toast links the frontier.
+            notifySpecChanged();
+            setReapproving(false);
+            void afterEdit();
+            const next = doneGates && frontierGate(doneGates);
+            if (next) {
+              const label = next.charAt(0).toUpperCase() + next.slice(1);
+              toast.success(`Rebuilt — ${label} is ready →`, {
+                action: {label: 'Go', onClick: () => router.push(`/video/${id}/${next}`)},
+                duration: 8000,
+              });
+            }
+          }}
+        />
+      </div>
+    );
+  }
+
   const total = scenes.length;
   const fps = spec?.meta.fps ?? 30;
   const justArrived = openSceneIndex === null && arrivedSids.has(id);
+  const reapproveAction = reopened ? (
+    <TintedButton onClick={() => setReapproving(true)} variant="amber">
+      Re-approve
+    </TintedButton>
+  ) : undefined;
 
   return (
     <div>
-      <GateHeader id={id} gate="scenes" gates={gates} status={scenesGate ? <Badge tone="purple" dot>{total} scenes</Badge> : null} />
+      {sheet}
+      <GateHeader
+        id={id}
+        gate="scenes"
+        gates={gates}
+        status={scenesGate ? <Badge tone="purple" dot>{total} scenes</Badge> : null}
+        action={reapproveAction}
+      />
 
       {scenesGate && (
         <div className="content-card mb-4 px-4 py-3">
@@ -147,6 +211,17 @@ export default function ScenesPage() {
           <span className="text-[#30d158]" aria-hidden>✦</span>
           <span className="font-ui text-[12.5px] font-medium text-ink-secondary">
             first assembly ready — every scene is editable below
+          </span>
+        </div>
+      )}
+
+      {/* Reopened: edits are deferred (ruling OV-12). Picks show a pending pill and
+          the per-scene player keeps the old clip until ONE Re-approve pays. */}
+      {reopened && (
+        <div className="mb-4 flex items-center gap-2 rounded-[var(--radius-md)] bg-warn-soft px-4 py-2.5">
+          <span className="text-warn" aria-hidden>●</span>
+          <span className="font-ui text-[12.5px] font-medium text-warn">
+            edits pending — they apply on Re-approve; the players keep the current clips until then
           </span>
         </div>
       )}
@@ -176,6 +251,8 @@ export default function ScenesPage() {
               open={openSceneIndex === scene.index}
               busy={busy}
               setBusy={setBusy}
+              reopened={reopened}
+              intend={intend}
               gateState={scenesGate}
               onToggle={() =>
                 setOpenSceneIndex(openSceneIndex === scene.index ? null : scene.index)
@@ -201,6 +278,8 @@ function SceneRow({
   open,
   busy,
   setBusy,
+  reopened,
+  intend,
   gateState,
   onToggle,
   onChanged,
@@ -214,6 +293,8 @@ function SceneRow({
   open: boolean;
   busy: boolean;
   setBusy: (b: boolean) => void;
+  reopened: boolean;
+  intend: (apply: () => void | Promise<void>) => void;
   gateState: GatesDict['scenes'];
   onToggle: () => void;
   onChanged: () => Promise<void>;
@@ -285,6 +366,8 @@ function SceneRow({
               specScene={specScene}
               busy={busy}
               setBusy={setBusy}
+              reopened={reopened}
+              intend={intend}
               gateState={gateState}
               onChanged={onChanged}
             />

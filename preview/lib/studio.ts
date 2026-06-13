@@ -226,6 +226,14 @@ export const studio = {
         body: JSON.stringify({flag}),
       }).then(j<{ok: boolean}>),
 
+    /** POST /api/session/[id]/set-voice — §4.1 deferred voice reopen (T9). */
+    setVoice: (id: string, voice: string, speed: number): Promise<{ok: boolean}> =>
+      fetch(`/api/session/${id}/set-voice`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({voice, speed}),
+      }).then(j<{ok: boolean}>),
+
     /** POST /api/session/[id]/preview-reopen — preview gate-reopen side-effects. */
     previewReopen: (id: string, gate: string): Promise<ReopenPreview> =>
       fetch(`/api/session/${id}/preview-reopen`, {

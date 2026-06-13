@@ -8,6 +8,7 @@ import {studio, frontierGate, type Voice, type VoiceGate, type GatesDict} from '
 import {GateHeader, TintedButton} from '@/components/GateHeader';
 import {GateInterstitial, type GateTask} from '@/components/GateInterstitial';
 import {StatefulStamp} from '@/components/StatefulStamp';
+import {useEditIntent} from '@/components/EditIntent';
 import {useVideoLayout} from '@/components/VideoChrome';
 import {notifySpecChanged} from '@/components/PreviewRail';
 import {Eyebrow, Badge} from '@/components/ui';
@@ -43,7 +44,7 @@ export default function VoicePage() {
   const id = String(params.id);
   const router = useRouter();
 
-  const {gates, autoRun} = useVideoLayout();
+  const {gates, autoRun, refresh} = useVideoLayout();
   const voiceGate = gates.voice;
   const gateApproved = voiceGate?.state === 'approved';
   const reopened = isReopened(voiceGate);
@@ -53,7 +54,12 @@ export default function VoicePage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [speed, setSpeed] = useState(1.0);
   const [previewing, setPreviewing] = useState<string | null>(null);
-  const [approving, setApproving] = useState(false);
+  // null = view-only; 'approve' = first approval (navigate); 'reapprove' = §4.1 pay (stay).
+  const [approveMode, setApproveMode] = useState<null | 'approve' | 'reapprove'>(null);
+
+  // T9 §4.1: changing voice/speed at an APPROVED voice gate opens the sheet; Reopen
+  // fires set_voice (deferred reopen). After reopen, the amber Re-approve pays once.
+  const {intend, sheet} = useEditIntent({sid: id, gate: 'voice', gateState: voiceGate});
 
   // Cache the synthesized preview path per (voice, speed) so replays don't re-POST
   // (the path is stable per M3 amend 4). A speed change yields fresh keys.
@@ -119,13 +125,39 @@ export default function VoicePage() {
     [id, speed],
   );
 
-  function onApprove() {
-    if (!selected) return;
-    setApproving(true);
+  const appliedVoice = gate?.current?.voice ?? null;
+  const appliedSpeed = gate?.current?.speed ?? 1.0;
+
+  // Deferred voice reopen — set_voice marks the voice stage stale + reopens the gate.
+  function doSetVoice(voice: string, sp: number) {
+    return studio.session.setVoice(id, voice, sp).then(() => refresh());
   }
 
-  // ── approving: the heavy interstitial replaces the page body ────────────────
-  if (approving && selected) {
+  // Voice card click = the §4.1 edit intent at an approved gate (sheet on click).
+  function selectVoice(vid: string) {
+    setSelected(vid);
+    if (gateApproved && vid !== appliedVoice) intend(() => doSetVoice(vid, speed));
+  }
+
+  // Speed change re-times everything — at an approved gate it reopens too (on commit).
+  function commitSpeed() {
+    if (gateApproved && selected && Math.abs(speed - appliedSpeed) > 0.001) {
+      intend(() => doSetVoice(selected, speed));
+    }
+  }
+
+  function onApprove() {
+    if (!selected) return;
+    setApproveMode('approve');
+  }
+  function onReapprove() {
+    if (!selected) return;
+    setApproveMode('reapprove');
+  }
+
+  // ── approving / re-approving: the heavy interstitial replaces the page body ──
+  if (approveMode && selected) {
+    const isReapprove = approveMode === 'reapprove';
     return (
       <div>
         <GateHeader id={id} gate="voice" gates={gates} />
@@ -133,11 +165,30 @@ export default function VoicePage() {
           stream={() => studio.session.approve(id, 'voice', {voice: selected, speed})}
           tasks={APPROVE_TASKS}
           sid={id}
-          leaveCopy="~a few minutes — one footage pool per beat; you can leave, it keeps building"
+          leaveCopy={
+            isReapprove
+              ? 'rebuilding with the new voice — you can leave, it keeps running'
+              : '~a few minutes — one footage pool per beat; you can leave, it keeps building'
+          }
           onDone={(doneGates?: GatesDict) => {
             notifySpecChanged(); // the heavy segment built footage + the first cut
-            const next = (doneGates && frontierGate(doneGates)) ?? 'scenes';
-            router.push(`/video/${id}/${next}`);
+            if (isReapprove) {
+              // Ruling 4: stay on the reopened gate; toast links the frontier.
+              setApproveMode(null);
+              void refresh();
+              void load();
+              const next = doneGates && frontierGate(doneGates);
+              if (next) {
+                const label = next.charAt(0).toUpperCase() + next.slice(1);
+                toast.success(`Rebuilt — ${label} is ready →`, {
+                  action: {label: 'Go', onClick: () => router.push(`/video/${id}/${next}`)},
+                  duration: 8000,
+                });
+              }
+            } else {
+              const next = (doneGates && frontierGate(doneGates)) ?? 'scenes';
+              router.push(`/video/${id}/${next}`);
+            }
           }}
         />
       </div>
@@ -172,13 +223,14 @@ export default function VoicePage() {
       Approved ✓
     </span>
   ) : (
-    <TintedButton onClick={onApprove} disabled={!selected} variant={reopened ? 'amber' : 'indigo'}>
+    <TintedButton onClick={reopened ? onReapprove : onApprove} disabled={!selected} variant={reopened ? 'amber' : 'indigo'}>
       {reopened ? 'Re-approve' : autoRun ? 'Approve & run all' : 'Approve'}
     </TintedButton>
   );
 
   return (
     <div>
+      {sheet}
       <GateHeader
         id={id}
         gate="voice"
@@ -228,6 +280,8 @@ export default function VoicePage() {
               step={0.05}
               value={speed}
               onChange={(e) => setSpeed(parseFloat(e.target.value))}
+              onPointerUp={commitSpeed}
+              onKeyUp={commitSpeed}
               className="h-1.5 flex-1 cursor-pointer accent-accent-1"
             />
           </div>
@@ -243,11 +297,11 @@ export default function VoicePage() {
                   role="button"
                   tabIndex={0}
                   aria-pressed={active}
-                  onClick={() => setSelected(v.id)}
+                  onClick={() => selectVoice(v.id)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
-                      setSelected(v.id);
+                      selectVoice(v.id);
                     }
                   }}
                   className={

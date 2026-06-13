@@ -168,6 +168,18 @@ def set_auto_run(sid: str, flag: bool) -> dict:
         api.close(sess)
 
 
+def set_voice(sid: str, *, voice: str, speed: float = 1.0) -> dict:
+    """§4.1 voice reopen: defer a voice/speed change at an APPROVED voice gate.
+    gatekeeper.set_voice writes the sidecar, marks the voice stage stale, and
+    reopens the voice gate — the amber Re-approve then pays once (M6-T9)."""
+    sess = _resume(sid)
+    try:
+        view = api.gate_set_voice(sess, voice=voice, speed=speed)
+        return {"ok": True, "sid": sid, **view}
+    finally:
+        api.close(sess)
+
+
 # ── __main__ ─────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -176,7 +188,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(
         description="Studio v3 gate CLI (PRD §6.1)")
     ap.add_argument("--op", required=True,
-                    choices=["start", "approve", "state", "preview_reopen", "set_auto_run"])
+                    choices=["start", "approve", "state", "preview_reopen", "set_auto_run", "set_voice"])
     ap.add_argument("--topic")
     ap.add_argument("--sid")
     ap.add_argument("--gate")
@@ -208,6 +220,10 @@ if __name__ == "__main__":
             if not args.sid or not args.gate:
                 raise ValueError("--sid and --gate are required for preview_reopen")
             result = preview_reopen(args.sid, args.gate)
+        elif args.op == "set_voice":
+            if not args.sid or not args.voice:
+                raise ValueError("--sid and --voice are required for set_voice")
+            result = set_voice(args.sid, voice=args.voice, speed=args.speed)
         else:  # set_auto_run
             if not args.sid:
                 raise ValueError("--sid is required for set_auto_run")

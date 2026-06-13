@@ -60,6 +60,8 @@ export function SceneControls({
   specScene,
   busy,
   setBusy,
+  reopened,
+  intend,
   gateState,
   onChanged,
 }: {
@@ -70,6 +72,10 @@ export function SceneControls({
   specScene: Spec['scenes'][number] | null;
   busy: boolean;
   setBusy: (b: boolean) => void;
+  /** Scenes gate reopened — picks are deferred; show the pending affordance. */
+  reopened: boolean;
+  /** T9 §4.1 edit-intent guard — opens the sheet before the first edit at an approved gate. */
+  intend: (apply: () => void | Promise<void>) => void;
   gateState: GatesDict['scenes'];
   onChanged: () => Promise<void>;
 }) {
@@ -82,8 +88,8 @@ export function SceneControls({
   const currentTemplate = scene.templateOverride?.value ?? scene.template;
   const overridden = scene.templateOverride != null;
 
-  // Run an edit op with single-flight + toast + state refresh.
-  async function run(label: string, fn: () => Promise<void>) {
+  // The actual edit: single-flight + toast + state refresh.
+  async function doRun(label: string, fn: () => Promise<void>) {
     if (busy) {
       toast.error('an edit is already in progress');
       return;
@@ -93,12 +99,25 @@ export function SceneControls({
     try {
       await fn();
       await onChanged();
-      toast.success('Updated — preview refreshed', {id: tId, description: 'Re-render to export the MP4.'});
+      toast.success(
+        reopened ? 'Queued — applies on Re-approve' : 'Updated — preview refreshed',
+        {id: tId, description: reopened ? undefined : 'Re-render to export the MP4.'},
+      );
     } catch (e) {
       toast.error('Edit failed', {id: tId, description: e instanceof Error ? e.message : 'edit failed'});
     } finally {
       setBusy(false);
     }
+  }
+
+  // Gated edit-route ops (pick/template/re_query/upload) — the §4.1 sheet fires
+  // before the first POST at an approved gate. Transitions use runNow (assemble
+  // patch path; no gate reopen).
+  function run(label: string, fn: () => Promise<void>) {
+    intend(() => doRun(label, fn));
+  }
+  function runNow(label: string, fn: () => Promise<void>) {
+    void doRun(label, fn);
   }
 
   async function suggest() {
@@ -118,7 +137,7 @@ export function SceneControls({
   async function setTransition(value: 'none' | 'fade' | 'slide') {
     const dur = specScene?.transition?.durationInFrames ?? Math.max(6, Math.round(fps * 0.4));
     const patchValue = value === 'none' ? null : {template: value, durationInFrames: dur};
-    await run(`Setting ${value === 'none' ? 'hard cut' : value} transition…`, async () => {
+    runNow(`Setting ${value === 'none' ? 'hard cut' : value} transition…`, async () => {
       await studio.assemble.apply(sid, [{op: 'replace', path: `/scenes/${scene.index}/transition`, value: patchValue}]);
     });
   }
@@ -178,6 +197,7 @@ export function SceneControls({
               <PoolGrid
                 rows={scene.candidates}
                 disabled={busy}
+                pending={reopened}
                 onPick={(rank) => run('Swapping clip…', () => postEdit(sid, {op: 'pick', scene: scene.index, rank, target: 'footage'}))}
               />
             </>
@@ -218,6 +238,7 @@ export function SceneControls({
               rows={scene.backgroundPool.rows}
               isGradient={scene.backgroundProvenance == null}
               disabled={busy}
+              pending={reopened}
               onPick={(rank) => run('Swapping background…', () => postEdit(sid, {op: 'pick', scene: scene.index, rank, target: 'background'}))}
             />
           )}
@@ -267,33 +288,57 @@ export function SceneControls({
 
 // ─── footage pool grid ──────────────────────────────────────────────────────
 
-function PoolGrid({rows, disabled, onPick}: {rows: Candidate[]; disabled: boolean; onPick: (rank: number) => void}) {
+function PoolGrid({
+  rows,
+  disabled,
+  pending,
+  onPick,
+}: {
+  rows: Candidate[];
+  disabled: boolean;
+  pending: boolean;
+  onPick: (rank: number) => void;
+}) {
   return (
     <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-      {rows.map((c) => (
-        <button
-          key={c.rank}
-          type="button"
-          disabled={disabled || c.selected}
-          onClick={() => onPick(c.rank)}
-          aria-pressed={c.selected}
-          aria-label={`Clip rank ${c.rank}${c.rank === 1 ? ' (AI pick)' : ''}${c.selected ? ' — selected' : ''}`}
-          className={
-            'group relative aspect-[9/16] overflow-hidden rounded-[var(--radius-sm)] border transition disabled:cursor-default ' +
-            (c.selected ? 'border-accent-1 ring-2 ring-accent-1' : 'border-white/10 hover:border-white/30')
-          }
-        >
-          {c.thumbUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={c.thumbUrl} alt="" className="h-full w-full object-cover" loading="lazy" />
-          ) : (
-            <div className="h-full w-full bg-white/[0.04]" />
-          )}
-          <span className="absolute left-1 top-1 rounded-full bg-black/60 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-white">
-            {c.rank === 1 ? 'auto' : `#${c.rank}`}
-          </span>
-        </button>
-      ))}
+      {rows.map((c) => {
+        // At a reopened gate the selected pick is DEFERRED (ruling OV-12): amber
+        // ring + "pending" — the player keeps the old clip until Re-approve.
+        const pendingPick = pending && c.selected;
+        return (
+          <button
+            key={c.rank}
+            type="button"
+            disabled={disabled || c.selected}
+            onClick={() => onPick(c.rank)}
+            aria-pressed={c.selected}
+            aria-label={`Clip rank ${c.rank}${c.rank === 1 ? ' (AI pick)' : ''}${c.selected ? (pendingPick ? ' — pending, applies on Re-approve' : ' — selected') : ''}`}
+            className={
+              'group relative aspect-[9/16] overflow-hidden rounded-[var(--radius-sm)] border transition disabled:cursor-default ' +
+              (c.selected
+                ? pendingPick
+                  ? 'border-warn ring-2 ring-warn'
+                  : 'border-accent-1 ring-2 ring-accent-1'
+                : 'border-white/10 hover:border-white/30')
+            }
+          >
+            {c.thumbUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={c.thumbUrl} alt="" className="h-full w-full object-cover" loading="lazy" />
+            ) : (
+              <div className="h-full w-full bg-white/[0.04]" />
+            )}
+            <span className="absolute left-1 top-1 rounded-full bg-black/60 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-white">
+              {c.rank === 1 ? 'auto' : `#${c.rank}`}
+            </span>
+            {pendingPick && (
+              <span className="absolute inset-x-0 bottom-0 bg-warn/90 px-1 py-0.5 text-center font-mono text-[8px] font-bold text-[#1a1308]">
+                pending
+              </span>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -304,11 +349,13 @@ function BackgroundGrid({
   rows,
   isGradient,
   disabled,
+  pending,
   onPick,
 }: {
   rows: Candidate[];
   isGradient: boolean;
   disabled: boolean;
+  pending: boolean;
   onPick: (rank: number) => void;
 }) {
   return (
@@ -329,29 +376,41 @@ function BackgroundGrid({
           gradient
         </span>
       </div>
-      {rows.map((c) => (
-        <button
-          key={c.rank}
-          type="button"
-          disabled={disabled || c.selected}
-          onClick={() => onPick(c.rank)}
-          aria-pressed={c.selected}
-          className={
-            'group relative aspect-[9/16] overflow-hidden rounded-[var(--radius-sm)] border transition disabled:cursor-default ' +
-            (c.selected ? 'border-accent-1 ring-2 ring-accent-1' : 'border-white/10 hover:border-white/30')
-          }
-        >
-          {c.thumbUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={c.thumbUrl} alt="" className="h-full w-full object-cover" loading="lazy" />
-          ) : (
-            <div className="h-full w-full bg-white/[0.04]" />
-          )}
-          <span className="absolute left-1 top-1 rounded-full bg-black/60 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-white">
-            {c.rank === 1 ? 'auto' : `#${c.rank}`}
-          </span>
-        </button>
-      ))}
+      {rows.map((c) => {
+        const pendingPick = pending && c.selected;
+        return (
+          <button
+            key={c.rank}
+            type="button"
+            disabled={disabled || c.selected}
+            onClick={() => onPick(c.rank)}
+            aria-pressed={c.selected}
+            className={
+              'group relative aspect-[9/16] overflow-hidden rounded-[var(--radius-sm)] border transition disabled:cursor-default ' +
+              (c.selected
+                ? pendingPick
+                  ? 'border-warn ring-2 ring-warn'
+                  : 'border-accent-1 ring-2 ring-accent-1'
+                : 'border-white/10 hover:border-white/30')
+            }
+          >
+            {c.thumbUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={c.thumbUrl} alt="" className="h-full w-full object-cover" loading="lazy" />
+            ) : (
+              <div className="h-full w-full bg-white/[0.04]" />
+            )}
+            <span className="absolute left-1 top-1 rounded-full bg-black/60 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-white">
+              {c.rank === 1 ? 'auto' : `#${c.rank}`}
+            </span>
+            {pendingPick && (
+              <span className="absolute inset-x-0 bottom-0 bg-warn/90 px-1 py-0.5 text-center font-mono text-[8px] font-bold text-[#1a1308]">
+                pending
+              </span>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -389,7 +448,7 @@ function SourceRow({
   onSuggest: () => void;
   busy: boolean;
   fileRef: React.RefObject<HTMLInputElement | null>;
-  run: (label: string, fn: () => Promise<void>) => Promise<void>;
+  run: (label: string, fn: () => Promise<void>) => void;
 }) {
   return (
     <div className="mt-2.5 space-y-2">

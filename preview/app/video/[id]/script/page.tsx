@@ -14,9 +14,15 @@ import {
 import {GateHeader, TintedButton} from '@/components/GateHeader';
 import {GateInterstitial, type GateTask} from '@/components/GateInterstitial';
 import {StatefulStamp} from '@/components/StatefulStamp';
+import {useEditIntent} from '@/components/EditIntent';
 import {useVideoLayout} from '@/components/VideoChrome';
 import {Eyebrow, Badge} from '@/components/ui';
 import {notifySpecChanged} from '@/components/PreviewRail';
+
+function isReopenedGate(g: {state: string; approved_at: string | null} | undefined): boolean {
+  if (!g) return false;
+  return g.state === 'reopened' || (g.state === 'awaiting_approval' && g.approved_at != null);
+}
 
 // Studio v3 Script gate (PRD §6.1, M6-T3). The v2 beat-edit experience repositioned
 // under the staged-flow chrome:
@@ -71,6 +77,12 @@ export default function ScriptGatePage() {
   const {gates, autoRun, refresh} = useVideoLayout();
   const scriptGate = gates.script;
   const gateReady = !!scriptGate; // gate row created = script stage finished
+  const approved = scriptGate?.state === 'approved';
+  const reopened = isReopenedGate(scriptGate);
+
+  // T9 §4.1: at an APPROVED script gate, the first beat edit opens the
+  // blast-radius sheet (POST withheld); Reopen fires it and reopens the gate.
+  const {intend, sheet} = useEditIntent({sid: id, gate: 'script', gateState: scriptGate});
 
   const [gate, setGate] = useState<ScriptGate | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -85,8 +97,10 @@ export default function ScriptGatePage() {
   const [freetext, setFreetext] = useState('');
   const [regenerating, setRegenerating] = useState(false);
 
-  // approve = render the GateInterstitial in place of the page
-  const [approving, setApproving] = useState(false);
+  // approve / re-approve = render the GateInterstitial in place of the page.
+  //   'approve'   — first approval at the frontier → navigate forward on done.
+  //   'reapprove' — §4.1 payment at a reopened gate → stay + refresh + frontier toast (ruling 4).
+  const [approveMode, setApproveMode] = useState<null | 'approve' | 'reapprove'>(null);
 
   // building-elapsed tracking → failed affordance after the cap
   const [buildElapsed, setBuildElapsed] = useState(0);
@@ -131,20 +145,27 @@ export default function ScriptGatePage() {
     setDraft('');
   }
 
-  async function saveEdit(beat: ScriptBeat) {
+  // Save is the edit intent (ruling OV-7: beat textarea = sheet on Save). At a
+  // frontier gate intend() runs performSave immediately; at an approved gate it
+  // opens the sheet first (the `next` value rides in the closure).
+  function saveEdit(beat: ScriptBeat) {
     const next = draft.trim();
     if (!next || next === beat.text) {
       cancelEdit();
       return;
     }
+    cancelEdit(); // exit edit mode now; Cancel on the sheet then reverts cleanly
+    intend(() => performSave(beat, next));
+  }
+
+  async function performSave(beat: ScriptBeat, next: string) {
     setSavingIndex(beat.index);
     try {
       const updated = await studio.script.op(id, {op: 'edit_beat', index: beat.index, text: next});
       editsRef.current.push({before: beat.text, after: next});
       setGate(updated);
-      cancelEdit();
       notifySpecChanged();
-      void refresh(); // an edit at an approved gate may reopen it — sync the chrome
+      void refresh(); // an edit at an approved gate reopens it — sync the chrome
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'failed to save beat');
     } finally {
@@ -152,8 +173,11 @@ export default function ScriptGatePage() {
     }
   }
 
-  async function dropBeat(beat: ScriptBeat) {
-    if (!window.confirm('Drop this beat? This removes it from the script.')) return;
+  function dropBeat(beat: ScriptBeat) {
+    intend(() => performDrop(beat));
+  }
+
+  async function performDrop(beat: ScriptBeat) {
     setSavingIndex(beat.index);
     try {
       const updated = await studio.script.op(id, {op: 'drop_beat', index: beat.index});
@@ -177,10 +201,14 @@ export default function ScriptGatePage() {
     });
   }
 
-  async function regenerate() {
+  function regenerate() {
     const feedback = [...QUICK_CHIPS.filter((c) => chips.has(c)), freetext.trim()]
       .filter(Boolean)
       .join('. ');
+    intend(() => performRegenerate(feedback));
+  }
+
+  async function performRegenerate(feedback: string) {
     setRegenerating(true);
     try {
       const updated = await studio.script.op(id, {op: 'regenerate', feedback});
@@ -228,16 +256,33 @@ export default function ScriptGatePage() {
   function onApprove() {
     if (!gate || hardFail) return;
     foldEditsIntoMemory();
-    setApproving(true);
+    setApproveMode('approve');
   }
 
-  // Auto-run relabels the one tinted action (ruling 14): "Approve & run all".
+  function onReapprove() {
+    if (!gate || hardFail) return;
+    foldEditsIntoMemory();
+    setApproveMode('reapprove');
+  }
+
+  // The one tinted action by gate state (ruling 14 + §4.1):
+  //   reopened → amber Re-approve · approved → done (no action) · frontier → Approve.
   const approveLabel = autoRun ? 'Approve & run all' : 'Approve';
-  const action = (
-    <TintedButton onClick={onApprove} disabled={!gate || hardFail}>
-      {approveLabel}
-    </TintedButton>
-  );
+  const action = !gate
+    ? undefined
+    : reopened ? (
+        <TintedButton onClick={onReapprove} disabled={hardFail} variant="amber">
+          Re-approve
+        </TintedButton>
+      ) : approved ? (
+        <span className="rounded-full bg-white/[0.06] px-4 py-2 font-ui text-[13px] font-semibold text-ink-muted">
+          Approved ✓
+        </span>
+      ) : (
+        <TintedButton onClick={onApprove} disabled={hardFail}>
+          {approveLabel}
+        </TintedButton>
+      );
 
   // ── approving: the GateInterstitial replaces the page body ──────────────────
   // Script approve runs the (empty) voice segment → near-instant; under auto-run
@@ -252,23 +297,48 @@ export default function ScriptGatePage() {
       ]
     : [];
 
-  if (approving) {
+  if (approveMode) {
+    const isReapprove = approveMode === 'reapprove';
+    // Re-approve replays only the stale stages (rederive_stale emits real events).
+    const reapproveTasks: GateTask[] = [
+      {key: 'voice', label: 'Re-synthesizing narration'},
+      {key: 'timing', label: 'Word timing'},
+      {key: 'footage', label: 'Footage'},
+      {key: 'assemble', label: 'Re-assembling'},
+    ];
     return (
       <div>
         <GateHeader id={id} gate="script" gates={gates} />
         <GateInterstitial
           stream={() => studio.session.approve(id, 'script')}
-          tasks={approveTasks}
+          tasks={isReapprove ? reapproveTasks : approveTasks}
           sid={id}
           leaveCopy={
-            autoRun
-              ? '~a few minutes — building the whole video; you can leave, it keeps running'
-              : 'locking the script — the voice gate opens next'
+            isReapprove
+              ? 'rebuilding the stale steps once — you can leave, it keeps running'
+              : autoRun
+                ? '~a few minutes — building the whole video; you can leave, it keeps running'
+                : 'locking the script — the voice gate opens next'
           }
           onDone={(doneGates?: GatesDict) => {
-            notifySpecChanged(); // auto-run builds the whole spec; harmless otherwise
-            const next = (doneGates && frontierGate(doneGates)) ?? 'voice';
-            router.push(`/video/${id}/${next}`);
+            notifySpecChanged();
+            if (isReapprove) {
+              // Ruling 4: stay on the reopened gate; toast links the frontier.
+              setApproveMode(null);
+              void refresh();
+              void loadScript();
+              const next = doneGates && frontierGate(doneGates);
+              if (next) {
+                const label = next.charAt(0).toUpperCase() + next.slice(1);
+                toast.success(`Rebuilt — ${label} is ready →`, {
+                  action: {label: 'Go', onClick: () => router.push(`/video/${id}/${next}`)},
+                  duration: 8000,
+                });
+              }
+            } else {
+              const next = (doneGates && frontierGate(doneGates)) ?? 'voice';
+              router.push(`/video/${id}/${next}`);
+            }
           }}
         />
       </div>
@@ -277,6 +347,7 @@ export default function ScriptGatePage() {
 
   return (
     <div>
+      {sheet}
       <GateHeader id={id} gate="script" status={statusNode} action={gateReady ? action : undefined} gates={gates} />
 
       {/* Stateful stamp (§4.1.1) + credibility — only once the gate is real. */}
