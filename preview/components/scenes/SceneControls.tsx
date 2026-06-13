@@ -145,7 +145,11 @@ export function SceneControls({
 
   const currentTransition = specScene?.transition?.template ?? 'none';
   const isLast = scene.index === total - 1;
-  const heroClipless = !scene.needsFootage && scene.candidates.length === 0;
+  // A hero is "clipless" (can't become a footage scene) only when it has neither
+  // footage candidates NOR a picked background clip. A background clip is promoted
+  // to footage on the stat->scene switch (see engine._pick_template).
+  const heroClipless =
+    !scene.needsFootage && scene.candidates.length === 0 && scene.backgroundProvenance == null;
 
   return (
     <div className="min-w-0 space-y-4">
@@ -363,9 +367,14 @@ export function TemplateCardRail({
               {active && !overridden ? <span className="font-mono text-[9px] opacity-80">auto</span> : null}
             </span>
             {gated && (
-              <span id={descId} className="sr-only">
-                pick a clip first — a scene template needs footage
-              </span>
+              <>
+                <span className="absolute inset-x-0 top-0 bg-warn/85 px-1 py-0.5 text-center font-mono text-[8px] font-bold text-[#1a1308]">
+                  pick a clip
+                </span>
+                <span id={descId} className="sr-only">
+                  pick a background clip first, then switch to a scene template
+                </span>
+              </>
             )}
           </button>
         );

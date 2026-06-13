@@ -118,6 +118,30 @@ describe('TemplateCardRail', () => {
     expect(sceneCard.getAttribute('aria-describedby')).toBeTruthy();
   });
 
+  it('enables the scene card on a hero that has a background clip', () => {
+    // heroClipless=false means a background clip exists -> scene is selectable
+    act(() => root.render(createElement(TemplateCardRail, {
+      ...baseProps, current: 'stat', templates: ['scene', 'stat'], heroClipless: false,
+    })));
+    const sceneCard = Array.from(container.querySelectorAll('[role="radio"]'))
+      .find((el) => el.textContent?.includes('scene')) as HTMLButtonElement;
+    expect(sceneCard.disabled).toBe(false);
+  });
+
+  it('shows a VISIBLE reason on the disabled scene card (not sr-only only)', () => {
+    act(() => root.render(createElement(TemplateCardRail, {
+      ...baseProps, current: 'stat', templates: ['scene', 'stat'], heroClipless: true,
+    })));
+    const sceneCard = Array.from(container.querySelectorAll('[role="radio"]'))
+      .find((el) => el.textContent?.includes('scene')) as HTMLButtonElement;
+    expect(sceneCard.disabled).toBe(true);
+    const visibleReason = Array.from(sceneCard.querySelectorAll('*')).find(
+      (el) => /pick a (background )?clip/i.test(el.textContent || '')
+        && !el.className.includes('sr-only'),
+    );
+    expect(visibleReason).toBeTruthy();
+  });
+
   it('calls onPick with the template id when an enabled non-active card is clicked', () => {
     const onPick = vi.fn();
     act(() => root.render(createElement(TemplateCardRail, {...baseProps, onPick})));
