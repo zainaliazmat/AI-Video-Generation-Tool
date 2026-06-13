@@ -1,6 +1,6 @@
 'use client';
 
-import {useCallback, useEffect, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import Link from 'next/link';
 import {useParams} from 'next/navigation';
 import {toast} from 'sonner';
@@ -11,20 +11,41 @@ import {
   type AssembleGate,
   type TimingGate,
   type TimingWord,
+  type SessionState,
 } from '@/lib/studio';
 import {Eyebrow, Badge} from '@/components/ui';
 import {notifySpecChanged} from '@/components/PreviewRail';
+import {deriveGateCardState, isAssembleFrontier, type CardState} from '@/lib/gateCardState';
 
-// Studio v2 Hub (PRD §5.1) — the per-video control center. Renders inside the
-// /video/[id] layout's content pane (the preview rail lives beside it). Four gate
-// rows link out to the gate screens, each carrying a status badge derived from that
-// gate's read. A timing explainer (not a gate) documents the deterministic alignment
-// and exposes a single "Fix a word" control. None of the four reads is required —
-// each is tolerated independently so a partially-built session still renders.
+// Studio v3 Hub (PRD §5.1 / M6 T11) — the per-video control center.
+//
+// v3 additions:
+//  - Fetches studio.session.state(id) for the GatesDict (alongside v2 reads).
+//  - Gate cards speak v3 states: locked / building / approved / stale / reopened.
+//  - "Footage" card renamed to "Scenes" (links to /video/[id]/scenes).
+//  - Timing explainer row kept (§4 — not a gate).
+//  - Frontier toast: when all gates approved + assemble awaiting → "Rebuilt — Assemble is ready →"
+//  - Handles partial pre-spec gracefully (scenes:[] — hub still renders gate cards from gates).
 
 type FootageScene = {provenance: {source: string} | null};
 type FootageState = {scenes?: FootageScene[]};
 type ProjectMeta = {spec?: {meta?: {title?: string}}};
+
+// Map v3 CardState → Badge display
+function cardStateBadge(state: CardState): React.ReactNode {
+  switch (state) {
+    case 'approved':
+      return <Badge tone="green" dot>approved</Badge>;
+    case 'stale':
+      return <Badge tone="amber" dot>stale</Badge>;
+    case 'reopened':
+      return <Badge tone="amber" dot>reopened</Badge>;
+    case 'building':
+      return <Badge tone="blue" dot>building</Badge>;
+    case 'locked':
+      return <Badge tone="dim">locked</Badge>;
+  }
+}
 
 function GateRow({
   href,
@@ -67,25 +88,48 @@ export default function HubPage() {
   const [footage, setFootage] = useState<FootageState | null>(null);
   const [assemble, setAssemble] = useState<AssembleGate | null>(null);
   const [project, setProject] = useState<ProjectMeta | null>(null);
+  const [sessionState, setSessionState] = useState<SessionState | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Track whether we've already fired the frontier toast this session.
+  const frontierToastFired = useRef(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     // Tolerate individual gate failures: a stage that isn't built yet 404s. We settle
     // each independently and render whatever loaded.
-    const [s, v, f, a, p] = await Promise.allSettled([
+    const [s, v, f, a, p, ss] = await Promise.allSettled([
       studio.script.read(id),
       studio.voice.list(id),
       studio.footage.state(id) as Promise<FootageState>,
       studio.assemble.read(id),
       studio.project(id) as Promise<ProjectMeta>,
+      studio.session.state(id),
     ]);
     setScript(s.status === 'fulfilled' ? s.value : null);
     setVoice(v.status === 'fulfilled' ? v.value : null);
     setFootage(f.status === 'fulfilled' ? f.value : null);
     setAssemble(a.status === 'fulfilled' ? a.value : null);
     setProject(p.status === 'fulfilled' ? p.value : null);
+    const ss2 = ss.status === 'fulfilled' ? ss.value : null;
+    setSessionState(ss2);
     setLoading(false);
+
+    // Frontier toast (ruling 4): fire once when all prior gates approved +
+    // assemble is at awaiting_approval. Guard with a ref to avoid re-firing on
+    // subsequent loads in the same page mount.
+    if (ss2 && !frontierToastFired.current && isAssembleFrontier(ss2.gates)) {
+      frontierToastFired.current = true;
+      toast.success('Rebuilt — Assemble is ready →', {
+        action: {
+          label: 'Go',
+          onClick: () => {
+            window.location.href = `/video/${id}/assemble`;
+          },
+        },
+        duration: 8000,
+      });
+    }
   }, [id]);
 
   useEffect(() => {
@@ -94,43 +138,55 @@ export default function HubPage() {
 
   const title = project?.spec?.meta?.title || script?.title || 'Untitled video';
 
-  // Script badge: amber unverified count, else green supported/total.
-  const unverified = script ? script.beats.filter((b) => b.flag === 'unverified').length : 0;
-  const scriptBadge = !script ? (
-    <Badge tone="dim">—</Badge>
-  ) : unverified > 0 ? (
-    <Badge tone="amber" dot>
-      {unverified} unverified
-    </Badge>
-  ) : (
-    <Badge tone="green" dot>
-      {script.factFloor.supported}/{script.factFloor.total} supported
-    </Badge>
-  );
+  // v3 gate card states from session gates dict
+  const gates = sessionState?.gates ?? {};
 
-  // Voice badge: current voice name, else default.
+  const scriptCardState = deriveGateCardState('script', gates);
+  const voiceCardState = deriveGateCardState('voice', gates);
+  const scenesCardState = deriveGateCardState('scenes', gates);
+  const assembleCardState = deriveGateCardState('assemble', gates);
+
+  // Script badge: prefer gate state badge; fall back to v2 unverified/supported
+  // count if the session state isn't available yet (graceful degradation).
+  const unverified = script ? script.beats.filter((b) => b.flag === 'unverified').length : 0;
+  const scriptBadge = sessionState
+    ? cardStateBadge(scriptCardState)
+    : !script
+    ? <Badge tone="dim">—</Badge>
+    : unverified > 0
+    ? <Badge tone="amber" dot>{unverified} unverified</Badge>
+    : <Badge tone="green" dot>{script.factFloor.supported}/{script.factFloor.total} supported</Badge>;
+
+  // Voice badge: prefer v3 gate state, fall back to v2 voice name
   const currentVoiceId = voice?.current?.voice ?? null;
   const voiceName =
     voice?.voices.find((vv) => vv.id === currentVoiceId)?.name ?? 'default';
-  const voiceBadge = !voice ? <Badge tone="dim">—</Badge> : <Badge tone="blue">{voiceName}</Badge>;
+  const voiceBadge = sessionState
+    ? cardStateBadge(voiceCardState)
+    : !voice
+    ? <Badge tone="dim">—</Badge>
+    : <Badge tone="blue">{voiceName}</Badge>;
 
-  // Footage badge: count of scenes whose provenance source isn't "auto".
-  const overridden = footage?.scenes
-    ? footage.scenes.filter((sc) => sc.provenance && sc.provenance.source !== 'auto').length
-    : 0;
-  const footageBadge = !footage ? (
-    <Badge tone="dim">—</Badge>
-  ) : overridden > 0 ? (
-    <Badge tone="purple">{overridden} overridden</Badge>
-  ) : (
-    <Badge tone="dim">all auto</Badge>
-  );
+  // Scenes badge: v3 gate state (renamed from Footage)
+  const scenesBadge = sessionState
+    ? cardStateBadge(scenesCardState)
+    : !footage
+    ? <Badge tone="dim">—</Badge>
+    : (() => {
+        const overridden = footage.scenes
+          ? footage.scenes.filter((sc) => sc.provenance && sc.provenance.source !== 'auto').length
+          : 0;
+        return overridden > 0
+          ? <Badge tone="purple">{overridden} overridden</Badge>
+          : <Badge tone="dim">all auto</Badge>;
+      })();
 
-  const assembleBadge = !assemble ? (
-    <Badge tone="dim">—</Badge>
-  ) : (
-    <Badge tone="green">spec ready</Badge>
-  );
+  // Assemble badge: v3 gate state, fall back to v2 spec-ready
+  const assembleBadge = sessionState
+    ? cardStateBadge(assembleCardState)
+    : !assemble
+    ? <Badge tone="dim">—</Badge>
+    : <Badge tone="green">spec ready</Badge>;
 
   return (
     <div>
@@ -180,11 +236,12 @@ export default function HubPage() {
             desc="Pick a narrator and speed — local, free Kokoro voices."
             badge={voiceBadge}
           />
+          {/* v3 M6: "Footage" renamed to "Scenes", links to /scenes */}
           <GateRow
-            href={`/video/${id}/footage`}
-            label="Footage"
+            href={`/video/${id}/scenes`}
+            label="Scenes"
             desc="Swap, re-query, or upload the clip behind each scene."
-            badge={footageBadge}
+            badge={scenesBadge}
           />
           <GateRow
             href={`/video/${id}/assemble`}

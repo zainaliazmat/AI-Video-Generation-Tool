@@ -1,18 +1,15 @@
 'use client';
 
-// Studio v3 M6 — /video/[id]/scenes — WORKING STUB (F3a).
+// Studio v3 M6 — /video/[id]/scenes — WORKING STUB (F3a, updated T11).
 //
-// This stub exists so the /scenes route is reachable — it lets T11 flip
-// GateHeader's CHAIN to include 'scenes' without a 404.  The full scene-major
+// This stub exists so the /scenes route is reachable.  The full scene-major
 // accordion is built in T5 (the real implementation).
 //
 // For now this page renders the EXISTING footage-gate experience:
 //   - Fetches studio.footage.state(id) (typed SessionState via studio.session.state)
 //   - Renders the current FootageGate component wrapped in a GateHeader
 //
-// NOTE: GateHeader's CHAIN still lists 'footage' (not 'scenes') until T11.
-//       We pass gate="footage" here because 'scenes' is not yet in the CHAIN
-//       type — a TODO is left in place.
+// T11 update: GateHeader's CHAIN now includes 'scenes', so gate="scenes" is used.
 //
 // /footage is NOT deleted or redirected — it remains at its current route and
 // must continue to work untouched.
@@ -161,10 +158,7 @@ export default function ScenesPage() {
 
   return (
     <div>
-      {/* TODO(T11): update GateHeader's CHAIN type to include 'scenes' then change
-          gate prop from "footage" to "scenes". For now 'footage' is used because
-          GateHeader's const CHAIN doesn't know 'scenes' yet. */}
-      <GateHeader id={id} gate="footage" />
+      <GateHeader id={id} gate="scenes" />
 
       {/* Stub notice (scenes accordion — full build in T5) */}
       <div className="glass mb-4 rounded-xl px-4 py-3">

@@ -160,7 +160,9 @@ export default function FootagePage() {
 
   return (
     <div>
-      <GateHeader id={id} gate="footage" />
+      {/* v3 M6: CHAIN no longer includes 'footage' — this legacy route uses 'scenes'
+          as the canonical gate name, matching the renamed v3 gate. */}
+      <GateHeader id={id} gate="scenes" />
 
       {/* Honest-catch caption (PRD §6.4). */}
       <div className="glass mb-4 rounded-xl px-4 py-3">
