@@ -147,6 +147,7 @@ class Engine:
         meant to provide ②b evidence of genuine time ordering."""
         from datetime import datetime, timezone
         from pipeline import footage as footage_stage
+        from pipeline import assemble as assemble_stage
 
         policy = footage_stage.HERO_BACKGROUND_POLICY
         candidates = footage_output.get("candidates", {})
@@ -161,6 +162,18 @@ class Engine:
         if plan is None:
             return
 
+        # Hoist span computation above the loop (voice is a guaranteed footage dep).
+        offsets = self._load_output("voice")
+        _, durations, _ = assemble_stage.scene_spans(offsets, self.ctx.fps)
+        headroom = max(
+            (m.durationFrames.max for m in self.ctx.catalog.values()
+             if m.kind == "transition"),
+            default=0,
+        )
+
+        # Hoist the pinned-row snapshot above the loop (one DB round-trip, not N).
+        existing = store.get_background_overrides(self.conn, self.sid)
+
         for i, ps in enumerate(plan.scenes):
             role = ps.role
             action = policy.get(role)   # "auto" | "gradient" | None (non-hero middle scene)
@@ -168,7 +181,6 @@ class Engine:
                 continue  # gradient → no override; non-hero scenes → skip entirely
 
             # Check whether a pinned row already exists — never clobber it.
-            existing = store.get_background_overrides(self.conn, self.sid)
             row = existing.get(i)
             if row is not None and row.get("source") == "pinned":
                 continue  # pinned survives re-derives (T5's hash story; here just skip)
@@ -187,13 +199,9 @@ class Engine:
             # longer-pick logic as footage scene clip selection.
             fps = self.ctx.fps
 
-            # Compute min_frames from the voice offsets + catalog headroom (same formula
-            # as _footage_requests in executors.py) — zero is also acceptable here since
-            # backgrounds loop freely, but we honour the floor for consistency with OV-5.
-            # Use 0 as the floor for heroes; they are not footage scenes and do not have
-            # a fixed audio span to fill.  The K-floor STILL applies — if rank-1 is
-            # pathologically short, select_clip picks a longer clip, and our test proves it.
-            min_frames = 0
+            # Heroes floor on their narration span exactly like footage scenes (zero
+            # special-casing): same formula as executors._footage_requests.
+            min_frames = (durations[i] + headroom) // 2
 
             # Reconstruct minimal Pexels video shape from pool rows for select_clip.
             def _row_to_pexels_video(r):

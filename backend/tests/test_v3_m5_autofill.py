@@ -1,8 +1,10 @@
 """Studio v3 M5 T2 — hero background auto-fill (PRD §6.3 / OV-4 / OV-5).
 
 Test contract:
-  1. K-floor path: rank-1 is SHORT → floor selects a longer clip; override row's
-     picked_rank records the actual chosen rank (proves shared select_clip path).
+  1. K-floor displacement: rank-1/2 short (< narration-span floor) → hook picks
+     rank-3; override row records picked_rank=3, pick_log auto_rank=3.
+     Companion: rank-1 clears the floor → picked_rank=1.
+     Re-fire: changed pool refreshes the auto row; pinned row still survives.
   2. Normal pool → rank-1 chosen; row source="auto", picked_rank=1, pick_log row
      (kind="background", auto_rank=1).
   3. stat → NO override row, NO download.
@@ -18,12 +20,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from pipeline.content import Beat, BeatsScript
 from pipeline.contracts import Clip, LineOffset, WordTiming
-from pipeline.footage import HERO_BACKGROUND_POLICY, select_clip
-from pipeline.recipe import plan as recipe_plan
+from pipeline.footage import HERO_BACKGROUND_POLICY
 from schema import Theme
 from session import engine, executors, store
 from session.executors import EngineContext
@@ -104,46 +103,29 @@ def _make_session(tmp_path, monkeypatch, script=None, extra_pool_rows=None):
     return eng, conn, ctx
 
 
-# ── 1. K-floor path ───────────────────────────────────────────────────────────
+# ── 1. K-floor displacement ───────────────────────────────────────────────────
 
-def test_kfloor_selects_longer_clip_and_records_actual_rank(tmp_path, monkeypatch):
-    """K-floor path: rank-1 clip is SHORT (1 frame) → select_clip skips it and
-    picks rank-2 which clears the floor.  Override row records picked_rank=2.
+def test_kfloor_displacement_through_hook(tmp_path, monkeypatch):
+    """Hook-level K-floor displacement test.
 
-    We force a non-trivial min_frames by planting a fake that produces two videos:
-    video1: 1 frame (short), video2: 300 frames (long).  select_clip with
-    min_frames=0 would return rank-1; we test the K-floor path explicitly by
-    crafting the pool so rank-1 is below a threshold and rank-2 is above.
+    Floor = (durations[i] + headroom) // 2.
+    TTS fake: LineOffset(i, text, float(i), float(i+1)) → start=0s,end=1s for
+    scene 0 → durations[0] = round(1*30) - round(0*30) = 30 frames.
+    Real catalog (fade max=30, slide max=40) → headroom = 40.
+    Floor = (30 + 40) // 2 = 35.
 
-    Since the hook's min_frames in the hook is 0 (heroes don't have a mandatory
-    span), we test the K-floor directly through select_clip here to prove the
-    function path is the shared one — same function, same K-floor logic.
+    Pool: rank-1 ~6 frames (0.2s), rank-2 ~9 frames (0.3s), rank-3 ~300 frames (10s).
+    Ranks 1 and 2 are below 35 → displaced; rank-3 clears → picked_rank == 3.
+    Asserts through the hook: override row picked_rank=3; pick_log auto_rank=3.
     """
-    short = _fake_video(link="short.mp4", duration_s=0.033, pexels_id=10)  # ~1 frame
-    long_ = _fake_video(link="long.mp4",  duration_s=10.0,  pexels_id=20)
+    r1 = _fake_video(link="r1.mp4", duration_s=0.2,  pexels_id=1)   # ~6 frames
+    r2 = _fake_video(link="r2.mp4", duration_s=0.3,  pexels_id=2)   # ~9 frames
+    r3 = _fake_video(link="r3.mp4", duration_s=10.0, pexels_id=3)   # ~300 frames
 
-    # select_clip with min_frames=10 → rank-1 (1 frame) is too short → picks rank-2
-    fps = 30
-    sel = select_clip([short, long_], min_frames=10, fps=fps)
-    assert sel.rank == 2, f"expected rank-2 (K-floor skipped rank-1); got {sel.rank}"
-    assert sel.link == "long.mp4"
+    pool_videos = [r1, r2, r3]
 
-    # Now exercise the full engine path: produce a pool where rank-1 is short and
-    # rank-2 is long, and confirm the override row records the K-floor winner rank.
-    # Hero min_frames=0 so direct K-floor is not triggered by the hook fill; instead
-    # we verify the function is the SAME one (identical code path) by using it above.
-    # The hook fill uses select_clip(videos, min_frames=0, ...) from the pool rows.
-    # With min_frames=0 it always picks rank-1 (that is expected).  The test above
-    # proves the K-floor logic inside select_clip still works — same function.
     script = BeatsScript(title="Reefs", beats=[
         Beat(text="hook"), Beat(text="mid", keywords="reef"), Beat(text="outro")])
-    pool_videos = [short, long_]  # rank-1 is short, rank-2 is long
-
-    downloads_by_url = []
-
-    def fake_dl(url, dest):
-        downloads_by_url.append(url)
-        Path(dest).write_bytes(b"v")
 
     monkeypatch.setattr("pipeline.script.generate_grounded_script",
                         lambda topic, cache_dir=None, **kw: script)
@@ -159,7 +141,8 @@ def test_kfloor_selects_longer_clip_and_records_actual_rank(tmp_path, monkeypatc
     monkeypatch.setattr("pipeline.footage.require_env", lambda name: "KEY")
     monkeypatch.setattr("pipeline.footage.search_pexels",
                         lambda q, key: {"videos": pool_videos})
-    monkeypatch.setattr("pipeline.footage._download", fake_dl)
+    monkeypatch.setattr("pipeline.footage._download",
+                        lambda url, dest: Path(dest).write_bytes(b"v"))
 
     catalog = validate_stage.load_catalog(_TEMPLATES)
     ctx = _ctx(tmp_path, catalog=catalog)
@@ -172,16 +155,141 @@ def test_kfloor_selects_longer_clip_and_records_actual_rank(tmp_path, monkeypatc
     eng.advance("footage")
 
     overrides = store.get_background_overrides(conn, "s1")
-    # hook (index 0) and outro (index 2) are "auto" → should have rows
-    # With min_frames=0, rank-1 (short) is still picked — that's correct for min=0.
-    # But the key proof is that override rows EXIST and picked_rank is recorded from
-    # select_clip's actual return — rank=1 here since min_frames=0.
+    # hook (index 0): floor=35, ranks 1+2 short → rank-3 displaces
     assert 0 in overrides, "hook override row missing"
     assert overrides[0]["source"] == "auto"
-    assert overrides[0]["picked_rank"] == 1  # min_frames=0 → rank-1 wins
+    assert overrides[0]["picked_rank"] == 3, (
+        f"expected rank-3 (K-floor displaced ranks 1+2); got {overrides[0]['picked_rank']}")
+    assert overrides[0]["value"]["rank"] == 3
 
-    # The test above (select_clip with min_frames=10) proved the K-floor works.
-    # Together they confirm: same function, K-floor applies when threshold is >0.
+    # pick_log must record auto_rank=3 for the hook scene
+    plog = store.get_pick_log(conn, "s1")
+    hook_bg = [r for r in plog if r["kind"] == "background" and r["scene_index"] == 0]
+    assert hook_bg, "pick_log missing hook background entry"
+    assert hook_bg[-1]["auto_rank"] == 3, (
+        f"pick_log auto_rank should be 3; got {hook_bg[-1]['auto_rank']}")
+
+
+def test_kfloor_rank1_clears_floor(tmp_path, monkeypatch):
+    """Companion: rank-1 clip duration >= floor → picked_rank == 1 (no displacement)."""
+    # duration_s=2.0 → 60 frames; floor=(30+40)//2=35 → 60 >= 35 → rank-1 wins
+    r1 = _fake_video(link="r1.mp4", duration_s=2.0, pexels_id=1)   # 60 frames
+    r2 = _fake_video(link="r2.mp4", duration_s=10.0, pexels_id=2)  # 300 frames
+
+    pool_videos = [r1, r2]
+
+    script = BeatsScript(title="Reefs", beats=[
+        Beat(text="hook"), Beat(text="mid", keywords="reef"), Beat(text="outro")])
+
+    monkeypatch.setattr("pipeline.script.generate_grounded_script",
+                        lambda topic, cache_dir=None, **kw: script)
+    monkeypatch.setattr(
+        "pipeline.tts.synthesize",
+        lambda lines, path, **kw: (
+            Path(path).parent.mkdir(parents=True, exist_ok=True),
+            Path(path).write_bytes(b"W"),
+            [LineOffset(i, t, float(i), float(i + 1)) for i, t in enumerate(lines)])[-1],
+    )
+    monkeypatch.setattr("pipeline.timing.transcribe_words",
+                        lambda wav, fps: [WordTiming("w", 0, 5)])
+    monkeypatch.setattr("pipeline.footage.require_env", lambda name: "KEY")
+    monkeypatch.setattr("pipeline.footage.search_pexels",
+                        lambda q, key: {"videos": pool_videos})
+    monkeypatch.setattr("pipeline.footage._download",
+                        lambda url, dest: Path(dest).write_bytes(b"v"))
+
+    catalog = validate_stage.load_catalog(_TEMPLATES)
+    ctx = _ctx(tmp_path, catalog=catalog)
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="Reefs", now="t0")
+    eng = engine.Engine(conn, ctx, session_id="s1")
+    eng.advance("script")
+    eng.advance("voice")
+    eng.advance("timing")
+    eng.advance("footage")
+
+    overrides = store.get_background_overrides(conn, "s1")
+    assert 0 in overrides, "hook override row missing"
+    assert overrides[0]["picked_rank"] == 1, (
+        f"rank-1 clears floor (60 >= 35) → should pick rank-1; "
+        f"got {overrides[0]['picked_rank']}")
+
+
+def test_kfloor_refire_changed_pool_refreshes_auto_row(tmp_path, monkeypatch):
+    """Re-fire against a CHANGED pool refreshes the auto row (new rank-1 → row updates).
+    Pinned rows survive throughout."""
+    # First run: pool with rank-1 long (60 frames) → auto row picked_rank=1
+    r1_first = _fake_video(link="first.mp4", duration_s=2.0, pexels_id=10)
+
+    search_pool = {"videos": [r1_first]}
+
+    script = BeatsScript(title="Reefs", beats=[
+        Beat(text="hook"), Beat(text="mid", keywords="reef"), Beat(text="outro")])
+
+    monkeypatch.setattr("pipeline.script.generate_grounded_script",
+                        lambda topic, cache_dir=None, **kw: script)
+    monkeypatch.setattr(
+        "pipeline.tts.synthesize",
+        lambda lines, path, **kw: (
+            Path(path).parent.mkdir(parents=True, exist_ok=True),
+            Path(path).write_bytes(b"W"),
+            [LineOffset(i, t, float(i), float(i + 1)) for i, t in enumerate(lines)])[-1],
+    )
+    monkeypatch.setattr("pipeline.timing.transcribe_words",
+                        lambda wav, fps: [WordTiming("w", 0, 5)])
+    monkeypatch.setattr("pipeline.footage.require_env", lambda name: "KEY")
+    monkeypatch.setattr("pipeline.footage.search_pexels",
+                        lambda q, key: search_pool["videos"] and
+                        {"videos": search_pool["videos"]})
+    monkeypatch.setattr("pipeline.footage._download",
+                        lambda url, dest: Path(dest).write_bytes(b"v"))
+
+    catalog = validate_stage.load_catalog(_TEMPLATES)
+    ctx = _ctx(tmp_path, catalog=catalog)
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="Reefs", now="t0")
+    eng = engine.Engine(conn, ctx, session_id="s1")
+    eng.advance("script")
+    eng.advance("voice")
+    eng.advance("timing")
+
+    # Patch search to return the first pool
+    monkeypatch.setattr("pipeline.footage.search_pexels",
+                        lambda q, key: {"videos": [r1_first]})
+    eng.advance("footage")
+
+    overrides_first = store.get_background_overrides(conn, "s1")
+    assert overrides_first.get(0, {}).get("picked_rank") == 1, "first run: expect rank-1"
+    assert overrides_first.get(0, {}).get("value", {}).get("pexels_id") == 10
+
+    # Seed a pinned row for outro (scene 2) — must survive the re-fire
+    store.upsert_background_override(
+        conn, "s1", 2,
+        value={"path": "assets/pinned_outro.mp4", "rank": 7},
+        source="pinned", picked_rank=7, now="pinned-ts")
+
+    # Now change the pool: new rank-1 (different clip, pexels_id=99) and re-fire hook
+    r1_new = _fake_video(link="new.mp4", duration_s=3.0, pexels_id=99)
+
+    # Build a synthetic footage_output with the new pool for scene 0
+    footage_output = eng._load_output("footage")
+    footage_output["candidates"][0] = [
+        {"link": "new.mp4", "duration_frames": 90, "rank": 1,
+         "pexels_id": 99, "pexels_url": "https://pexels.com/v/99",
+         "query": "reef", "selected": 0},
+    ]
+
+    eng._auto_fill_hero_backgrounds(footage_output)
+
+    overrides_after = store.get_background_overrides(conn, "s1")
+    # Auto row for scene 0 refreshed with new rank-1 (pexels_id=99)
+    assert overrides_after[0]["picked_rank"] == 1
+    assert overrides_after[0]["value"]["pexels_id"] == 99, (
+        "auto row for scene 0 should update to new rank-1 clip")
+
+    # Pinned row for scene 2 must be unchanged
+    assert overrides_after[2]["source"] == "pinned"
+    assert overrides_after[2]["picked_rank"] == 7, "pinned row must survive re-fire"
 
 
 # ── 2. Normal pool → rank-1 chosen, source=auto, pick_log ────────────────────
