@@ -2,7 +2,7 @@
 import {act, createElement} from 'react';
 import {createRoot, type Root} from 'react-dom/client';
 import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest';
-import {ScrollPool, TemplateCardRail} from './SceneControls';
+import {PoolGrid, BackgroundGrid, TemplateCardRail} from './SceneControls';
 
 // Mock framer-motion's PUBLIC useReducedMotion so it reads matchMedia live each
 // render (framer's real impl caches a module-global listener once, defeating
@@ -51,19 +51,33 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('ScrollPool', () => {
-  it('wraps children in a vertical-scroll clamp container', () => {
-    act(() => {
-      root.render(createElement(ScrollPool, {}, createElement('div', {'data-testid': 'child'}, 'x')));
-    });
-    const scroller = container.querySelector('[data-scrollpool]') as HTMLElement;
-    expect(scroller).toBeTruthy();
-    expect(scroller.className).toContain('overflow-y-auto');
-    expect(scroller.className).toContain('scrollbar-hide');
-    // per-breakpoint clamp present (mobile value + sm: override)
-    expect(scroller.className).toMatch(/max-h-\[/);
-    expect(scroller.className).toMatch(/sm:max-h-\[/);
-    expect(container.querySelector('[data-testid="child"]')).toBeTruthy();
+describe('pool horizontal rails', () => {
+  const rows = [
+    {rank: 1, thumbUrl: 'http://x/1.jpg', query: 'q', durationFrames: 30, selected: true},
+    {rank: 2, thumbUrl: 'http://x/2.jpg', query: 'q', durationFrames: 30, selected: false},
+  ];
+
+  it('PoolGrid renders a horizontal-scroll rail of tiles', () => {
+    act(() => root.render(createElement(PoolGrid, {
+      rows, disabled: false, pending: false, onPick: () => {},
+    })));
+    const rail = container.querySelector('[data-pool-rail]') as HTMLElement;
+    expect(rail).toBeTruthy();
+    expect(rail.className).toContain('overflow-x-auto');
+    expect(rail.className).toContain('scrollbar-hide');
+    expect(rail.className).not.toContain('grid-cols'); // no longer a grid
+    expect(container.querySelectorAll('[data-pool-rail] button').length).toBe(2);
+  });
+
+  it('BackgroundGrid renders the gradient tile + clips in a horizontal rail', () => {
+    act(() => root.render(createElement(BackgroundGrid, {
+      rows, isGradient: true, disabled: false, pending: false, onPick: () => {},
+    })));
+    const rail = container.querySelector('[data-pool-rail]') as HTMLElement;
+    expect(rail).toBeTruthy();
+    expect(rail.className).toContain('overflow-x-auto');
+    // gradient floor tile + 2 clip buttons all live in the rail
+    expect(container.querySelector('[data-pool-rail]')?.children.length).toBe(3);
   });
 });
 

@@ -12,7 +12,7 @@
 //   • Transition chips — none/fade/slide via the assemble patch path.
 //   • Provenance popover — pickLogCount + last auto→human rank pair (ruling 19).
 
-import {useRef, useState, type ReactNode} from 'react';
+import {useRef, useState} from 'react';
 import {useReducedMotion} from 'framer-motion';
 import {toast} from 'sonner';
 import {studio, type SceneState, type Candidate, type GatesDict} from '@/lib/studio';
@@ -176,14 +176,12 @@ export function SceneControls({
           ) : (
             <>
               <p className="mb-2 font-ui text-[11px] text-ink-muted">rank 1 is the AI pick — you’re the rerank.</p>
-              <ScrollPool>
-                <PoolGrid
-                  rows={scene.candidates}
-                  disabled={busy}
-                  pending={reopened}
-                  onPick={(rank) => run('Swapping clip…', () => postEdit(sid, {op: 'pick', scene: scene.index, rank, target: 'footage'}))}
-                />
-              </ScrollPool>
+              <PoolGrid
+                rows={scene.candidates}
+                disabled={busy}
+                pending={reopened}
+                onPick={(rank) => run('Swapping clip…', () => postEdit(sid, {op: 'pick', scene: scene.index, rank, target: 'footage'}))}
+              />
             </>
           )}
           <SourceRow
@@ -218,15 +216,13 @@ export function SceneControls({
               pool fetch hit the rate limit — {scene.backgroundPool.poolError}
             </div>
           ) : (
-            <ScrollPool>
-              <BackgroundGrid
-                rows={scene.backgroundPool.rows}
-                isGradient={scene.backgroundProvenance == null}
-                disabled={busy}
-                pending={reopened}
-                onPick={(rank) => run('Swapping background…', () => postEdit(sid, {op: 'pick', scene: scene.index, rank, target: 'background'}))}
-              />
-            </ScrollPool>
+            <BackgroundGrid
+              rows={scene.backgroundPool.rows}
+              isGradient={scene.backgroundProvenance == null}
+              disabled={busy}
+              pending={reopened}
+              onPick={(rank) => run('Swapping background…', () => postEdit(sid, {op: 'pick', scene: scene.index, rank, target: 'background'}))}
+            />
           )}
           <SourceRow
             sid={sid}
@@ -268,29 +264,6 @@ export function SceneControls({
           </div>
         </section>
       )}
-    </div>
-  );
-}
-
-// ─── ScrollPool: clamp a pool grid to ~1.5 rows of vertical scroll ──────────
-// Per-breakpoint max-h: 3-col tiles (mobile) are taller than 4-col tiles (sm:),
-// so 1.5 rows is a different pixel height at each breakpoint. Derivation:
-// tileW ≈ (colWidth); tileH = tileW * 16/9; clamp ≈ 1.5*tileH + 0.5*gap.
-// Starting values below are validated/tuned in the browser eyes-on (item 7).
-export function ScrollPool({children}: {children?: ReactNode}) {
-  return (
-    <div className="relative">
-      <div
-        data-scrollpool
-        tabIndex={0}
-        role="region"
-        aria-label="Scrollable options"
-        className="max-h-[260px] sm:max-h-[210px] overflow-y-auto scrollbar-hide"
-      >
-        {children}
-      </div>
-      {/* bottom fade — signals more content below the clamp */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-[var(--bg-surface)] to-transparent" />
     </div>
   );
 }
@@ -403,7 +376,7 @@ export function TemplateCardRail({
 
 // ─── footage pool grid ──────────────────────────────────────────────────────
 
-function PoolGrid({
+export function PoolGrid({
   rows,
   disabled,
   pending,
@@ -415,7 +388,7 @@ function PoolGrid({
   onPick: (rank: number) => void;
 }) {
   return (
-    <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+    <div data-pool-rail className="flex gap-2 overflow-x-auto scrollbar-hide snap-x pb-1">
       {rows.map((c) => {
         // At a reopened gate the selected pick is DEFERRED (ruling OV-12): amber
         // ring + "pending" — the player keeps the old clip until Re-approve.
@@ -429,7 +402,7 @@ function PoolGrid({
             aria-pressed={c.selected}
             aria-label={`Clip rank ${c.rank}${c.rank === 1 ? ' (AI pick)' : ''}${c.selected ? (pendingPick ? ' — pending, applies on Re-approve' : ' — selected') : ''}`}
             className={
-              'group relative aspect-[9/16] overflow-hidden rounded-[var(--radius-sm)] border transition disabled:cursor-default ' +
+              'group relative aspect-[9/16] w-[120px] shrink-0 snap-start overflow-hidden rounded-[var(--radius-sm)] border transition disabled:cursor-default ' +
               (c.selected
                 ? pendingPick
                   ? 'border-warn ring-2 ring-warn'
@@ -460,7 +433,7 @@ function PoolGrid({
 
 // ─── background grid (tile 0 = gradient floor) ──────────────────────────────
 
-function BackgroundGrid({
+export function BackgroundGrid({
   rows,
   isGradient,
   disabled,
@@ -474,7 +447,7 @@ function BackgroundGrid({
   onPick: (rank: number) => void;
 }) {
   return (
-    <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+    <div data-pool-rail className="flex gap-2 overflow-x-auto scrollbar-hide snap-x pb-1">
       {/* Tile 0 — the gradient floor. Selected when there's no background clip.
           (Reverting to gradient has no backend op yet — it's the floor indicator.) */}
       <div
@@ -482,7 +455,7 @@ function BackgroundGrid({
         aria-label="Gradient floor"
         title="Gradient floor — the default abstract background"
         className={
-          'relative aspect-[9/16] overflow-hidden rounded-[var(--radius-sm)] border ' +
+          'relative aspect-[9/16] w-[120px] shrink-0 snap-start overflow-hidden rounded-[var(--radius-sm)] border ' +
           (isGradient ? 'border-accent-1 ring-2 ring-accent-1' : 'border-white/10 opacity-70')
         }
       >
@@ -501,7 +474,7 @@ function BackgroundGrid({
             onClick={() => onPick(c.rank)}
             aria-pressed={c.selected}
             className={
-              'group relative aspect-[9/16] overflow-hidden rounded-[var(--radius-sm)] border transition disabled:cursor-default ' +
+              'group relative aspect-[9/16] w-[120px] shrink-0 snap-start overflow-hidden rounded-[var(--radius-sm)] border transition disabled:cursor-default ' +
               (c.selected
                 ? pendingPick
                   ? 'border-warn ring-2 ring-warn'
