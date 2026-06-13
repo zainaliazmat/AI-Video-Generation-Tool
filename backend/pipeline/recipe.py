@@ -156,9 +156,13 @@ def plan(
             # The SPOKEN hook is the dominant line; the (generic) topic rides as a
             # small kicker. The hook component sizes `title` for a full sentence.
             props: Dict = {"title": beat.text, "subtitle": script.title}
-            scenes.append(PlannedScene(role, catalog["hook"], props, needs_footage=False))
+            # D4: hero beats gain a query for pool-fetching (needs_footage stays False —
+            # only the POOL is fetched; nothing downloads for hero scenes).
+            hero_query = harden(beat.keywords or script.title, title=script.title)
+            scenes.append(PlannedScene(role, catalog["hook"], props, needs_footage=False, query=hero_query))
         elif role == "outro":
-            scenes.append(PlannedScene(role, catalog["outro"], {"title": beat.text}, needs_footage=False))
+            hero_query = harden(beat.keywords or script.title, title=script.title)
+            scenes.append(PlannedScene(role, catalog["outro"], {"title": beat.text}, needs_footage=False, query=hero_query))
         elif role == "stat":
             scenes.append(PlannedScene(role, catalog["stat"], _stat_props(beat), needs_footage=False))
         else:  # middle, not stat: enumeration (if a template consumes it) else footage scene

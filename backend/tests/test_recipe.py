@@ -115,13 +115,22 @@ def test_scene_query_falls_back_to_title_not_sentence():
 
 
 def test_hook_stat_outro_carry_no_footage():
+    """needs_footage stays False for hook/stat/outro — no clip is downloaded.
+    D4: hook and outro now carry a query for pool-fetching; stat has none."""
     p = plan(
         _script(_beat("open"), _beat("f", data={"value": "5", "label": "x"}), _beat("close")),
         theme=Theme(),
     )
     for s in p.scenes:
         assert s.needs_footage is False
-        assert s.query is None
+    # stat has no query (not pool-fetched)
+    stat = p.scenes[1]
+    assert stat.role == "stat"
+    assert stat.query is None
+    # hook and outro carry a hardened query for pool-fetching (D4)
+    hook, outro = p.scenes[0], p.scenes[2]
+    assert hook.role == "hook" and hook.query is not None
+    assert outro.role == "outro" and outro.query is not None
 
 
 # ── prop filling (policy — flagged for review) ─────────────────────────────

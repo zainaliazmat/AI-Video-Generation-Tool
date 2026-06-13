@@ -128,34 +128,64 @@ def run_footage(ctx: EngineContext, inputs: dict) -> dict:
     The candidate pool is auxiliary (for the HITL gate). Record it best-effort:
     a missing PEXELS_API_KEY or a search failure yields an empty pool for the
     scene WITHOUT failing the footage stage (clips already came from fetch_footage).
+
+    v3 M5 (D4 + OV-6): pools are fetched for ALL scenes that carry a query — heroes
+    (hook/outro) included. Heroes: pool fetched + cached, NOTHING downloads
+    (needs_footage stays False). The per-hardened-query pool cache
+    (ctx.cache_dir / footage_pools/) makes repeated queries free (zero network calls).
+    A 429 exhaustion records pool=[] + pool_error="rate_limited" for that scene
+    instead of crashing (OV-6 honesty).
     """
     plan = inputs["script"]["plan"]
     offsets = inputs["voice"]
     reqs = _footage_requests(ctx, plan, offsets)
     clips = footage_stage.fetch_footage(reqs, ctx.assets_dir, fps=ctx.fps)
     chosen = {c.index: (c.query, c.rank) for c in clips}
-    candidates = {}
-    for r in reqs:
-        # Best-effort (see docstring): a missing key / search failure -> empty pool.
-        try:
-            key = footage_stage.require_env("PEXELS_API_KEY")
-            data = footage_stage.search_pexels(r.query, key)
-            rows = footage_stage.candidate_rows(data.get("videos", []), query=r.query, fps=ctx.fps)
-        except Exception:
-            rows = []
+
+    # Build the pool for every scene that has a query — footage scenes AND heroes.
+    # `candidates` stays {scene_index: [rows]} (list) so _sync_footage_candidates_to_db
+    # and _edit_footage read it without changes.  Structured error state (OV-6) goes
+    # into a separate `pool_errors` dict: {scene_index: error_str} so downstream
+    # stages that don't know about errors continue to see a list (possibly empty).
+    candidates: dict = {}
+    pool_errors: dict = {}
+    try:
+        key = footage_stage.require_env("PEXELS_API_KEY")
+    except Exception:
+        key = None
+
+    for i, ps in enumerate(plan.scenes):
+        if not ps.query:
+            continue  # stat / enumeration / no-query scenes: no pool
+        pool_result = {"rows": [], "error": "fetch_error"}
+        if key:
+            pool_result = footage_stage.fetch_pool(
+                ps.query, key, ctx.fps, cache_dir=ctx.cache_dir)
+        rows = pool_result["rows"]
+        pool_error = pool_result.get("error")
+
         for row in rows:
-            # EXACT initial selection: mark the row matching the clip's real (query, rank)
-            # from A.2a provenance — so a K-floor displacement to rank>1 rings the clip
-            # that was actually bound, not rank-1. No row is marked when fetch_footage
-            # broadened a whiffing query to the title (the pool is the specific query,
-            # the clip came from the broadened one) or for legacy clips with rank=None.
-            # The gate's pick/re_query ops still set `selected` precisely on edit.
-            q, rank = chosen.get(r.index, (None, None))
-            row["selected"] = 1 if (row["query"] == q and rank is not None
-                                    and row["rank"] == rank) else 0
+            if ps.needs_footage:
+                # EXACT initial selection: mark the row matching the clip's real (query, rank)
+                # from A.2a provenance — so a K-floor displacement to rank>1 rings the clip
+                # that was actually bound, not rank-1. No row is marked when fetch_footage
+                # broadened a whiffing query to the title (the pool is the specific query,
+                # the clip came from the broadened one) or for legacy clips with rank=None.
+                # The gate's pick/re_query ops still set `selected` precisely on edit.
+                q, rank = chosen.get(i, (None, None))
+                row["selected"] = 1 if (row["query"] == q and rank is not None
+                                        and row["rank"] == rank) else 0
+            else:
+                # Hero scenes: pool stored, never selected (no clip downloaded)
+                row["selected"] = 0
             row["clip_path"] = None
-        candidates[r.index] = rows
-    return {"clips": clips, "candidates": candidates}
+
+        candidates[i] = rows
+        if pool_error:
+            # OV-6 honesty: record the error marker alongside the (empty) pool
+            pool_errors[i] = pool_error
+
+    return {"clips": clips, "candidates": candidates, "pool_errors": pool_errors}
 
 
 def run_assemble(ctx: EngineContext, inputs: dict) -> Any:
