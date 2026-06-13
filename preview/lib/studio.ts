@@ -1,6 +1,8 @@
-// Studio v2 — client types mirroring the backend gate CLIs (session_script.py,
-// session_voice.py, session_timing.py, session_assemble.py, session_state.py).
-// These are display contracts; the authoritative shapes live in Python.
+// Studio v2/v3 — client types mirroring the backend gate CLIs.
+// The v2 types (ScriptGate, VoiceGate, etc.) are display contracts; the
+// authoritative shapes live in Python.
+// Studio v3 M6 types (GateState, SessionState, etc.) are the normative data
+// contract for the new staged-flow pages.
 
 export type BeatFlag = 'supported' | 'unverified' | null;
 
@@ -47,6 +49,69 @@ export type AssembleHistory = {version: number; revertableSeq: number | null; hi
 export type AssembleGate = {ok: boolean; sid: string; theme: Record<string, unknown>; scenes: AssembleScene[]} & AssembleHistory;
 export type ChatResult = {ok: boolean; ops: PatchOp[]; reply: string; diff: DiffLine[]; valid: boolean};
 
+// ---------------------------------------------------------------------------
+// Studio v3 M6 — typed SessionState data contract (normative)
+// ---------------------------------------------------------------------------
+
+export type GateState = 'awaiting_approval' | 'approved' | 'reopened' | 'stale';
+export interface Gate {state: GateState; approved_at: string | null}
+export type GatesDict = Partial<Record<'script' | 'voice' | 'scenes' | 'assemble', Gate>>;
+
+export interface Candidate {
+  rank: number;
+  thumbUrl: string;
+  query: string;
+  durationFrames: number;
+  selected: boolean;
+}
+export interface FootageProvenance {
+  source: 'auto' | 'pick' | 're_query' | 'uploaded';
+  query: string | null;
+  rank: number | null;
+  pexelsId: number | null;
+  pexelsUrl: string | null;
+}
+export interface TemplateOverride {value: string; source: string; pickedRank: number | null}
+export interface BackgroundPool {rows: Candidate[]; poolError: string | null}
+export interface BackgroundProvenance {
+  source: string;
+  pickedRank: number | null;
+  query: string | null;
+  pexelsId: number | null;
+  pexelsUrl: string | null;
+  updatedAt: string;
+}
+export interface LastPick {autoRank: number; humanRank: number}
+export interface SceneState {
+  index: number;
+  template: string;
+  needsFootage: boolean;
+  beatText: string | null;
+  durationInFrames: number | null;
+  candidates: Candidate[];
+  provenance: FootageProvenance | null;
+  eligibleTemplates: string[];
+  templateOverride: TemplateOverride | null;
+  backgroundPool: BackgroundPool;
+  backgroundProvenance: BackgroundProvenance | null;
+  pickLogCount: number;
+  lastPick: LastPick | null;
+}
+/** scenes:[] before the spec is generated (partial pre-spec state) */
+export interface SessionState {
+  sid: string;
+  scenes: SceneState[];
+  gates: GatesDict;
+  autoRun: boolean;
+}
+export interface ReopenPreview {
+  gate: string;
+  reruns: string[];
+  staleGates: string[];
+}
+
+// ---------------------------------------------------------------------------
+
 async function j<T>(res: Response): Promise<T> {
   const data = await res.json();
   if (!res.ok) throw new Error((data && data.error) || `${res.status}`);
@@ -88,9 +153,56 @@ export const studio = {
       fetch(`/api/session/${id}/assemble`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({op: 'revert', seq})}).then(j<{ok: boolean; reverted: number} & AssembleHistory>),
   },
   footage: {
-    state: (id: string) => fetch(`/api/session/${id}/state`).then(j<any>),
+    state: (id: string) => fetch(`/api/session/${id}/state`).then(j<SessionState>),
     suggest: (id: string, scene: number) =>
       fetch(`/api/session/${id}/footage/suggest`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({scene})}).then(j<{ok: boolean; scene: number; query: string; raw: string}>),
   },
   project: (id: string) => fetch(`/api/projects/${id}`).then(j<{spec: any; sources: any}>),
+
+  // Studio v3 M6 — session client.  Returns the raw streaming Response for
+  // start/approve so the caller drives parsing via readSse (lib/sse.ts).
+  session: {
+    /** POST /api/session/start — returns the raw SSE streaming Response. */
+    start: (
+      topic: string,
+      opts?: {autoRun?: boolean; targetLength?: number},
+    ): Promise<Response> =>
+      fetch('/api/session/start', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({topic, ...(opts ?? {})}),
+      }),
+
+    /** POST /api/session/[id]/approve — returns the raw SSE streaming Response. */
+    approve: (
+      id: string,
+      gate: string,
+      opts?: {voice?: string; speed?: number},
+    ): Promise<Response> =>
+      fetch(`/api/session/${id}/approve`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({gate, ...(opts ?? {})}),
+      }),
+
+    /** GET /api/session/[id]/state — typed SessionState. */
+    state: (id: string): Promise<SessionState> =>
+      fetch(`/api/session/${id}/state`).then(j<SessionState>),
+
+    /** POST /api/session/[id]/set-auto-run — toggle auto-run flag. */
+    setAutoRun: (id: string, flag: boolean): Promise<{ok: boolean}> =>
+      fetch(`/api/session/${id}/set-auto-run`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({flag}),
+      }).then(j<{ok: boolean}>),
+
+    /** POST /api/session/[id]/preview-reopen — preview gate-reopen side-effects. */
+    previewReopen: (id: string, gate: string): Promise<ReopenPreview> =>
+      fetch(`/api/session/${id}/preview-reopen`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({gate}),
+      }).then(j<ReopenPreview>),
+  },
 };
