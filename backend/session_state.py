@@ -31,6 +31,20 @@ def _beat_text_by_index(conn, sid: str) -> dict:
         return {}
 
 
+def _pool_errors_by_index(conn, sid: str) -> dict:
+    """{scene_index: error_str} from the persisted footage stage output.
+    Best-effort: returns {} when the footage stage / JSON is missing.
+    These are rate-limit / exhaustion markers that the M6 UI strip needs."""
+    row = store.get_stage(conn, sid, "footage")
+    if row is None or row["output_json"] is None:
+        return {}
+    try:
+        d = json.loads(row["output_json"])
+        return {int(k): v for k, v in d.get("pool_errors", {}).items()}
+    except (ValueError, KeyError, TypeError):
+        return {}
+
+
 def build_state(sid: str) -> dict:
     conn = store.connect(job_ctx.SESSIONS_DB)
     try:
@@ -51,6 +65,15 @@ def build_state(sid: str) -> dict:
         spec = json.loads(spec_path.read_text(encoding="utf-8"))
         prov = store.get_media_provenance(conn, sid)
         beat_text = _beat_text_by_index(conn, sid)   # Studio v2: show the beat beside each clip
+
+        # v3-M5 T7: load the tables that drive the five new per-scene keys.
+        from pipeline import validate as validate_stage
+        from pipeline.eligibility import eligible_templates
+        catalog = validate_stage.load_catalog(job_ctx.TEMPLATES_DIR)
+        template_overrides = store.get_template_overrides(conn, sid)
+        background_overrides = store.get_background_overrides(conn, sid)
+        pool_errors = _pool_errors_by_index(conn, sid)
+
         scenes = []
         for i, sc in enumerate(spec.get("scenes", [])):
             media = (sc.get("templateProps") or {}).get("media")
@@ -62,6 +85,62 @@ def build_state(sid: str) -> dict:
                         "rank": r["rank"], "thumbUrl": r["thumb_url"], "query": r["query"],
                         "durationFrames": r["duration_frames"], "selected": bool(r["selected"])})
             p = prov.get(i)
+
+            # ── v3-M5 T7: five new keys ──────────────────────────────────────
+            # 1. eligibleTemplates: schema-driven, not hand-curated.
+            scene_props = sc.get("templateProps") or {}
+            eligible = eligible_templates(scene_props, catalog)
+
+            # 2. templateOverride: {value, source, pickedRank} or null.
+            tov = template_overrides.get(i)
+            template_override = (None if tov is None else {
+                "value": tov["value"],
+                "source": tov["source"],
+                "pickedRank": tov["picked_rank"],
+            })
+
+            # 3. backgroundPool: footage_candidates for hero scenes (those that
+            #    are not footage scenes but still have a pool). Always present
+            #    (may be empty list); includes poolError marker when applicable.
+            bg_pool_rows = store.get_footage_candidates(conn, sid, scene_index=i)
+            background_pool = []
+            for r in bg_pool_rows:
+                background_pool.append({
+                    "rank": r["rank"], "thumbUrl": r["thumb_url"],
+                    "query": r["query"], "durationFrames": r["duration_frames"],
+                    "selected": bool(r["selected"]),
+                })
+            pool_error = pool_errors.get(i)
+            if pool_error is not None:
+                background_pool_out = {"rows": background_pool, "poolError": pool_error}
+            else:
+                background_pool_out = {"rows": background_pool, "poolError": None}
+
+            # 4. backgroundProvenance: from background_overrides row (T2 ruling).
+            #    Shape: {source, pickedRank, query?, pexelsId?, pexelsUrl?, updatedAt}
+            bov = background_overrides.get(i)
+            if bov is None:
+                background_provenance = None
+            else:
+                val = bov.get("value") or {}
+                background_provenance = {
+                    "source": bov["source"],
+                    "pickedRank": bov["picked_rank"],
+                    "query": val.get("query"),
+                    "pexelsId": val.get("pexels_id"),
+                    "pexelsUrl": val.get("pexels_url"),
+                    "updatedAt": bov["updated_at"],
+                }
+
+            # 5. pickLogCount + lastPick: scene-level pick evidence for M6 popover.
+            pick_rows = store.get_pick_log(conn, sid, scene_index=i)
+            pick_log_count = len(pick_rows)
+            if pick_rows:
+                last = pick_rows[-1]
+                last_pick = {"autoRank": last["auto_rank"], "humanRank": last["human_rank"]}
+            else:
+                last_pick = None
+
             scenes.append({
                 "index": i, "template": sc.get("template"), "needsFootage": needs_footage,
                 "beatText": beat_text.get(i),
@@ -71,7 +150,15 @@ def build_state(sid: str) -> dict:
                 "candidates": candidates,
                 "provenance": (None if p is None else {
                     "source": p["source"], "query": p["query"], "rank": p["rank"],
-                    "pexelsId": p["pexels_id"], "pexelsUrl": p["pexels_url"]})})
+                    "pexelsId": p["pexels_id"], "pexelsUrl": p["pexels_url"]}),
+                # v3-M5 T7 keys:
+                "eligibleTemplates": eligible,
+                "templateOverride": template_override,
+                "backgroundPool": background_pool_out,
+                "backgroundProvenance": background_provenance,
+                "pickLogCount": pick_log_count,
+                "lastPick": last_pick,
+            })
         return {"sid": sid, "scenes": scenes,
                 "gates": gate_states,
                 "autoRun": bool(session_row["auto_run"])}
