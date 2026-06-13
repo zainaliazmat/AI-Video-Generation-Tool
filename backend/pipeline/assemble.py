@@ -249,8 +249,14 @@ def build_spec(
         # OV-4 background_overrides: inject backgroundClip into hero (non-footage)
         # scene props when an override row exists.  Footage scenes carry their media
         # via the "media" key above — background override does not apply there.
+        #
+        # A hero whose template_override switched it to the footage `scene` template
+        # (override_applied, not data-driven) is now a footage scene: its props already
+        # carry "media" (from the promoted clip, L230-247), and the footage `scene`
+        # template's inputSchema rejects backgroundClip.  Skip injection in that case.
+        _overridden_to_footage = override_applied and not needs_rederive
         bg_row = bg_overrides.get(i)
-        if bg_row is not None and not ps.needs_footage:
+        if bg_row is not None and not ps.needs_footage and not _overridden_to_footage:
             clip_value = bg_row.get("value") if isinstance(bg_row, dict) else None
             if clip_value:
                 # Reconstitute a Clip from the stored value dict (the auto-fill hook

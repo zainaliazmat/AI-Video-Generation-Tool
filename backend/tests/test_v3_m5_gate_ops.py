@@ -963,8 +963,16 @@ def test_pick_template_hero_to_scene_no_clip_raises_and_no_row(tmp_path, monkeyp
     assert not any(c.index == 0 for c in footage_out["clips"]), (
         "hero scene 0 must have no footage clip (precondition for the defect path)")
 
+    # The footage stage auto-fills a background_override for every hero; that background
+    # is now promotable to footage on a scene-switch, so clear it to keep this test on the
+    # genuine no-clip-to-promote rejection path.
+    conn.execute(
+        "DELETE FROM background_overrides WHERE session_id=? AND scene_index=?",
+        ("s1", 0))
+    conn.commit()
+
     # Pick 'scene' template for hero scene 0 → must raise, must NOT write the row.
-    with pytest.raises(ValueError, match="footage"):
+    with pytest.raises(ValueError, match="pick a background clip first"):
         eng.edit("footage", {"op": "pick_template", "scene_index": 0, "template": "scene"})
 
     # No row must have been persisted (the poisoning is prevented).
@@ -1146,4 +1154,85 @@ def test_pick_template_footage_scene_with_clip_not_blocked(tmp_path, monkeypatch
     assert 1 in tmpl_overrides, "template_overrides row must be written for scene 1"
     assert tmpl_overrides[1]["value"] == "scene"
 
+    conn.close()
+
+
+# ── 12. pick_template hero→scene: promote background clip to footage ──────────
+
+def test_pick_template_promotes_background_to_footage(tmp_path, monkeypatch):
+    """A hero scene with a background clip but no footage clip can switch to the
+    'scene' template: the background clip is promoted into the scene's footage."""
+    eng, conn, ctx, catalog = _make_session(tmp_path, monkeypatch)
+    eng.advance("assemble")
+
+    store.upsert_background_override(
+        conn, "s1", 0,
+        value={"path": "assets/footage_bg_reef_1.mp4", "query": "reef", "rank": 1,
+               "pexels_id": 7, "pexels_url": "https://pexels.com/v/7",
+               "duration_frames": 180, "kind": "video"},
+        source="pinned", picked_rank=1, now="t1")
+
+    eng.edit("footage", {"op": "pick_template", "scene_index": 0, "template": "scene"})
+
+    foot = eng._load_output("footage")
+    clip0 = next((c for c in foot["clips"] if c.index == 0), None)
+    assert clip0 is not None, "background clip must be promoted to a footage clip at index 0"
+    assert clip0.path == "assets/footage_bg_reef_1.mp4"
+    assert clip0.duration_frames == 180
+    assert clip0.pexels_id == 7
+
+    tmpl_overrides = store.get_template_overrides(conn, "s1")
+    assert tmpl_overrides[0]["value"] == "scene"
+    spec = eng._load_output("assemble")
+    assert spec.scenes[0].template == "scene"
+    conn.close()
+
+
+def test_pick_template_hero_to_scene_without_clip_rejected(tmp_path, monkeypatch):
+    """A hero with neither footage clip nor background clip is rejected with a
+    clear 'pick a background clip first' message.
+
+    NOTE: the footage stage auto-fills a background_override for every hero scene,
+    so we explicitly clear scene 0's background row to reach the no-clip-to-promote
+    rejection branch (this is the only state in which it can fire)."""
+    eng, conn, ctx, catalog = _make_session(tmp_path, monkeypatch)
+    eng.advance("assemble")
+
+    # Clear the auto-filled background override for hero scene 0 so there is
+    # genuinely no clip to promote.
+    conn.execute(
+        "DELETE FROM background_overrides WHERE session_id=? AND scene_index=?",
+        ("s1", 0))
+    conn.commit()
+    assert 0 not in store.get_background_overrides(conn, "s1"), "precondition: no bg for scene 0"
+
+    with pytest.raises(ValueError, match="pick a background clip first"):
+        eng.edit("footage", {"op": "pick_template", "scene_index": 0, "template": "scene"})
+    conn.close()
+
+
+def test_pick_template_promote_replaces_existing_clip_at_index(tmp_path, monkeypatch):
+    """Promoting/switching when a clip already exists at the scene index must not
+    duplicate clips at that index."""
+    eng, conn, ctx, catalog = _make_session(tmp_path, monkeypatch)
+    eng.advance("assemble")
+    foot = eng._load_output("footage")
+    from pipeline.contracts import Clip
+    foot["clips"] = [c for c in foot["clips"] if c.index != 0] + [
+        Clip(index=0, query="old", path="assets/old.mp4", duration_frames=60)]
+    to_json, _ = engine.CODECS["footage"]
+    store.upsert_stage(conn, "s1", "footage", status="done",
+                       input_hash=store.get_stage(conn, "s1", "footage")["input_hash"],
+                       output_json=json.dumps(to_json(foot), default=str), now="t1")
+    store.upsert_background_override(
+        conn, "s1", 0,
+        value={"path": "assets/footage_bg_new_1.mp4", "query": "reef", "rank": 1,
+               "pexels_id": 9, "pexels_url": "u", "duration_frames": 120, "kind": "video"},
+        source="pinned", picked_rank=1, now="t2")
+
+    eng.edit("footage", {"op": "pick_template", "scene_index": 0, "template": "scene"})
+
+    foot2 = eng._load_output("footage")
+    idx0 = [c for c in foot2["clips"] if c.index == 0]
+    assert len(idx0) == 1, "exactly one clip at index 0 (no duplicate)"
     conn.close()

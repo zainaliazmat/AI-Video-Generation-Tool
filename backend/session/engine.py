@@ -464,6 +464,12 @@ class Engine:
 
         diff = spec_patch.diff_lines(spec, patch)
         patched = spec_patch.apply_patch(spec, patch)  # raises on whitelist violation
+        # Catalog validation BEFORE persisting — keeps the edit atomic. Without it a
+        # template-id the catalog rejects (e.g. 'clip') is baked into the stage output
+        # and the history log, then trips validate_spec at every later materialize,
+        # leaving the session permanently stuck. Validate first; persist only if clean.
+        from pipeline import validate as validate_stage
+        validate_stage.validate_spec(patched, self.ctx.catalog)
         to_json, _ = CODECS["assemble"]
         store.upsert_stage(
             self.conn, self.sid, "assemble", status="done",
@@ -938,10 +944,38 @@ class Engine:
                         and any(c.index == scene for c in _footage_out.get("clips", []))
                     )
                     if not _has_clip:
-                        raise ValueError(
-                            f"assemble: template_override scene {scene}: switching to a footage "
-                            f"layout needs a footage pick — use the footage pool"
-                        )
+                        # Promote a picked background clip into this scene's footage,
+                        # so a hero (stat/hook/outro) with a chosen background can become
+                        # a footage 'scene'. Only reject if there's no clip to promote.
+                        overrides = store.get_background_overrides(self.conn, self.sid)
+                        bg = overrides.get(scene)
+                        if bg and (bg.get("value") or {}).get("path"):
+                            from pipeline.contracts import Clip
+                            v = bg["value"]
+                            promoted = Clip(
+                                index=scene,
+                                query=v.get("query") or "",
+                                path=v["path"],
+                                duration_frames=v.get("duration_frames"),
+                                kind=v.get("kind", "video"),
+                                rank=v.get("rank"),
+                                pexels_id=v.get("pexels_id"),
+                                pexels_url=v.get("pexels_url"),
+                            )
+                            bundle = _footage_out or {"clips": [], "candidates": {}}
+                            bundle["clips"] = [
+                                c for c in bundle.get("clips", []) if c.index != scene
+                            ] + [promoted]
+                            to_json, _ = CODECS["footage"]
+                            store.upsert_stage(
+                                self.conn, self.sid, "footage", status="done",
+                                input_hash=store.get_stage(self.conn, self.sid, "footage")["input_hash"],
+                                output_json=json.dumps(to_json(bundle), default=str), now=_now())
+                        else:
+                            raise ValueError(
+                                f"assemble: template_override scene {scene}: pick a background "
+                                f"clip first, then switch to a scene template"
+                            )
 
         # All checks passed — write the override
         from datetime import datetime, timezone
