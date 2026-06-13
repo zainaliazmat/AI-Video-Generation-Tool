@@ -116,6 +116,29 @@ export interface ReopenPreview {
   staleGates: string[];
 }
 
+const GATE_ORDER: ('script' | 'voice' | 'scenes' | 'assemble')[] = [
+  'script',
+  'voice',
+  'scenes',
+  'assemble',
+];
+
+/**
+ * The live frontier gate: the latest-in-order gate that is awaiting approval.
+ * After a normal script approve this is `voice`; after an auto-run cascade it is
+ * `assemble`. Used to navigate to the right place when an approve SSE finishes.
+ * Returns null when no gate is awaiting (e.g. an all-approved terminal session).
+ */
+export function frontierGate(
+  gates: GatesDict,
+): 'script' | 'voice' | 'scenes' | 'assemble' | null {
+  for (let i = GATE_ORDER.length - 1; i >= 0; i--) {
+    const g = GATE_ORDER[i];
+    if (gates[g]?.state === 'awaiting_approval') return g;
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 
 async function j<T>(res: Response): Promise<T> {
