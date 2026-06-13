@@ -909,6 +909,40 @@ class Engine:
                 )
             raise ValueError(f"pick_template: {reason}")
 
+        # 5. Pre-write renderability guard — mirrors build_spec's own check (assemble.py
+        #    ~230-243) so the rejection happens BEFORE any DB write.
+        #
+        #    Unrenderable case: a non-footage (hero) scene is being switched to the
+        #    plain footage 'scene' template, but that scene has no downloaded clip.
+        #    Reproduces exactly the `elif override_applied and not needs_rederive and not
+        #    ps.needs_footage` branch in build_spec that checks `clips_by_index.get(i)`.
+        #
+        #    Detection logic (mirrors assemble._is_data_driven):
+        #      - "needs footage media" == kind=='scene' AND consumes != 'enumeration'
+        #        (enumeration has kind='scene' but is data-driven, not footage-driven)
+        #      - "current scene is hero" == plan.scenes[scene].needs_footage is False
+        #      - "has a clip" == footage output has a Clip with .index == scene
+        _target_needs_footage = (
+            manifest.kind == "scene" and manifest.consumes != "enumeration"
+        )
+        if _target_needs_footage and script_bundle is not None:
+            _plan = script_bundle.get("plan")
+            if _plan is not None and 0 <= scene < len(_plan.scenes):
+                _current_needs_footage = _plan.scenes[scene].needs_footage
+                if not _current_needs_footage:
+                    # Current scene is a hero (hook/stat/outro) — check whether a
+                    # footage clip has been downloaded for this scene index.
+                    _footage_out = self._load_output("footage")
+                    _has_clip = (
+                        _footage_out is not None
+                        and any(c.index == scene for c in _footage_out.get("clips", []))
+                    )
+                    if not _has_clip:
+                        raise ValueError(
+                            f"assemble: template_override scene {scene}: switching to a footage "
+                            f"layout needs a footage pick — use the footage pool"
+                        )
+
         # All checks passed — write the override
         from datetime import datetime, timezone
         ts = datetime.now(timezone.utc).isoformat()

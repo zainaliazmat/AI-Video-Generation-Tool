@@ -229,6 +229,10 @@ def build_spec(
                 props = {"title": beat.text}
         elif override_applied and not needs_rederive and not ps.needs_footage:
             # Non-footage scene switched to a footage template — needs a clip.
+            # Defense-in-depth: engine._pick_template pre-checks this exact condition
+            # before writing the override row, so this branch should be unreachable from
+            # the normal _pick_template path.  It remains here as a backstop for any
+            # caller that writes template_overrides directly (e.g. spec_patch, future ops).
             new_kind = override_kind
             if new_kind == "scene" and not (catalog.get(override_id) and
                                             catalog[override_id].consumes == "enumeration"):

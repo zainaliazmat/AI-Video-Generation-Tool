@@ -931,3 +931,219 @@ def test_apply_pick_background_response_carries_provenance(tmp_path, monkeypatch
     assert res["provenance"]["source"] == "pinned", (
         f"expected source='pinned', got {res['provenance']['source']!r}")
     assert res["provenance"]["rank"] == 2
+
+
+# ── 14. hero→scene pick_template: pre-write guard prevents data poisoning ─────
+
+def test_pick_template_hero_to_scene_no_clip_raises_and_no_row(tmp_path, monkeypatch):
+    """hero→scene switch with no footage clip: ValueError raised BEFORE DB write.
+
+    Verifies three things:
+      1. ValueError is raised (the rejection fires before the DB write).
+      2. template_overrides has NO row for the hero scene afterward (no poisoning).
+      3. advance('assemble') still SUCCEEDS — the session is not permanently broken.
+    """
+    eng, conn, ctx, catalog = _make_session(tmp_path, monkeypatch)
+    eng.advance("assemble")
+
+    # Scene 0 is a hero (hook) — it has no downloaded footage clip in the clips list.
+    # Attempting to switch it to the 'scene' (footage) template must be rejected
+    # BEFORE writing the override row.
+    assert "scene" in catalog, "'scene' template must be in catalog"
+    assert catalog["scene"].kind == "scene", "'scene' template must have kind 'scene'"
+    assert catalog["scene"].consumes is None, "'scene' template must not consume 'enumeration'"
+
+    # Confirm scene 0 is a hero (needs_footage == False) in the plan.
+    script_bundle = eng._load_output("script")
+    plan = script_bundle["plan"]
+    assert not plan.scenes[0].needs_footage, "scene 0 (hook) must be a non-footage hero"
+
+    # Confirm no footage clip exists for scene 0 (heroes never get a clip from footage stage).
+    footage_out = eng._load_output("footage")
+    assert not any(c.index == 0 for c in footage_out["clips"]), (
+        "hero scene 0 must have no footage clip (precondition for the defect path)")
+
+    # Pick 'scene' template for hero scene 0 → must raise, must NOT write the row.
+    with pytest.raises(ValueError, match="footage"):
+        eng.edit("footage", {"op": "pick_template", "scene_index": 0, "template": "scene"})
+
+    # No row must have been persisted (the poisoning is prevented).
+    tmpl_overrides = store.get_template_overrides(conn, "s1")
+    assert 0 not in tmpl_overrides, (
+        f"template_overrides must have NO row for scene 0 after a rejected hero→scene switch; "
+        f"got: {tmpl_overrides}")
+
+    # Session is still assemblable — advance('assemble') must succeed without error.
+    try:
+        eng.advance("assemble")
+    except Exception as exc:
+        pytest.fail(
+            f"advance('assemble') failed after the rejected pick_template — "
+            f"session must not be broken: {exc}")
+
+    conn.close()
+
+
+# ── 15. regression: data-driven switches still work (no spurious blocking) ────
+
+def test_pick_template_scene_to_enumeration_not_blocked(tmp_path, monkeypatch):
+    """scene→enumeration (beat has items): pre-write guard must NOT block this.
+
+    enumeration has kind='scene' but consumes='enumeration' — it is data-driven, not
+    footage-driven.  The guard must only fire for the plain footage 'scene' template.
+    """
+    from pipeline.content import Beat, BeatsScript
+
+    # Script with an enumeration beat in the middle position.
+    script = BeatsScript(title="Coral Reefs", beats=[
+        Beat(text="hook"),
+        Beat(text="Five reef facts", keywords="coral reef",
+             data={"items": ["item1", "item2", "item3"]}),
+        Beat(text="outro"),
+    ])
+    monkeypatch.setattr("pipeline.script.generate_grounded_script",
+                        lambda t, cache_dir=None, **kw: script)
+    monkeypatch.setattr(
+        "pipeline.tts.synthesize",
+        lambda lines, path, **kw: (
+            Path(path).parent.mkdir(parents=True, exist_ok=True),
+            Path(path).write_bytes(b"W"),
+            [LineOffset(i, t, float(i), float(i + 1)) for i, t in enumerate(lines)])[-1],
+    )
+    monkeypatch.setattr("pipeline.timing.transcribe_words",
+                        lambda wav, fps: [WordTiming("w", 0, 5)])
+    monkeypatch.setattr("pipeline.footage.require_env", lambda name: "KEY")
+    monkeypatch.setattr("pipeline.footage.search_pexels",
+                        lambda q, key: {"videos": [_fake_video()]})
+    monkeypatch.setattr("pipeline.footage.fetch_footage",
+                        lambda reqs, out_dir, *, fps=30, **kw: [
+                            Clip(index=r.index, query=r.query,
+                                 path=f"assets/f{r.index}.mp4", duration_frames=300)
+                            for r in reqs
+                        ])
+    monkeypatch.setattr("pipeline.footage._download",
+                        lambda url, dest: Path(dest).write_bytes(b"clip"))
+
+    catalog = validate_stage.load_catalog(_TEMPLATES)
+    ctx = _ctx(tmp_path, catalog=catalog)
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="Coral Reefs", now="t0")
+    eng = engine.Engine(conn, ctx, session_id="s1")
+    eng.advance("script")
+    eng.advance("voice")
+    eng.advance("timing")
+    eng.advance("footage")
+    eng.advance("assemble")
+
+    # enumeration must be in catalog with consumes='enumeration'
+    assert "enumeration" in catalog, "'enumeration' template must be in catalog"
+    assert catalog["enumeration"].consumes == "enumeration"
+
+    # scene→enumeration switch for scene 1 (has items data) must succeed.
+    eng.edit("footage", {"op": "pick_template", "scene_index": 1, "template": "enumeration"})
+
+    tmpl_overrides = store.get_template_overrides(conn, "s1")
+    assert 1 in tmpl_overrides, "template_overrides row must be written for scene 1"
+    assert tmpl_overrides[1]["value"] == "enumeration"
+
+    conn.close()
+
+
+def test_pick_template_hero_to_stat_not_blocked(tmp_path, monkeypatch):
+    """hero→stat (beat has value+label): pre-write guard must NOT block this.
+
+    stat has kind='stat' — it is data-driven (kind check in _is_data_driven), not
+    a footage template.  The guard only fires for plain footage 'scene'.
+    """
+    from pipeline.content import Beat, BeatsScript
+
+    # Script with a stat-eligible beat in the middle (has value+label data).
+    script = BeatsScript(title="Coral Reefs", beats=[
+        Beat(text="hook"),
+        Beat(text="70% covered", keywords="reef",
+             data={"value": "70%", "label": "ocean covered"}),
+        Beat(text="outro"),
+    ])
+    monkeypatch.setattr("pipeline.script.generate_grounded_script",
+                        lambda t, cache_dir=None, **kw: script)
+    monkeypatch.setattr(
+        "pipeline.tts.synthesize",
+        lambda lines, path, **kw: (
+            Path(path).parent.mkdir(parents=True, exist_ok=True),
+            Path(path).write_bytes(b"W"),
+            [LineOffset(i, t, float(i), float(i + 1)) for i, t in enumerate(lines)])[-1],
+    )
+    monkeypatch.setattr("pipeline.timing.transcribe_words",
+                        lambda wav, fps: [WordTiming("w", 0, 5)])
+    monkeypatch.setattr("pipeline.footage.require_env", lambda name: "KEY")
+    monkeypatch.setattr("pipeline.footage.search_pexels",
+                        lambda q, key: {"videos": [_fake_video()]})
+    monkeypatch.setattr("pipeline.footage.fetch_footage",
+                        lambda reqs, out_dir, *, fps=30, **kw: [
+                            Clip(index=r.index, query=r.query,
+                                 path=f"assets/f{r.index}.mp4", duration_frames=300)
+                            for r in reqs
+                        ])
+    monkeypatch.setattr("pipeline.footage._download",
+                        lambda url, dest: Path(dest).write_bytes(b"clip"))
+
+    catalog = validate_stage.load_catalog(_TEMPLATES)
+    ctx = _ctx(tmp_path, catalog=catalog)
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="Coral Reefs", now="t0")
+    eng = engine.Engine(conn, ctx, session_id="s1")
+    eng.advance("script")
+    eng.advance("voice")
+    eng.advance("timing")
+    eng.advance("footage")
+    eng.advance("assemble")
+
+    # Beat 1 has stat data — it will be a stat scene.  The plan reflects this.
+    script_bundle = eng._load_output("script")
+    plan = script_bundle["plan"]
+    # stat scene: needs_footage == False (stat is a hero)
+    # (recipe assigns it 'stat' role; no footage clip for its scene_index in clips)
+    assert plan.scenes[1].role in ("stat", "scene"), (
+        f"expected beat 1 to be stat or scene; got role={plan.scenes[1].role!r}")
+
+    # Switching scene 1 to 'stat' (if it's a footage scene) or verifying it doesn't error
+    # when scene 1 already IS a stat (guard shouldn't fire for data-driven templates).
+    # In either case: pick_template 'stat' must succeed (no spurious footage guard block).
+    assert "stat" in catalog, "'stat' template must be in catalog"
+    eng.edit("footage", {"op": "pick_template", "scene_index": 1, "template": "stat"})
+
+    tmpl_overrides = store.get_template_overrides(conn, "s1")
+    assert 1 in tmpl_overrides, "template_overrides row must be written for scene 1"
+    assert tmpl_overrides[1]["value"] == "stat"
+
+    conn.close()
+
+
+# ── 16. footage scene with a clip → 'scene' template switch NOT blocked ───────
+
+def test_pick_template_footage_scene_with_clip_not_blocked(tmp_path, monkeypatch):
+    """A footage scene (has a downloaded clip) → 'scene' template: guard must NOT block.
+
+    The guard fires only when a NON-footage (hero) scene has NO clip.  A scene that
+    already has a clip (needs_footage=True from the plan) must pass through freely.
+    """
+    eng, conn, ctx, catalog = _make_session(tmp_path, monkeypatch)
+    eng.advance("assemble")
+
+    # Scene 1 is the footage middle scene (needs_footage=True), has a clip.
+    script_bundle = eng._load_output("script")
+    plan = script_bundle["plan"]
+    assert plan.scenes[1].needs_footage, "scene 1 must be a footage scene (precondition)"
+
+    footage_out = eng._load_output("footage")
+    assert any(c.index == 1 for c in footage_out["clips"]), (
+        "scene 1 must have a footage clip (precondition)")
+
+    # Switching a footage scene back to 'scene' template must succeed (no spurious block).
+    eng.edit("footage", {"op": "pick_template", "scene_index": 1, "template": "scene"})
+
+    tmpl_overrides = store.get_template_overrides(conn, "s1")
+    assert 1 in tmpl_overrides, "template_overrides row must be written for scene 1"
+    assert tmpl_overrides[1]["value"] == "scene"
+
+    conn.close()
