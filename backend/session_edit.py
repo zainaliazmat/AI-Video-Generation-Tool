@@ -44,6 +44,22 @@ def _apply(sid: str, op: dict) -> dict:
     try:
         api.edit(sess, "footage", op)
         scene = op["scene_index"]
+        if op.get("target") == "background":
+            # Background ops write to background_overrides, not media_provenance.
+            # Read back the override row so the response is honest (not null).
+            conn = store.connect(job_ctx.SESSIONS_DB)
+            try:
+                bov = store.get_background_overrides(conn, sid).get(scene)
+            finally:
+                conn.close()
+            return {"ok": True, "sid": sid, "scene": scene,
+                    "selectedRank": (None if bov is None else bov["picked_rank"]),
+                    "provenance": (None if bov is None else {
+                        "source": bov["source"],
+                        "query": (bov.get("value") or {}).get("query"),
+                        "rank": bov["picked_rank"],
+                        "pexelsId": (bov.get("value") or {}).get("pexels_id"),
+                        "pexelsUrl": (bov.get("value") or {}).get("pexels_url")})}
         prov = api.media_provenance(sess).get(scene)
         return {"ok": True, "sid": sid, "scene": scene,
                 "selectedRank": (None if prov is None else prov["rank"]),
@@ -99,7 +115,9 @@ def _row_for(sid: str) -> tuple[str, int]:
         conn.close()
 
 
-if __name__ == "__main__":
+def build_parser():
+    """Return the ArgumentParser for session_edit.  Extracted so tests can import
+    and exercise it directly rather than rebuilding it inline (Fix 3)."""
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--sid", required=True)
@@ -112,7 +130,13 @@ if __name__ == "__main__":
                     choices=["footage", "background"])  # v3: background override target
     ap.add_argument("--broaden", action="store_true")   # v3: re_query → topic title
     ap.add_argument("--template")                        # v3: pick_template
-    args = ap.parse_args()
+    return ap
+
+
+def main(argv=None):
+    """CLI entry-point.  Returns 0 on success, 1 on error (prints JSON either way).
+    Pass argv explicitly in tests; defaults to sys.argv[1:] when called as __main__."""
+    args = build_parser().parse_args(argv)
     try:
         if args.op == "pick":
             if args.rank is None:
@@ -132,6 +156,11 @@ if __name__ == "__main__":
                 raise ValueError("--template is required for --op pick_template")
             res = apply_pick_template(args.sid, scene=args.scene, template=args.template)
         print(json.dumps(res))
+        return 0
     except Exception as e:  # fail-loud: non-zero exit + error JSON on stdout
         print(json.dumps({"ok": False, "error": str(e)}))
-        sys.exit(1)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

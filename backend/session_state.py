@@ -91,6 +91,13 @@ def build_state(sid: str) -> dict:
         # Beat data indexed by scene position — the eligibility signal (beat data +
         # position), NOT the rendered templateProps (which was the M5-exit bug).
         beat_data_map = _beat_data_by_index(conn, sid)
+        # Bulk-fetch per-scene tables ONCE before the loop to avoid N+1 queries.
+        # get_footage_candidates_all returns {scene_index: [rows]} in one SQL hit;
+        # get_pick_log with scene_index=None returns all rows for the session.
+        all_candidate_rows = store.get_footage_candidates_all(conn, sid)
+        all_pick_log_rows: dict = {}
+        for r in store.get_pick_log(conn, sid):
+            all_pick_log_rows.setdefault(r["scene_index"], []).append(r)
         all_scenes = spec.get("scenes", [])
         scene_count = len(all_scenes)
 
@@ -98,9 +105,11 @@ def build_state(sid: str) -> dict:
         for i, sc in enumerate(all_scenes):
             media = (sc.get("templateProps") or {}).get("media")
             needs_footage = media is not None
+            # Index into the bulk-fetched map — no per-scene SQL.
+            scene_candidate_rows = all_candidate_rows.get(i, [])
             candidates = []
             if needs_footage:
-                for r in store.get_footage_candidates(conn, sid, scene_index=i):
+                for r in scene_candidate_rows:
                     candidates.append({
                         "rank": r["rank"], "thumbUrl": r["thumb_url"], "query": r["query"],
                         "durationFrames": r["duration_frames"], "selected": bool(r["selected"])})
@@ -123,9 +132,9 @@ def build_state(sid: str) -> dict:
             # 3. backgroundPool: footage_candidates for hero scenes (those that
             #    are not footage scenes but still have a pool). Always present
             #    (may be empty list); includes poolError marker when applicable.
-            bg_pool_rows = store.get_footage_candidates(conn, sid, scene_index=i)
+            #    Reuses the already-fetched scene_candidate_rows — no second query.
             background_pool = []
-            for r in bg_pool_rows:
+            for r in scene_candidate_rows:
                 background_pool.append({
                     "rank": r["rank"], "thumbUrl": r["thumb_url"],
                     "query": r["query"], "durationFrames": r["duration_frames"],
@@ -154,7 +163,8 @@ def build_state(sid: str) -> dict:
                 }
 
             # 5. pickLogCount + lastPick: scene-level pick evidence for M6 popover.
-            pick_rows = store.get_pick_log(conn, sid, scene_index=i)
+            #    Indexed into the bulk-fetched map — no per-scene SQL.
+            pick_rows = all_pick_log_rows.get(i, [])
             pick_log_count = len(pick_rows)
             if pick_rows:
                 last = pick_rows[-1]

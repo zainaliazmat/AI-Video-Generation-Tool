@@ -756,24 +756,12 @@ def test_gatekeeper_background_pick_awaiting_scenes_gate_instant(tmp_path, monke
 
 def test_cli_argparse_target_background():
     """argparse handles --target background without error."""
-    import argparse
-    import sys
+    import session_edit as se
 
-    # Replicate the argparse setup from session_edit.py
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--sid", required=True)
-    ap.add_argument("--op", required=True,
-                    choices=["pick", "re_query", "upload", "pick_template"])
-    ap.add_argument("--scene", type=int, required=True)
-    ap.add_argument("--rank", type=int)
-    ap.add_argument("--query")
-    ap.add_argument("--file")
-    ap.add_argument("--target", default="footage", choices=["footage", "background"])
-    ap.add_argument("--broaden", action="store_true")
-    ap.add_argument("--template")
-
+    # Use the real parser from session_edit to catch any drift in arg definitions.
+    ap = se.build_parser()
     args = ap.parse_args(["--sid", "s1", "--op", "pick", "--scene", "0",
-                           "--rank", "2", "--target", "background"])
+                          "--rank", "2", "--target", "background"])
     assert args.target == "background"
     assert args.rank == 2
     assert args.broaden is False
@@ -781,22 +769,11 @@ def test_cli_argparse_target_background():
 
 def test_cli_argparse_broaden():
     """argparse handles --broaden flag."""
-    import argparse
+    import session_edit as se
 
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--sid", required=True)
-    ap.add_argument("--op", required=True,
-                    choices=["pick", "re_query", "upload", "pick_template"])
-    ap.add_argument("--scene", type=int, required=True)
-    ap.add_argument("--rank", type=int)
-    ap.add_argument("--query")
-    ap.add_argument("--file")
-    ap.add_argument("--target", default="footage", choices=["footage", "background"])
-    ap.add_argument("--broaden", action="store_true")
-    ap.add_argument("--template")
-
+    ap = se.build_parser()
     args = ap.parse_args(["--sid", "s1", "--op", "re_query", "--scene", "0",
-                           "--broaden", "--target", "background"])
+                          "--broaden", "--target", "background"])
     assert args.broaden is True
     assert args.target == "background"
     assert args.query is None
@@ -804,21 +781,153 @@ def test_cli_argparse_broaden():
 
 def test_cli_argparse_pick_template():
     """argparse handles --op pick_template --template <id>."""
-    import argparse
+    import session_edit as se
 
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--sid", required=True)
-    ap.add_argument("--op", required=True,
-                    choices=["pick", "re_query", "upload", "pick_template"])
-    ap.add_argument("--scene", type=int, required=True)
-    ap.add_argument("--rank", type=int)
-    ap.add_argument("--query")
-    ap.add_argument("--file")
-    ap.add_argument("--target", default="footage", choices=["footage", "background"])
-    ap.add_argument("--broaden", action="store_true")
-    ap.add_argument("--template")
-
+    ap = se.build_parser()
     args = ap.parse_args(["--sid", "s1", "--op", "pick_template", "--scene", "1",
-                           "--template", "scene"])
+                          "--template", "scene"])
     assert args.op == "pick_template"
     assert args.template == "scene"
+
+
+# ── 12. build_state bulk-read: query count bounded + payload identical ────────
+
+def test_build_state_bulk_reads_no_n_plus_1(tmp_path, monkeypatch):
+    """build_state issues O(1) SQL queries regardless of scene count — the
+    footage_candidates and pick_log tables are fetched in one hit each, not once
+    per scene.  Baseline: a 3-scene session has ≥1 footage scene; the per-scene
+    queries before the refactor were O(N).  After the refactor the SELECT count
+    for those two tables is exactly 1 each (session-level fetches)."""
+    from pipeline import projects as projects_mod
+    from session.executors import EngineContext
+
+    sid = "qs1"
+    # spec must land at projects/<sid>/spec.json so build_state finds it.
+    sid_dir = tmp_path / "projects" / sid
+    sid_dir.mkdir(parents=True, exist_ok=True)
+
+    search = {"coral reef": [_fake_video(link="c.mp4", duration_s=6.0, pexels_id=7)]}
+    catalog = validate_stage.load_catalog(_TEMPLATES)
+    _install_fakes(monkeypatch, search_results=search)
+    ctx = EngineContext(
+        topic="Coral Reefs", fps=30, theme=Theme(), catalog=catalog,
+        assets_dir=tmp_path / "a", cache_dir=tmp_path / "c",
+        voiceover_path=tmp_path / "a" / projects_mod.voiceover_name(sid),
+        spec_out=sid_dir / "spec.json", sources_out=sid_dir / "sources.json",
+    )
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id=sid, topic="Coral Reefs", now="t0")
+    eng = engine.Engine(conn, ctx, session_id=sid)
+    eng.advance("script")
+    eng.advance("voice")
+    eng.advance("timing")
+    eng.advance("footage")
+    eng.advance("assemble")
+    eng.materialize_spec()   # writes projects/<sid>/spec.json
+    conn.close()
+
+    # Point session_state's job_ctx at the seed's tmp paths.
+    monkeypatch.setattr("session.job_ctx.SESSIONS_DB", tmp_path / "s.db")
+    monkeypatch.setattr("session.job_ctx.REPO_ROOT", tmp_path)
+
+    # Count SQL executes via set_trace_callback on the connection that build_state opens.
+    import session_state as ss
+    import session.store as _store
+
+    query_log: list[str] = []
+    _orig_connect = _store.connect
+
+    def _counting_connect(path):
+        real_conn = _orig_connect(path)
+        real_conn.set_trace_callback(query_log.append)
+        return real_conn
+
+    monkeypatch.setattr("session.store.connect", _counting_connect)
+
+    # Run build_state and capture the payload.
+    state = ss.build_state(sid)
+
+    # Payload sanity: same structure as before.
+    assert state["sid"] == sid
+    foot_scenes = [s for s in state["scenes"] if s["needsFootage"]]
+    assert foot_scenes, "at least one footage scene must be present"
+    assert foot_scenes[0]["candidates"], "footage candidates must be populated"
+
+    # Query-count contract: footage_candidates and pick_log each appear exactly
+    # ONCE (the session-level bulk fetch), not N times (once per scene).
+    fc_queries = [q for q in query_log if "footage_candidates" in q.lower()]
+    pl_queries = [q for q in query_log if "pick_log" in q.lower()]
+    scene_count = len(state["scenes"])
+    assert len(fc_queries) == 1, (
+        f"footage_candidates queried {len(fc_queries)} times for {scene_count} scenes "
+        f"(expected exactly 1 bulk fetch); queries: {fc_queries}")
+    assert len(pl_queries) == 1, (
+        f"pick_log queried {len(pl_queries)} times for {scene_count} scenes "
+        f"(expected exactly 1 bulk fetch); queries: {pl_queries}")
+
+
+# ── 13. background pick edit response is honest (not null) ───────────────────
+
+def test_apply_pick_background_response_carries_provenance(tmp_path, monkeypatch):
+    """session_edit.apply_pick with target='background' must return selectedRank and
+    provenance from the background_overrides row — not null (the M5 review finding)."""
+    from pathlib import Path
+    from pipeline import projects as projects_mod
+    from session.executors import EngineContext
+
+    # Need the spec at projects/<sid>/spec.json so the CLI path resolves correctly.
+    sid = "bg-edit-cli"
+    sid_dir = tmp_path / "projects" / sid
+    sid_dir.mkdir(parents=True, exist_ok=True)
+
+    search = {
+        "default": [
+            _fake_video(link="bg1.mp4", duration_s=6.0, pexels_id=10),
+            _fake_video(link="bg2.mp4", duration_s=9.0, pexels_id=20),
+        ],
+    }
+    catalog = validate_stage.load_catalog(_TEMPLATES)
+    _install_fakes(monkeypatch, search_results=search)
+    ctx = EngineContext(
+        topic="Coral Reefs", fps=30, theme=Theme(), catalog=catalog,
+        assets_dir=tmp_path / "a", cache_dir=tmp_path / "c",
+        voiceover_path=tmp_path / "a" / projects_mod.voiceover_name(sid),
+        spec_out=sid_dir / "spec.json", sources_out=sid_dir / "sources.json",
+    )
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id=sid, topic="Coral Reefs", now="t0")
+    eng = engine.Engine(conn, ctx, session_id=sid)
+    eng.advance("script")
+    eng.advance("voice")
+    eng.advance("timing")
+    eng.advance("footage")
+    eng.advance("assemble")
+    eng.materialize_spec()   # writes projects/<sid>/spec.json
+    conn.close()
+
+    # Seed a background override so the hero scene has an initial auto pick.
+    conn2 = store.connect(tmp_path / "s.db")
+    store.upsert_background_override(conn2, sid, 0, value={"path": "assets/bg1.mp4"},
+                                     source="auto", picked_rank=1, now="t0")
+    conn2.close()
+
+    # Point session_edit's job_ctx at the seed.
+    monkeypatch.setattr("session.job_ctx.SESSIONS_DB", tmp_path / "s.db")
+    monkeypatch.setattr("session.job_ctx.REPO_ROOT", tmp_path)
+    monkeypatch.setattr("session.job_ctx.ASSETS_DIR", tmp_path / "a")
+    monkeypatch.setattr("session.job_ctx.RETRIEVAL_CACHE", tmp_path / "c")
+
+    import session_edit as se
+    res = se.apply_pick(sid, scene=0, rank=2, target="background")
+
+    # Response must be honest — selectedRank and provenance must NOT be null.
+    assert res["ok"] is True
+    assert res["scene"] == 0
+    assert res["selectedRank"] == 2, (
+        f"background pick selectedRank must be 2 (the picked rank), got {res['selectedRank']!r}")
+    assert res["provenance"] is not None, (
+        "background pick provenance must not be null — bg ops use background_overrides, "
+        "not media_provenance; the edit response must read from the right table")
+    assert res["provenance"]["source"] == "pinned", (
+        f"expected source='pinned', got {res['provenance']['source']!r}")
+    assert res["provenance"]["rank"] == 2

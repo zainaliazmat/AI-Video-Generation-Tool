@@ -202,6 +202,17 @@ def get_footage_candidates(conn, session_id, *, scene_index):
         (session_id, scene_index)).fetchall()
 
 
+def get_footage_candidates_all(conn, session_id) -> dict:
+    """{scene_index: [rows]} for ALL scenes in one query (avoids N+1 per-scene hits)."""
+    rows = conn.execute(
+        "SELECT * FROM footage_candidates WHERE session_id=? ORDER BY scene_index, rank",
+        (session_id,)).fetchall()
+    result: dict = {}
+    for r in rows:
+        result.setdefault(r["scene_index"], []).append(r)
+    return result
+
+
 def set_selected_candidate(conn, session_id, *, scene_index, rank) -> None:
     """Mark exactly one candidate selected for the scene (clear-all + set-one in one
     transaction so the scene can never end up with zero selections committed)."""
