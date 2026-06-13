@@ -395,3 +395,14 @@ body.ember::before {
     backdrop-filter: none;
   }
 }
+
+/* Cross-browser scrollbar hide — used by the Scenes template rail (horizontal)
+   and the clamped footage/background pools (vertical). Scroll still works; only
+   the visible track is suppressed. */
+.scrollbar-hide {
+  -ms-overflow-style: none;   /* IE/Edge */
+  scrollbar-width: none;      /* Firefox */
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;              /* WebKit */
+}
