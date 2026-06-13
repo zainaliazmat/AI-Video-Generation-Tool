@@ -300,12 +300,15 @@ export function ScrollPool({children}: {children?: ReactNode}) {
     <div className="relative">
       <div
         data-scrollpool
+        tabIndex={0}
+        role="region"
+        aria-label="Scrollable options"
         className="max-h-[260px] sm:max-h-[210px] overflow-y-auto scrollbar-hide"
       >
         {children}
       </div>
       {/* bottom fade — signals more content below the clamp */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-[#0e0e14] to-transparent" />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-[var(--bg-surface)] to-transparent" />
     </div>
   );
 }
