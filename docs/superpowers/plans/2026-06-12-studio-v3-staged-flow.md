@@ -1335,3 +1335,15 @@ M3 shipped (8d5e6a2 + stderr note): 440 backend green, typecheck clean, LIVE cur
 4. Route fixed overhead (~8s python spawn + copy-assets per POST) dominates cache hits — M6-T4 should show the spinner on FIRST play per voice and may reuse the returned path client-side for replays (the path is stable per (voice,text,speed)).
 
 **M3 STATUS: DONE — exit gate green (cache-hit + threading tests, curl passthrough proven).**
+
+## M4 BUILD AMENDMENTS (2026-06-13)
+
+M4 shipped (d73b19d, e23232e, 26a861d, c07fa4d): 462 backend + 113 remotion green, tsc ×3, captions-suppress 7/7, contrast gate PASS on real pixels (min-tile Michelson 0.9355 with-clip vs 0.9809 baseline, threshold 0.8828) AND falsification-proven (SCRIM_ALPHA=0 → 0.2311 → exit 1). Gate stills in ~/Downloads/studio-v3-eyes-on/. Notes for M5/M6/M7:
+
+1. HeroBackdrop: scrim SCRIM_ALPHA=0.55, gradient layer opacity 0.72 over a clip — heroBackground.ts untouched (delegation pinned by vitest; transitively byte-equal to pre-M4). No-clip mode is pixel-equivalent with one extra layer (gradient moved to a child AbsoluteFill), not byte-identical DOM.
+2. `timing` is a required TemplateProps field and flows from renderScene (remotion/src/Video.tsx:85; dᵢ+Tᵢ on the transition path) — M5-T5's injected backgroundClip loop math aligns.
+3. hero_bg_gate.py: TEXT_REGION pixel-derived for the gate's own title — re-derive if hero typography changes; it CLOBBERS root spec.json + remotion/public/spec.json (donor idiom) — never run mid-session with a staged spec; consider active-tiles hard floor + backup/restore wrapper if it joins CI. busy_test_pattern.mp4 (2.5MB) now lives in remotion/public/assets.
+4. M5-T5: _scene_media emits kenBurns defaults + fit:cover; HeroBackdrop accepts null/absent too. The OffthreadVideo (loop:false) hero branch hasn't had its own still — M7 artifact (c) covers it.
+5. test_spec_patch.py was NEW (plan said extend; none existed). backgroundClip patch-path + duration fences pinned there.
+
+**M4 STATUS: DONE — exit gate green (lockstep schemas, suppression untouched, contrast gate falsification-proven).**
