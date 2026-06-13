@@ -385,6 +385,12 @@ class Engine:
                     continue
                 new_flags.append({**f, "index": f["index"] - 1} if f["index"] > i else f)
             script.beat_flags = new_flags
+            # Reconcile every scene_index-keyed table BEFORE re-deriving the plan.
+            # Runs here (inside _edit_script, before the handler returns) so BOTH
+            # paths — rederive=True and rederive=False — hit this reconcile: edit()
+            # calls handler(op) first, then branches on rederive, so the tables are
+            # always consistent before any downstream re-derive or deferred payment.
+            store.drop_scene_index(self.conn, self.sid, i)
         else:
             raise ValueError(f"unknown script op {kind!r}")
 

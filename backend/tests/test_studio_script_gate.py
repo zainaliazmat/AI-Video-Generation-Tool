@@ -345,3 +345,176 @@ def test_engine_drop_beat_shifts_flags(tmp_path, monkeypatch):
     assert [b.text for b in out["script"].beats] == ["a", "c"]
     assert out["script"].beat_flags == [{"index": 1, "status": "unverified", "reason": "x"}]
     conn.close()
+
+
+# ── v3-M5 critical fix: drop_beat reconciles scene_index-keyed tables ─────────
+
+def _seed_scene_tables(conn, sid, indices):
+    """Seed background_overrides + template_overrides + pick_log for all `indices`."""
+    for i in indices:
+        store.upsert_background_override(
+            conn, sid, i, value={"path": f"bg{i}.mp4"}, source="auto",
+            picked_rank=1, now=f"t{i}")
+        store.upsert_template_override(
+            conn, sid, i, value=f"tmpl{i}", source="auto", now=f"t{i}")
+        store.append_pick_log(conn, sid, scene_index=i, kind="background",
+                              query=f"q{i}", ts=f"t{i}")
+        store.replace_footage_candidates(conn, sid, scene_index=i, candidates=[
+            {"rank": 1, "query": f"q{i}", "duration_frames": 90,
+             "thumb_url": None, "selected": 0},
+        ])
+        store.upsert_provenance(conn, sid, i, source="auto", query=f"q{i}",
+                                rank=1, pexels_id=i + 10, pexels_url=f"u{i}")
+
+
+def test_drop_beat_outro_pin_survives_middle_drop(tmp_path, monkeypatch):
+    """Scenario A: a pinned background on the last/outro scene (index 2 in a 3-beat
+    script) survives a middle drop_beat (index 1) and maps to the new last index (1).
+
+    Before drop: scenes 0 (hook), 1 (mid), 2 (outro).  Pin on index 2 = outro.
+    After drop_beat(1): scenes 0 (hook), 1 (outro).  Pin must now be at index 1."""
+    conn = _seed_script_session(tmp_path, [Beat(text="hook"), Beat(text="mid"), Beat(text="outro")])
+    # Stub downstream executors so edit() can run to completion
+    for st in ["voice", "timing", "footage", "assemble"]:
+        monkeypatch.setitem(engine.EXECUTORS, st, lambda ctx, inp: {})
+        monkeypatch.setitem(engine.CODECS, st, (lambda o: o, lambda d: d))
+    monkeypatch.setattr(engine.Engine, "materialize_spec", lambda self: None)
+
+    # Seed pins/overrides for all three scenes
+    _seed_scene_tables(conn, "s1", [0, 1, 2])
+
+    # Upgrade scene 2's background to pinned (the outro scene's pin we're protecting)
+    store.upsert_background_override(conn, "s1", 2, value={"path": "bg_pinned_outro.mp4"},
+                                     source="pinned", picked_rank=3, now="t_pin")
+
+    eng = engine.Engine(conn, _ctx(tmp_path), session_id="s1")
+    eng.edit("script", {"op": "drop_beat", "index": 1})
+
+    # After drop, outro is now at index 1
+    bg = store.get_background_overrides(conn, "s1")
+    assert set(bg.keys()) == {0, 1}, (
+        f"After middle drop: background_overrides should only have indices {{0,1}}; got {set(bg.keys())}")
+    assert bg[1]["source"] == "pinned", (
+        f"The outro's pinned row must be at new index 1; got source={bg[1]['source']!r}")
+    assert bg[1]["value"]["path"] == "bg_pinned_outro.mp4", (
+        f"Pinned outro row must carry the correct path; got {bg[1]['value']['path']!r}")
+    # Index 0 (hook) must be untouched
+    assert bg[0]["value"]["path"] == "bg0.mp4", (
+        f"Hook background at index 0 must be unchanged; got {bg[0]['value']['path']!r}")
+
+    # pick_log must not have any row still pointing at old index 2
+    pl = store.get_pick_log(conn, "s1")
+    assert not any(r["scene_index"] == 2 for r in pl), (
+        f"pick_log must have no rows at index 2 after drop; got "
+        f"{[dict(r) for r in pl if r['scene_index'] == 2]}")
+
+    conn.close()
+
+
+def test_drop_beat_hero_above_drop_not_misapplied(tmp_path, monkeypatch):
+    """Scenario B: a pinned background on the hook (index 0, ABOVE the drop site)
+    is NOT misapplied to a different scene after dropping index 1.
+
+    Before drop: scenes 0 (hook), 1 (mid), 2 (outro).  Pin on index 0.
+    After drop_beat(1): hook still at index 0 — its pin must stay at 0, not bleed
+    onto the scene that shifted into index 1."""
+    conn = _seed_script_session(tmp_path, [Beat(text="hook"), Beat(text="mid"), Beat(text="outro")])
+    for st in ["voice", "timing", "footage", "assemble"]:
+        monkeypatch.setitem(engine.EXECUTORS, st, lambda ctx, inp: {})
+        monkeypatch.setitem(engine.CODECS, st, (lambda o: o, lambda d: d))
+    monkeypatch.setattr(engine.Engine, "materialize_spec", lambda self: None)
+
+    _seed_scene_tables(conn, "s1", [0, 1, 2])
+
+    # Upgrade scene 0's background to pinned (hook = hero above drop)
+    store.upsert_background_override(conn, "s1", 0, value={"path": "bg_hook_pinned.mp4"},
+                                     source="pinned", picked_rank=5, now="t_hook_pin")
+
+    eng = engine.Engine(conn, _ctx(tmp_path), session_id="s1")
+    eng.edit("script", {"op": "drop_beat", "index": 1})
+
+    bg = store.get_background_overrides(conn, "s1")
+    # Hook pin must stay at index 0, unmodified
+    assert bg[0]["source"] == "pinned", (
+        f"Hook's pinned row must remain at index 0; got source={bg[0]['source']!r}")
+    assert bg[0]["value"]["path"] == "bg_hook_pinned.mp4", (
+        f"Hook pin path must be unchanged; got {bg[0]['value']['path']!r}")
+    # The new index 1 must NOT carry the hook pin (it was the outro's auto row)
+    assert bg[1]["value"]["path"] != "bg_hook_pinned.mp4", (
+        f"The hook's pin must NOT be misapplied to the new index-1 scene; "
+        f"got {bg[1]['value']['path']!r}")
+    assert bg[1]["source"] != "pinned", (
+        f"The new index-1 row must not inherit the hook's pinned status; "
+        f"got source={bg[1]['source']!r}")
+
+    conn.close()
+
+
+def test_edit_beat_leaves_scene_indices_unchanged(tmp_path, monkeypatch):
+    """Regression guard: edit_beat must NOT shift scene_index-keyed tables.
+    Only drop_beat restructures the index space; edit_beat is in-place text only."""
+    conn = _seed_script_session(tmp_path, [Beat(text="hook"), Beat(text="mid"), Beat(text="outro")])
+    for st in ["voice", "timing", "footage", "assemble"]:
+        monkeypatch.setitem(engine.EXECUTORS, st, lambda ctx, inp: {})
+        monkeypatch.setitem(engine.CODECS, st, (lambda o: o, lambda d: d))
+    monkeypatch.setattr(engine.Engine, "materialize_spec", lambda self: None)
+
+    _seed_scene_tables(conn, "s1", [0, 1, 2])
+
+    bg_before = dict(store.get_background_overrides(conn, "s1"))
+    tmpl_before = dict(store.get_template_overrides(conn, "s1"))
+    pl_before = list(store.get_pick_log(conn, "s1"))
+
+    eng = engine.Engine(conn, _ctx(tmp_path), session_id="s1")
+    eng.edit("script", {"op": "edit_beat", "index": 1, "text": "EDITED MID"})
+
+    bg_after = store.get_background_overrides(conn, "s1")
+    tmpl_after = store.get_template_overrides(conn, "s1")
+    pl_after = list(store.get_pick_log(conn, "s1"))
+
+    # All three indices must still exist in every table
+    assert set(bg_after.keys()) == {0, 1, 2}, (
+        f"edit_beat must not change background_overrides indices; got {set(bg_after.keys())}")
+    assert set(tmpl_after.keys()) == {0, 1, 2}, (
+        f"edit_beat must not change template_overrides indices; got {set(tmpl_after.keys())}")
+    assert [r["scene_index"] for r in pl_after] == [r["scene_index"] for r in pl_before], (
+        "edit_beat must not shift pick_log scene_indices")
+
+    conn.close()
+
+
+def test_drop_beat_deferred_rederive_also_reconciles(tmp_path, monkeypatch):
+    """drop_beat with rederive=False (gated path): scene_index-keyed tables are
+    reconciled immediately even though downstream stages are deferred to Re-approve.
+
+    This confirms the fix lands inside _edit_script (before edit() branches on
+    rederive) so both the immediate and deferred paths get the reconcile."""
+    conn = _seed_script_session(tmp_path, [Beat(text="hook"), Beat(text="mid"), Beat(text="outro")])
+    # Stub downstream executors — they must NOT be called in the deferred path
+    ran = []
+    for st in ["voice", "timing", "footage", "assemble"]:
+        monkeypatch.setitem(engine.EXECUTORS, st,
+                            (lambda s: lambda ctx, inp: ran.append(s) or {})(st))
+        monkeypatch.setitem(engine.CODECS, st, (lambda o: o, lambda d: d))
+    monkeypatch.setattr(engine.Engine, "materialize_spec", lambda self: None)
+
+    _seed_scene_tables(conn, "s1", [0, 1, 2])
+
+    eng = engine.Engine(conn, _ctx(tmp_path), session_id="s1")
+    # Deferred path (rederive=False)
+    eng.edit("script", {"op": "drop_beat", "index": 1}, rederive=False)
+
+    # Downstream must NOT have run (deferred)
+    assert ran == [], f"rederive=False must not run downstream executors; ran={ran}"
+
+    # BUT the tables must already be reconciled — immediate, not deferred
+    bg = store.get_background_overrides(conn, "s1")
+    assert set(bg.keys()) == {0, 1}, (
+        f"background_overrides must be reconciled even in deferred path; "
+        f"got indices {set(bg.keys())}")
+    tmpl = store.get_template_overrides(conn, "s1")
+    assert set(tmpl.keys()) == {0, 1}, (
+        f"template_overrides must be reconciled even in deferred path; "
+        f"got indices {set(tmpl.keys())}")
+
+    conn.close()

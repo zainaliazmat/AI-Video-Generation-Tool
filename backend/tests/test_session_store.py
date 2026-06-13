@@ -490,3 +490,156 @@ def test_pick_log_migration_safety_new_tables_on_pre_m5_db(tmp_path):
     # existing session still readable
     assert store.get_session(conn, "old1")["topic"] == "t"
     conn.close()
+
+
+# ── v3-M5 critical fix: drop_scene_index reconciles all five keyed tables ────
+
+def _seed_all_five_tables(conn, sid, indices):
+    """Seed rows at each index in `indices` across all five scene_index-keyed tables."""
+    for i in indices:
+        # footage_candidates — PK (session_id, scene_index, rank)
+        store.replace_footage_candidates(conn, sid, scene_index=i, candidates=[
+            {"rank": 1, "query": f"q{i}", "duration_frames": 30,
+             "thumb_url": f"t{i}", "selected": 0},
+        ])
+        # media_provenance — PK (session_id, scene_index)
+        store.upsert_provenance(conn, sid, i, source="auto", query=f"q{i}",
+                                rank=1, pexels_id=i + 100, pexels_url=f"u{i}")
+        # template_overrides — PK (session_id, scene_index)
+        store.upsert_template_override(conn, sid, i, value=f"tmpl{i}",
+                                       source="auto", now=f"t{i}")
+        # background_overrides — PK (session_id, scene_index)
+        store.upsert_background_override(conn, sid, i, value={"path": f"bg{i}.mp4"},
+                                         source="auto", picked_rank=1, now=f"t{i}")
+        # pick_log — PK (session_id, seq); scene_index is a data column
+        store.append_pick_log(conn, sid, scene_index=i, kind="footage",
+                              query=f"q{i}", ts=f"t{i}")
+
+
+def test_drop_scene_index_removes_dropped_and_shifts_higher(tmp_path):
+    """drop_scene_index(conn, sid, 1): rows at index 1 gone; 2→1, 3→2; index 0 untouched."""
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="t", now="t0")
+    _seed_all_five_tables(conn, "s1", [0, 1, 2, 3])
+
+    store.drop_scene_index(conn, "s1", 1)
+
+    # ── footage_candidates ────────────────────────────────────────────────────
+    def _fc_indices(c, sid):
+        return {r["scene_index"] for r in c.execute(
+            "SELECT scene_index FROM footage_candidates WHERE session_id=?", (sid,)
+        ).fetchall()}
+
+    assert _fc_indices(conn, "s1") == {0, 1, 2}, (
+        "footage_candidates: index 1 dropped, 2→1, 3→2; 0 untouched")
+
+    # ── media_provenance ──────────────────────────────────────────────────────
+    prov = store.get_media_provenance(conn, "s1")
+    assert set(prov.keys()) == {0, 1, 2}, (
+        f"media_provenance: expected indices {{0,1,2}}; got {set(prov.keys())}")
+    assert prov[0]["query"] == "q0"   # index 0 untouched
+    assert prov[1]["query"] == "q2"   # was index 2
+    assert prov[2]["query"] == "q3"   # was index 3
+
+    # ── template_overrides ────────────────────────────────────────────────────
+    tmpl = store.get_template_overrides(conn, "s1")
+    assert set(tmpl.keys()) == {0, 1, 2}, (
+        f"template_overrides: expected indices {{0,1,2}}; got {set(tmpl.keys())}")
+    assert tmpl[0]["value"] == "tmpl0"
+    assert tmpl[1]["value"] == "tmpl2"
+    assert tmpl[2]["value"] == "tmpl3"
+
+    # ── background_overrides ──────────────────────────────────────────────────
+    bg = store.get_background_overrides(conn, "s1")
+    assert set(bg.keys()) == {0, 1, 2}, (
+        f"background_overrides: expected indices {{0,1,2}}; got {set(bg.keys())}")
+    assert bg[0]["value"]["path"] == "bg0.mp4"
+    assert bg[1]["value"]["path"] == "bg2.mp4"
+    assert bg[2]["value"]["path"] == "bg3.mp4"
+
+    # ── pick_log ──────────────────────────────────────────────────────────────
+    pl = store.get_pick_log(conn, "s1")
+    assert [r["scene_index"] for r in pl] == [0, 1, 2], (
+        f"pick_log: expected scene_indices [0,1,2] after drop; got "
+        f"{[r['scene_index'] for r in pl]}")
+    assert pl[1]["query"] == "q2"   # was index 2
+    assert pl[2]["query"] == "q3"   # was index 3
+
+    conn.close()
+
+
+def test_drop_scene_index_dropped_row_gone_in_every_table(tmp_path):
+    """The row at the dropped index is completely absent from all five tables."""
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="t", now="t0")
+    _seed_all_five_tables(conn, "s1", [0, 1, 2, 3])
+
+    store.drop_scene_index(conn, "s1", 1)
+
+    # footage_candidates
+    assert store.get_footage_candidates(conn, "s1", scene_index=1) == [] or \
+        all(r["query"] != "q1" for r in store.get_footage_candidates(conn, "s1", scene_index=1)), (
+        "footage_candidates: original index-1 row must be gone")
+    # media_provenance
+    prov = store.get_media_provenance(conn, "s1")
+    # index 1's original query was "q1"; after shift index 1 should have "q2"
+    assert prov.get(1, {}).get("query") != "q1", "media_provenance: original index-1 row must be gone"
+    # template_overrides
+    tmpl = store.get_template_overrides(conn, "s1")
+    assert tmpl.get(1, {}).get("value") != "tmpl1", "template_overrides: original index-1 row must be gone"
+    # background_overrides
+    bg = store.get_background_overrides(conn, "s1")
+    assert bg.get(1, {}).get("value", {}).get("path") != "bg1.mp4", (
+        "background_overrides: original index-1 row must be gone")
+    # pick_log
+    pl = store.get_pick_log(conn, "s1")
+    assert not any(r["scene_index"] == 1 and r["query"] == "q1" for r in pl), (
+        "pick_log: original index-1 row must be gone")
+
+    conn.close()
+
+
+def test_drop_scene_index_index_zero_untouched_in_every_table(tmp_path):
+    """After dropping index 1, index-0 rows in all five tables are completely untouched."""
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="s1", topic="t", now="t0")
+    _seed_all_five_tables(conn, "s1", [0, 1, 2, 3])
+
+    store.drop_scene_index(conn, "s1", 1)
+
+    prov = store.get_media_provenance(conn, "s1")
+    assert prov[0]["query"] == "q0", "media_provenance index 0 must be untouched"
+
+    tmpl = store.get_template_overrides(conn, "s1")
+    assert tmpl[0]["value"] == "tmpl0", "template_overrides index 0 must be untouched"
+
+    bg = store.get_background_overrides(conn, "s1")
+    assert bg[0]["value"]["path"] == "bg0.mp4", "background_overrides index 0 must be untouched"
+
+    pl = store.get_pick_log(conn, "s1")
+    assert pl[0]["query"] == "q0", "pick_log index 0 must be untouched"
+
+    conn.close()
+
+
+def test_drop_scene_index_no_cross_session_contamination(tmp_path):
+    """drop_scene_index for session A must not touch session B's rows."""
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id="sA", topic="t", now="t0")
+    store.create_session(conn, id="sB", topic="t", now="t0")
+    _seed_all_five_tables(conn, "sA", [0, 1, 2])
+    _seed_all_five_tables(conn, "sB", [0, 1, 2])
+
+    store.drop_scene_index(conn, "sA", 1)
+
+    # sB must be completely untouched
+    prov_b = store.get_media_provenance(conn, "sB")
+    assert set(prov_b.keys()) == {0, 1, 2}, "sB media_provenance must be untouched"
+    tmpl_b = store.get_template_overrides(conn, "sB")
+    assert set(tmpl_b.keys()) == {0, 1, 2}, "sB template_overrides must be untouched"
+    bg_b = store.get_background_overrides(conn, "sB")
+    assert set(bg_b.keys()) == {0, 1, 2}, "sB background_overrides must be untouched"
+    pl_b = store.get_pick_log(conn, "sB")
+    assert [r["scene_index"] for r in pl_b] == [0, 1, 2], "sB pick_log must be untouched"
+
+    conn.close()

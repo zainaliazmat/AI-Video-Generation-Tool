@@ -463,6 +463,90 @@ def get_pick_log(conn, session_id, scene_index=None) -> list:
     ).fetchall()
 
 
+def drop_scene_index(conn, session_id, dropped_index: int) -> None:
+    """Reconcile every scene_index-keyed table after beat i is dropped.
+
+    Called by engine._edit_script immediately after script.beats.pop(i), before
+    re-deriving the plan.  Must run regardless of rederive=True/False because
+    these tables hold persisted state, not derived-on-rederive data.
+
+    For EACH of the five scene_index-keyed tables:
+      1. DELETE the row(s) at the dropped index (the scene no longer exists).
+      2. UPDATE scene_index -= 1 for every row above the drop (shift down).
+
+    Order matters: DELETE before UPDATE prevents a transient PK collision in
+    footage_candidates (PK is (session_id, scene_index, rank) — deleting the gap
+    first ensures the decrement never collides with an existing lower row).
+
+    All ten statements run in ONE transaction: a crash leaves the tables either
+    fully reconciled or untouched — never half-shifted."""
+    with conn:
+        # ── footage_candidates — PK (session_id, scene_index, rank) ──────────
+        conn.execute(
+            "DELETE FROM footage_candidates"
+            " WHERE session_id=? AND scene_index=?",
+            (session_id, dropped_index),
+        )
+        conn.execute(
+            "UPDATE footage_candidates"
+            " SET scene_index = scene_index - 1"
+            " WHERE session_id=? AND scene_index > ?",
+            (session_id, dropped_index),
+        )
+
+        # ── media_provenance — PK (session_id, scene_index) ──────────────────
+        conn.execute(
+            "DELETE FROM media_provenance"
+            " WHERE session_id=? AND scene_index=?",
+            (session_id, dropped_index),
+        )
+        conn.execute(
+            "UPDATE media_provenance"
+            " SET scene_index = scene_index - 1"
+            " WHERE session_id=? AND scene_index > ?",
+            (session_id, dropped_index),
+        )
+
+        # ── template_overrides — PK (session_id, scene_index) ────────────────
+        conn.execute(
+            "DELETE FROM template_overrides"
+            " WHERE session_id=? AND scene_index=?",
+            (session_id, dropped_index),
+        )
+        conn.execute(
+            "UPDATE template_overrides"
+            " SET scene_index = scene_index - 1"
+            " WHERE session_id=? AND scene_index > ?",
+            (session_id, dropped_index),
+        )
+
+        # ── background_overrides — PK (session_id, scene_index) ──────────────
+        conn.execute(
+            "DELETE FROM background_overrides"
+            " WHERE session_id=? AND scene_index=?",
+            (session_id, dropped_index),
+        )
+        conn.execute(
+            "UPDATE background_overrides"
+            " SET scene_index = scene_index - 1"
+            " WHERE session_id=? AND scene_index > ?",
+            (session_id, dropped_index),
+        )
+
+        # ── pick_log — PK (session_id, seq); scene_index is a data column ────
+        conn.execute(
+            "DELETE FROM pick_log"
+            " WHERE session_id=? AND scene_index=?",
+            (session_id, dropped_index),
+        )
+        conn.execute(
+            "UPDATE pick_log"
+            " SET scene_index = scene_index - 1"
+            " WHERE session_id=? AND scene_index > ?",
+            (session_id, dropped_index),
+        )
+
+
 def delete_session(conn, session_id) -> None:
     """Remove a session and ALL its rows across every keyed table.
     One transaction so a crash can't leave half the session behind. Idempotent."""
