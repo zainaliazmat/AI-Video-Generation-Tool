@@ -476,19 +476,67 @@ class Engine:
         if reverts_seq is not None:
             store.mark_patch_reverted(self.conn, self.sid, seq=reverts_seq)
 
+    # ── hero-role lookup helper ───────────────────────────────────────────────
+    def _is_hero_scene(self, scene_index: int) -> bool:
+        """True when scene_index belongs to a hero role (hook/stat/outro).
+        Hero roles are those with a HERO_BACKGROUND_POLICY entry (T6 invariant:
+        the policy table is the policy-known set — no separate hard list)."""
+        from pipeline import footage as footage_stage
+        script_bundle = self._load_output("script")
+        if script_bundle is None:
+            return False
+        plan = script_bundle.get("plan")
+        if plan is None or scene_index >= len(plan.scenes):
+            return False
+        role = plan.scenes[scene_index].role
+        return role in footage_stage.HERO_BACKGROUND_POLICY
+
     def _edit_footage(self, op):
         from pipeline import footage as footage_stage
         from pipeline.contracts import Clip
+        from datetime import datetime, timezone
         out = self._load_output("footage")
         scene = op["scene_index"]
+        target = op.get("target", "footage")  # "footage" (default) | "background"
 
+        # ── pick_template — template override for any scene ──────────────────────
+        if op["op"] == "pick_template":
+            self._pick_template(scene, op)
+            return
+
+        # ── HERO-PICK GUARD (T2-review hazard) ──────────────────────────────────
+        # A plain footage-target op aimed at a hero index is rejected — heroes have
+        # candidate rows since T1, so the old path would download + stamp bogus
+        # provenance and bind nothing (the clip list has no hero entry).
+        # Symmetrically, target:"background" on a non-hero is rejected.
+        is_hero = self._is_hero_scene(scene)
+        if target == "footage" and is_hero:
+            raise ValueError(
+                f"scene {scene} is a hero — use target:'background' for background pick/re_query/upload")
+        if target == "background" and not is_hero:
+            raise ValueError(
+                f"scene {scene} is not a hero scene — target:'background' requires a hero scene "
+                f"(hook/stat/outro)")
+
+        # ── background target — ops write to background_overrides + pick_log ────
+        if target == "background":
+            self._edit_background(out, scene, op)
+            return
+
+        # ── footage target (default) — existing op vocabulary unchanged ──────────
         if op["op"] == "upload":
             self._upload_footage(out, scene, op)
             return
 
         if op["op"] == "re_query":
             from pipeline.footage_query import harden
-            q = harden(op["query"], title=self.ctx.topic)
+            # broaden=True → use the topic title (the autopilot whiff-fallback idiom,
+            # §5.3.3: ground-truth in executors._footage_requests, harden(plan.title, title=...))
+            if op.get("broaden"):
+                raw_q = self.ctx.topic
+            else:
+                raw_q = op["query"]
+            q = harden(raw_q, title=self.ctx.topic)
             key = footage_stage.require_env("PEXELS_API_KEY")
             data = footage_stage.search_pexels(q, key)
             rows = footage_stage.candidate_rows(data.get("videos", []), query=q, fps=self.ctx.fps)
@@ -541,6 +589,229 @@ class Engine:
             source="re_query" if op["op"] == "re_query" else "pick",
             query=chosen["query"], rank=chosen["rank"],
             pexels_id=chosen.get("pexels_id"), pexels_url=chosen.get("pexels_url"))
+
+    def _edit_background(self, out, scene, op):
+        """Background overrides for hero scenes: pick/re_query/upload write to
+        background_overrides + pick_log instead of clips/provenance.
+
+        pick:     offline from the stored pool (rank r) — download + upsert background_overrides
+                  {source:"pinned", picked_rank:r} + append pick_log (kind="background").
+        re_query: re-fetch the pool for the hero; replace footage_candidates rows for the scene;
+                  update the AUTO row to the new rank-1 ONLY if current override is source=auto
+                  (never touch pinned). pick_log entry records the query change (human_rank=None).
+        upload:   probe/stage the file (reuse _upload_footage's idiom), write background_overrides
+                  {source:"pinned", picked_rank:None} + pick_log row.
+        broaden:  if op.get("broaden") is True, query := topic title (for re_query ops).
+        """
+        from pipeline import footage as footage_stage
+        from pipeline.footage_query import harden
+        from datetime import datetime, timezone
+
+        ts = datetime.now(timezone.utc).isoformat()
+
+        if op["op"] == "pick":
+            rank = op["rank"]
+            # Read pool from the footage output (same offline-deterministic idiom as footage pick)
+            rows = [dict(r) for r in out["candidates"].get(scene, [])]
+            chosen = next((r for r in rows if r.get("rank") == rank), None)
+            if chosen is None:
+                raise RuntimeError(f"no background candidate for scene {scene} rank {rank}")
+
+            # Determine the prior auto_rank for the pick_log entry (may be None)
+            existing_overrides = store.get_background_overrides(self.conn, self.sid)
+            existing_row = existing_overrides.get(scene)
+            prior_auto_rank = (existing_row.get("picked_rank")
+                               if existing_row and existing_row.get("source") == "auto"
+                               else None)
+
+            # Download (same naming idiom as _auto_fill_hero_backgrounds)
+            slug = footage_stage.query_slug(chosen.get("query", ""))
+            dest = self.ctx.assets_dir / f"footage_bg_{slug}_{rank}.mp4"
+            self.ctx.assets_dir.mkdir(parents=True, exist_ok=True)
+            if not dest.exists():
+                link = chosen.get("link")
+                if not link:
+                    raise RuntimeError(
+                        f"background pick: no download link for scene {scene} rank {rank}")
+                footage_stage._download(link, dest)
+
+            clip_value = {
+                "path": f"assets/{dest.name}",
+                "query": chosen.get("query"),
+                "rank": rank,
+                "pexels_id": chosen.get("pexels_id"),
+                "pexels_url": chosen.get("pexels_url"),
+                "duration_frames": chosen.get("duration_frames"),
+            }
+            store.upsert_background_override(
+                self.conn, self.sid, scene,
+                value=clip_value, source="pinned", picked_rank=rank, now=ts)
+            store.append_pick_log(
+                self.conn, self.sid,
+                scene_index=scene, kind="background",
+                query=chosen.get("query"),
+                auto_rank=prior_auto_rank, human_rank=rank, ts=ts)
+
+        elif op["op"] == "re_query":
+            # broaden=True → use topic title (gate-op form of the autopilot whiff-fallback)
+            if op.get("broaden"):
+                raw_q = self.ctx.topic
+            else:
+                raw_q = op["query"]
+            q = harden(raw_q, title=self.ctx.topic)
+            key = footage_stage.require_env("PEXELS_API_KEY")
+            data = footage_stage.search_pexels(q, key)
+            rows = footage_stage.candidate_rows(data.get("videos", []), query=q, fps=self.ctx.fps)
+
+            # Replace the pool for this scene in the footage output and DB
+            for r in rows:
+                r["selected"] = 0
+                r.setdefault("clip_path", None)
+            out["candidates"][scene] = rows
+            store.replace_footage_candidates(self.conn, self.sid, scene_index=scene, candidates=rows)
+
+            to_json, _ = CODECS["footage"]
+            store.upsert_stage(self.conn, self.sid, "footage", status="done",
+                               input_hash=store.get_stage(self.conn, self.sid, "footage")["input_hash"],
+                               output_json=json.dumps(to_json(out), default=str), now=_now())
+
+            # Update the AUTO row to the new rank-1 only if current row is source=auto
+            # (never touch a pinned row — the policy contract for background re_query)
+            existing_overrides = store.get_background_overrides(self.conn, self.sid)
+            existing_row = existing_overrides.get(scene)
+            if existing_row is None or existing_row.get("source") == "auto":
+                if rows:
+                    new_rank1 = rows[0]
+                    # Download the new rank-1 clip for the auto row
+                    slug = footage_stage.query_slug(new_rank1.get("query", ""))
+                    rank = new_rank1.get("rank", 1)
+                    dest = self.ctx.assets_dir / f"footage_bg_{slug}_{rank}.mp4"
+                    self.ctx.assets_dir.mkdir(parents=True, exist_ok=True)
+                    if not dest.exists():
+                        link = new_rank1.get("link")
+                        if link:
+                            try:
+                                footage_stage._download(link, dest)
+                            except Exception:
+                                dest = None  # download failed → skip row update
+                    if dest is not None:
+                        clip_value = {
+                            "path": f"assets/{dest.name}",
+                            "query": new_rank1.get("query"),
+                            "rank": rank,
+                            "pexels_id": new_rank1.get("pexels_id"),
+                            "pexels_url": new_rank1.get("pexels_url"),
+                            "duration_frames": new_rank1.get("duration_frames"),
+                        }
+                        store.upsert_background_override(
+                            self.conn, self.sid, scene,
+                            value=clip_value, source="auto", picked_rank=rank, now=ts)
+                else:
+                    # Empty pool — leave existing auto row in place (no download, no row update)
+                    pass
+            # Record re_query in pick_log (human_rank=None — not a human pick, a pool refresh)
+            store.append_pick_log(
+                self.conn, self.sid,
+                scene_index=scene, kind="background",
+                query=q, auto_rank=None, human_rank=None, ts=ts)
+
+        elif op["op"] == "upload":
+            # Reuse the probe/stage idiom from _upload_footage
+            from pathlib import Path
+            from pipeline import media_probe
+
+            file = Path(op["file"])
+            if not file.exists():
+                raise RuntimeError(f"background upload: file not found: {file}")
+            kind = media_probe.kind_from_extension(file)  # ValueError on bad extension
+
+            if kind == "video":
+                dur_s = media_probe.ffprobe_duration_seconds(file)
+                duration_frames = round(dur_s * self.ctx.fps)
+            else:
+                duration_frames = None
+
+            basename = file.name
+            data = file.read_bytes()
+            hash8 = hashlib.sha256(data).hexdigest()[:8]
+            ext = file.suffix.lower()
+            name = f"footage_bg_upload_s{scene}_{media_probe.slug(file.stem)}_{hash8}{ext}"
+            self.ctx.assets_dir.mkdir(parents=True, exist_ok=True)
+            dest = self.ctx.assets_dir / name
+            if not dest.exists():
+                dest.write_bytes(data)
+
+            clip_value = {
+                "path": f"assets/{name}",
+                "query": basename,
+                "rank": None,
+                "pexels_id": None,
+                "pexels_url": None,
+                "duration_frames": duration_frames,
+            }
+            store.upsert_background_override(
+                self.conn, self.sid, scene,
+                value=clip_value, source="pinned", picked_rank=None, now=ts)
+            store.append_pick_log(
+                self.conn, self.sid,
+                scene_index=scene, kind="background",
+                query=basename, auto_rank=None, human_rank=None, ts=ts)
+        else:
+            raise ValueError(f"unknown background op {op['op']!r}")
+
+    def _pick_template(self, scene, op):
+        """pick_template op: write template_overrides {source:'pinned', value: template_id}.
+
+        Eligibility: catalog presence + scene-kind (SCENE_KINDS from validate.py) + the
+        scene's existing templateProps must validate against the new template's inputSchema.
+        Reject on any mismatch with a clear ValueError.
+
+        Note on pick_log: the pick_log table CHECK constrains kind IN ('footage','background').
+        Template picks are NOT in the log's vocabulary. template_overrides.updated_at is the
+        audit record for template picks — do NOT attempt to append pick_log for template ops.
+        """
+        from pipeline import validate as validate_stage
+        import jsonschema
+
+        template_id = op.get("template")
+        if not template_id:
+            raise ValueError("pick_template requires a 'template' field")
+
+        # Catalog presence check
+        manifest = self.ctx.catalog.get(template_id)
+        if manifest is None:
+            raise ValueError(
+                f"pick_template: unknown template id {template_id!r} (not in catalog)")
+
+        # Kind check: only scene-kind templates are eligible for scene position override
+        if manifest.kind not in validate_stage.SCENE_KINDS:
+            raise ValueError(
+                f"pick_template: template {template_id!r} has kind {manifest.kind!r}; "
+                f"only scene-kind templates ({sorted(validate_stage.SCENE_KINDS)}) are eligible")
+
+        # Prop compatibility: validate the scene's current templateProps against the new
+        # template's inputSchema. Retrieve the scene's current props from the assemble output
+        # if available, otherwise from a planner-derived default.
+        assemble_out = self._load_output("assemble")
+        current_props = {}
+        if assemble_out is not None:
+            scenes = assemble_out.scenes
+            if scene < len(scenes) and scenes[scene].templateProps:
+                current_props = scenes[scene].templateProps
+
+        try:
+            jsonschema.validate(instance=current_props, schema=manifest.inputSchema)
+        except jsonschema.ValidationError as e:
+            raise ValueError(
+                f"pick_template: scene {scene} props incompatible with template {template_id!r}: "
+                f"{e.message}") from e
+
+        # All checks passed — write the override
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).isoformat()
+        store.upsert_template_override(
+            self.conn, self.sid, scene,
+            value=template_id, source="pinned", picked_rank=None, now=ts)
 
     def _upload_footage(self, out, scene, op):
         """A.2b — bind a user-supplied video OR image file to a footage scene.

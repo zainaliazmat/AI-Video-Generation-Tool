@@ -138,14 +138,15 @@ def test_upload_unprobeable_video_fails_loud(tmp_path, monkeypatch):
 
 def test_upload_to_scene_without_clip_fails_loud(tmp_path, monkeypatch):
     # The footage scene is index 1; scenes 0 and 2 are non-footage (hook/outro) and
-    # have no clip. Uploading to a scene with no clip to replace must fail loud rather
-    # than silently drop the upload.
+    # have no clip. Uploading to a hero scene without target:'background' must fail loud.
+    # v3 M5 T6: the hero guard fires first with a clear ValueError telling the caller
+    # to use target:'background' — a more informative error than the old "no footage clip".
     conn, eng = _seed(tmp_path, monkeypatch)
     monkeypatch.setattr("pipeline.media_probe.ffprobe_duration_seconds",
                         lambda path, run=None: 2.0)
     f = tmp_path / "clip.mp4"
     f.write_bytes(b"DATA")
-    with pytest.raises(RuntimeError, match="no footage clip at scene"):
+    with pytest.raises(ValueError, match="hero"):
         eng.edit("footage", {"op": "upload", "scene_index": 0, "file": str(f)})
     conn.close()
 

@@ -33,13 +33,17 @@ async function parseEdit(req: Request, id: string): Promise<ParsedEdit> {
     if (!Number.isInteger(scene) || !file || typeof file.arrayBuffer !== 'function') {
       return {error: 'expected multipart {scene:number, file:<file>}'};
     }
+    // target field forwarded for background upload (v3)
+    const rawTarget = form.get('target');
+    const uploadTarget = rawTarget === 'background' ? 'background' : 'footage';
     // Stage the upload under a temp path; the Python op content-hashes + copies it into
     // the assets dir, so the temp can be removed once the edit returns.
     const dir = await mkdtemp(join(tmpdir(), 'a6-upload-'));
     const safeName = (file.name || 'upload').replace(/[^a-zA-Z0-9._-]/g, '_') || 'upload';
     const tmp = join(dir, safeName);
     await writeFile(tmp, Buffer.from(await file.arrayBuffer()));
-    return {args: ['--sid', id, '--op', 'upload', '--scene', String(scene), '--file', tmp], cleanupDir: dir};
+    return {args: ['--sid', id, '--op', 'upload', '--scene', String(scene),
+                   '--file', tmp, '--target', uploadTarget], cleanupDir: dir};
   }
 
   let body: any;
@@ -51,16 +55,33 @@ async function parseEdit(req: Request, id: string): Promise<ParsedEdit> {
   if (typeof body?.scene !== 'number') {
     return {error: 'expected scene:number'};
   }
+  // target: "footage" (default) | "background" — v3 gate extension
+  const target = typeof body.target === 'string' && body.target === 'background' ? 'background' : 'footage';
+
   if (body.op === 'pick') {
     if (typeof body.rank !== 'number') return {error: 'pick requires rank:number'};
-    return {args: ['--sid', id, '--op', 'pick', '--scene', String(body.scene), '--rank', String(body.rank)]};
+    const args = ['--sid', id, '--op', 'pick', '--scene', String(body.scene),
+                  '--rank', String(body.rank), '--target', target];
+    return {args};
   }
   if (body.op === 're_query') {
-    const q = typeof body.query === 'string' ? body.query.trim() : '';
-    if (!q) return {error: 're_query requires a non-empty query'};
-    return {args: ['--sid', id, '--op', 're_query', '--scene', String(body.scene), '--query', q]};
+    const broaden = body.broaden === true;
+    if (!broaden) {
+      const q = typeof body.query === 'string' ? body.query.trim() : '';
+      if (!q) return {error: 're_query requires a non-empty query (or broaden:true)'};
+      return {args: ['--sid', id, '--op', 're_query', '--scene', String(body.scene),
+                     '--query', q, '--target', target]};
+    }
+    return {args: ['--sid', id, '--op', 're_query', '--scene', String(body.scene),
+                   '--broaden', '--target', target]};
   }
-  return {error: 'expected {op:"pick"|"re_query"|"upload", scene, ...}'};
+  if (body.op === 'pick_template') {
+    const tmpl = typeof body.template === 'string' ? body.template.trim() : '';
+    if (!tmpl) return {error: 'pick_template requires template:string'};
+    return {args: ['--sid', id, '--op', 'pick_template', '--scene', String(body.scene),
+                   '--template', tmpl]};
+  }
+  return {error: 'expected {op:"pick"|"re_query"|"upload"|"pick_template", scene, ...}'};
 }
 
 export async function POST(req: Request, {params}: {params: Promise<{id: string}>}) {
