@@ -1211,9 +1211,11 @@ def test_pick_template_hero_to_scene_without_clip_rejected(tmp_path, monkeypatch
     conn.close()
 
 
-def test_pick_template_promote_replaces_existing_clip_at_index(tmp_path, monkeypatch):
-    """Promoting/switching when a clip already exists at the scene index must not
-    duplicate clips at that index."""
+def test_pick_template_existing_footage_clip_not_clobbered_by_promote(tmp_path, monkeypatch):
+    """When a hero ALREADY has a footage clip at the scene index, switching to
+    'scene' uses that clip directly: the promote branch is skipped (it only fires
+    when no clip exists), so the existing clip is KEPT — not replaced by the
+    background override — and never duplicated."""
     eng, conn, ctx, catalog = _make_session(tmp_path, monkeypatch)
     eng.advance("assemble")
     foot = eng._load_output("footage")
@@ -1224,6 +1226,7 @@ def test_pick_template_promote_replaces_existing_clip_at_index(tmp_path, monkeyp
     store.upsert_stage(conn, "s1", "footage", status="done",
                        input_hash=store.get_stage(conn, "s1", "footage")["input_hash"],
                        output_json=json.dumps(to_json(foot), default=str), now="t1")
+    # A background override is ALSO present — must NOT clobber the real footage clip.
     store.upsert_background_override(
         conn, "s1", 0,
         value={"path": "assets/footage_bg_new_1.mp4", "query": "reef", "rank": 1,
@@ -1235,4 +1238,6 @@ def test_pick_template_promote_replaces_existing_clip_at_index(tmp_path, monkeyp
     foot2 = eng._load_output("footage")
     idx0 = [c for c in foot2["clips"] if c.index == 0]
     assert len(idx0) == 1, "exactly one clip at index 0 (no duplicate)"
+    assert idx0[0].path == "assets/old.mp4", (
+        "existing footage clip must be kept, not replaced by the background override")
     conn.close()
