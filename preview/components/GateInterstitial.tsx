@@ -94,6 +94,11 @@ export function GateInterstitial({
   // Whether we have started streaming at all (avoid double-start in StrictMode)
   const startedRef = useRef(false);
 
+  // Generation token: each run()/Retry bumps it; an in-flight run (or its SSE
+  // handler / poll loop) checks alive() and bails the moment a newer run starts
+  // or the component unmounts — no concurrent state writes, no post-unmount leaks.
+  const genRef = useRef(0);
+
   // ── timer helpers ───────────────────────────────────────────────────────────
 
   const startTick = () => {
@@ -112,8 +117,11 @@ export function GateInterstitial({
   };
 
   // ── SSE event handler ───────────────────────────────────────────────────────
+  // Built per-run with an `alive` guard so a superseded run's late SSE events
+  // (e.g. an old stream still draining after Retry) can't corrupt the new run.
 
-  const handleEvent = (e: SseEvent) => {
+  const makeHandleEvent = (alive: () => boolean) => (e: SseEvent) => {
+    if (!alive()) return;
     if (e.type === 'stage') {
       const {stage, state, elapsed_s, error} = e;
       setTaskStates((prev) => {
@@ -161,24 +169,29 @@ export function GateInterstitial({
 
   // ── reconnected-mode polling ──────────────────────────────────────────────
 
-  const startPolling = (targetSid: string) => {
+  const startPolling = (targetSid: string, alive: () => boolean) => {
     setReconnecting(true);
     const abort = new AbortController();
     pollAbortRef.current = abort;
 
+    // The in-flight (other-tab) approve is "done" when the gate dict CHANGES from
+    // the moment we started watching — a gate advancing/restoring. Polling on
+    // "any gate approved" was wrong: an already-approved upstream gate (e.g.
+    // `script` during a voice approve) made it fire on the very first poll.
+    let baseline: string | null = null;
+    let stable = 0; // fallback: if the op already finished before we attached,
+    const STABLE_CAP = 8; // ~16 s of no change → assume it's done, fire with current.
+
     const poll = async () => {
-      while (!abort.signal.aborted) {
+      while (!abort.signal.aborted && alive()) {
         try {
           const state = await studio.session.state(targetSid);
-          // Check whether ANY gate moved from the initial state we care about.
-          // We treat any gates response as "done enough" — the caller's onDone
-          // will re-read /state if it needs to.  The heuristic: if at least one
-          // gate is approved or awaiting_approval we consider the stream done.
           const gates = state.gates ?? {};
-          const gateDone = Object.values(gates).some(
-            (g) => g.state === 'approved' || g.state === 'awaiting_approval',
-          );
-          if (gateDone) {
+          const snap = JSON.stringify(gates);
+          if (baseline === null) {
+            baseline = snap;
+          } else if (snap !== baseline || ++stable > STABLE_CAP) {
+            if (!alive()) return;
             setReconnecting(false);
             abort.abort();
             onDone(gates, state.sid);
@@ -187,7 +200,6 @@ export function GateInterstitial({
         } catch {
           // network error — keep trying
         }
-        // Wait ~2 s between polls
         await new Promise<void>((res) => {
           const id = setTimeout(res, 2000);
           abort.signal.addEventListener('abort', () => {
@@ -204,6 +216,10 @@ export function GateInterstitial({
   // ── stream runner ─────────────────────────────────────────────────────────
 
   const run = async () => {
+    // Claim a generation: any prior run (and its SSE handler / poll) is now stale.
+    const myGen = ++genRef.current;
+    const alive = () => genRef.current === myGen;
+
     // Reset state for Retry
     setFailedMsg(null);
     setReconnecting(false);
@@ -215,16 +231,18 @@ export function GateInterstitial({
     try {
       res = await stream();
     } catch (err) {
+      if (!alive()) return;
       const msg = err instanceof Error ? err.message : String(err);
       setFailedMsg(msg);
       onError?.(msg);
       return;
     }
+    if (!alive()) return;
 
     // 409 → reconnected-mode (session busy — another tab/request is running)
     if (res.status === 409) {
       if (sid) {
-        startPolling(sid);
+        startPolling(sid, alive);
       } else {
         const msg = 'Session busy — no sid provided for reconnect polling';
         setFailedMsg(msg);
@@ -241,14 +259,16 @@ export function GateInterstitial({
       } catch {
         // ignore JSON parse failure
       }
+      if (!alive()) return;
       setFailedMsg(msg);
       onError?.(msg);
       return;
     }
 
     try {
-      await readSse(res, handleEvent);
+      await readSse(res, makeHandleEvent(alive));
     } catch (err) {
+      if (!alive()) return;
       const msg = err instanceof Error ? err.message : String(err);
       setFailedMsg(msg);
       onError?.(msg);
@@ -262,6 +282,7 @@ export function GateInterstitial({
     startedRef.current = true;
     run();
     return () => {
+      genRef.current++; // invalidate any in-flight run / SSE handler / poll
       stopTick();
       pollAbortRef.current?.abort();
     };

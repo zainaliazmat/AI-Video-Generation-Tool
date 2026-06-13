@@ -1,6 +1,6 @@
 'use client';
 
-import {useCallback, useEffect, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import {useRouter} from 'next/navigation';
 import {Eyebrow, Button} from '@/components/ui';
 import {ProjectList} from '@/components/HistoryList';
@@ -36,6 +36,12 @@ export default function Home() {
   const [generating, setGenerating] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
+  // Guard state writes after the user navigates away mid-generate (the stale
+  // `generating` closure can't detect unmount).
+  const mountedRef = useRef(true);
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
 
   const refreshProjects = useCallback(async () => {
     try {
@@ -77,18 +83,18 @@ export default function Home() {
           return;
         }
 
-        if (event.type === 'error' && !sidReceived) {
+        if (event.type === 'error' && !sidReceived && mountedRef.current) {
           // Error before a sid: show failed state on this screen.
           const msg = event.error ?? event.message ?? 'Script generation failed';
           setStartError(msg);
         }
       });
     } catch (e) {
-      if (!generating) return; // unmounted / aborted
+      if (!mountedRef.current) return; // navigated away mid-generate
       const msg = e instanceof Error ? e.message : 'Generation failed';
       setStartError(msg);
     } finally {
-      setGenerating(false);
+      if (mountedRef.current) setGenerating(false);
     }
   }
 
