@@ -944,38 +944,56 @@ class Engine:
                         and any(c.index == scene for c in _footage_out.get("clips", []))
                     )
                     if not _has_clip:
-                        # Promote a picked background clip into this scene's footage,
-                        # so a hero (stat/hook/outro) with a chosen background can become
-                        # a footage 'scene'. Only reject if there's no clip to promote.
+                        # Promote a background clip into this scene's footage so a hero
+                        # (stat/hook/outro) can become a footage 'scene'. Source order:
+                        #   1. a pinned/auto background_override (already downloaded), or
+                        #   2. the top-ranked background POOL candidate (download it now,
+                        #      mirroring _edit_background pick) — parity with hook/outro,
+                        #      which auto-fill a background so their 'scene' card is enabled.
+                        from pipeline.contracts import Clip
                         overrides = store.get_background_overrides(self.conn, self.sid)
                         bg = overrides.get(scene)
+                        promoted = None
                         if bg and (bg.get("value") or {}).get("path"):
-                            from pipeline.contracts import Clip
                             v = bg["value"]
                             promoted = Clip(
-                                index=scene,
-                                query=v.get("query") or "",
-                                path=v["path"],
+                                index=scene, query=v.get("query") or "", path=v["path"],
                                 duration_frames=v.get("duration_frames"),
-                                kind=v.get("kind", "video"),
-                                rank=v.get("rank"),
-                                pexels_id=v.get("pexels_id"),
-                                pexels_url=v.get("pexels_url"),
-                            )
-                            bundle = _footage_out or {"clips": [], "candidates": {}}
-                            bundle["clips"] = [
-                                c for c in bundle.get("clips", []) if c.index != scene
-                            ] + [promoted]
-                            to_json, _ = CODECS["footage"]
-                            store.upsert_stage(
-                                self.conn, self.sid, "footage", status="done",
-                                input_hash=store.get_stage(self.conn, self.sid, "footage")["input_hash"],
-                                output_json=json.dumps(to_json(bundle), default=str), now=_now())
+                                kind=v.get("kind", "video"), rank=v.get("rank"),
+                                pexels_id=v.get("pexels_id"), pexels_url=v.get("pexels_url"))
                         else:
+                            cands = (_footage_out or {}).get("candidates", {}).get(scene) or []
+                            chosen = min(cands, key=lambda r: r.get("rank") or 1_000_000,
+                                         default=None)
+                            if chosen is not None:
+                                from pipeline import footage as footage_stage
+                                slug = footage_stage.query_slug(chosen.get("query", ""))
+                                dest_path = self._download_background_clip(
+                                    chosen, slug, chosen.get("rank"))
+                                if dest_path is None:
+                                    raise ValueError(
+                                        f"assemble: template_override scene {scene}: could not "
+                                        f"download a background clip to use as footage")
+                                promoted = Clip(
+                                    index=scene, query=chosen.get("query") or "",
+                                    path=dest_path,
+                                    duration_frames=chosen.get("duration_frames"),
+                                    kind="video", rank=chosen.get("rank"),
+                                    pexels_id=chosen.get("pexels_id"),
+                                    pexels_url=chosen.get("pexels_url"))
+                        if promoted is None:
                             raise ValueError(
                                 f"assemble: template_override scene {scene}: pick a background "
-                                f"clip first, then switch to a scene template"
-                            )
+                                f"clip first, then switch to a scene template")
+                        bundle = _footage_out or {"clips": [], "candidates": {}}
+                        bundle["clips"] = [
+                            c for c in bundle.get("clips", []) if c.index != scene
+                        ] + [promoted]
+                        to_json, _ = CODECS["footage"]
+                        store.upsert_stage(
+                            self.conn, self.sid, "footage", status="done",
+                            input_hash=store.get_stage(self.conn, self.sid, "footage")["input_hash"],
+                            output_json=json.dumps(to_json(bundle), default=str), now=_now())
 
         # All checks passed — write the override
         from datetime import datetime, timezone

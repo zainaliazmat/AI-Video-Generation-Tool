@@ -145,11 +145,12 @@ export function SceneControls({
 
   const currentTransition = specScene?.transition?.template ?? 'none';
   const isLast = scene.index === total - 1;
-  // A hero is "clipless" (can't become a footage scene) only when it has neither
-  // footage candidates NOR a picked background clip. A background clip is promoted
-  // to footage on the stat->scene switch (see engine._pick_template).
+  // A hero is "clipless" (can't become a footage scene) only when it has no footage
+  // candidates, no pinned background clip, AND an empty background pool. With pool
+  // clips available, switching auto-promotes the top one (see engine._pick_template).
   const heroClipless =
-    !scene.needsFootage && scene.candidates.length === 0 && scene.backgroundProvenance == null;
+    !scene.needsFootage && scene.candidates.length === 0 &&
+    scene.backgroundProvenance == null && scene.backgroundPool.rows.length === 0;
 
   return (
     <div className="min-w-0 space-y-4">

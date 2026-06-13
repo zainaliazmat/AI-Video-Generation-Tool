@@ -963,13 +963,20 @@ def test_pick_template_hero_to_scene_no_clip_raises_and_no_row(tmp_path, monkeyp
     assert not any(c.index == 0 for c in footage_out["clips"]), (
         "hero scene 0 must have no footage clip (precondition for the defect path)")
 
-    # The footage stage auto-fills a background_override for every hero; that background
-    # is now promotable to footage on a scene-switch, so clear it to keep this test on the
-    # genuine no-clip-to-promote rejection path.
+    # The footage stage auto-fills a background_override for every hero AND a candidate
+    # pool; both are now promotable to footage on a scene-switch (pinned override OR
+    # top-ranked pool candidate), so clear BOTH to keep this test on the genuine
+    # no-clip-to-promote rejection path.
     conn.execute(
         "DELETE FROM background_overrides WHERE session_id=? AND scene_index=?",
         ("s1", 0))
     conn.commit()
+    foot = eng._load_output("footage")
+    foot["candidates"] = {k: v for k, v in foot.get("candidates", {}).items() if k != 0}
+    to_json, _ = engine.CODECS["footage"]
+    store.upsert_stage(conn, "s1", "footage", status="done",
+                       input_hash=store.get_stage(conn, "s1", "footage")["input_hash"],
+                       output_json=json.dumps(to_json(foot), default=str), now="t1")
 
     # Pick 'scene' template for hero scene 0 → must raise, must NOT write the row.
     with pytest.raises(ValueError, match="pick a background clip first"):
@@ -1189,25 +1196,46 @@ def test_pick_template_promotes_background_to_footage(tmp_path, monkeypatch):
 
 
 def test_pick_template_hero_to_scene_without_clip_rejected(tmp_path, monkeypatch):
-    """A hero with neither footage clip nor background clip is rejected with a
-    clear 'pick a background clip first' message.
-
-    NOTE: the footage stage auto-fills a background_override for every hero scene,
-    so we explicitly clear scene 0's background row to reach the no-clip-to-promote
-    rejection branch (this is the only state in which it can fire)."""
+    """A hero with neither a background override NOR any pool candidate is rejected
+    with a clear 'pick a background clip first' message."""
     eng, conn, ctx, catalog = _make_session(tmp_path, monkeypatch)
     eng.advance("assemble")
-
-    # Clear the auto-filled background override for hero scene 0 so there is
-    # genuinely no clip to promote.
-    conn.execute(
-        "DELETE FROM background_overrides WHERE session_id=? AND scene_index=?",
-        ("s1", 0))
+    # Reach the genuine no-clip case: no pinned override AND an empty candidate pool.
+    conn.execute("DELETE FROM background_overrides WHERE session_id='s1' AND scene_index=0")
     conn.commit()
-    assert 0 not in store.get_background_overrides(conn, "s1"), "precondition: no bg for scene 0"
+    foot = eng._load_output("footage")
+    foot["candidates"] = {k: v for k, v in foot.get("candidates", {}).items() if k != 0}
+    to_json, _ = engine.CODECS["footage"]
+    store.upsert_stage(conn, "s1", "footage", status="done",
+                       input_hash=store.get_stage(conn, "s1", "footage")["input_hash"],
+                       output_json=json.dumps(to_json(foot), default=str), now="t1")
 
     with pytest.raises(ValueError, match="pick a background clip first"):
         eng.edit("footage", {"op": "pick_template", "scene_index": 0, "template": "scene"})
+    conn.close()
+
+
+def test_pick_template_auto_promotes_top_pool_candidate(tmp_path, monkeypatch):
+    """A hero with NO pinned background but a non-empty candidate pool switches to
+    'scene' by auto-promoting the top-ranked (rank 1) pool candidate into footage."""
+    search = {"default": [
+        _fake_video(link="bg1.mp4", duration_s=6.0, pexels_id=10),
+        _fake_video(link="bg2.mp4", duration_s=9.0, pexels_id=20),
+    ]}
+    eng, conn, ctx, catalog = _make_session(tmp_path, monkeypatch, search_results=search)
+    eng.advance("assemble")
+    # Remove the auto-filled pinned override so the POOL fallback path is exercised.
+    conn.execute("DELETE FROM background_overrides WHERE session_id='s1' AND scene_index=0")
+    conn.commit()
+
+    eng.edit("footage", {"op": "pick_template", "scene_index": 0, "template": "scene"})
+
+    foot = eng._load_output("footage")
+    clip0 = next((c for c in foot["clips"] if c.index == 0), None)
+    assert clip0 is not None, "top pool candidate must be promoted to a footage clip"
+    assert clip0.rank == 1, "the auto-promoted clip should be the rank-1 candidate"
+    tmpl_overrides = store.get_template_overrides(conn, "s1")
+    assert tmpl_overrides[0]["value"] == "scene"
     conn.close()
 
 
