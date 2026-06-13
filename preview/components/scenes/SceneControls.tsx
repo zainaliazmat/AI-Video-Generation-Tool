@@ -325,6 +325,7 @@ export function TemplateCardRail({
 }) {
   const reducedMotion = useReducedMotion() ?? false;
   const [hovered, setHovered] = useState<string | null>(null);
+  const [posterFailed, setPosterFailed] = useState<Set<string>>(new Set());
 
   return (
     <div role="radiogroup" aria-label="Scene template" className="flex gap-2 overflow-x-auto scrollbar-hide snap-x pb-1">
@@ -367,6 +368,12 @@ export function TemplateCardRail({
                 playsInline
                 className="h-full w-full object-cover"
               />
+            ) : posterFailed.has(t) ? (
+              <span
+                aria-hidden
+                className="absolute inset-0"
+                style={{background: TEMPLATE_KIND_GRADIENT[t] ?? 'linear-gradient(135deg,#1b1f3a,#5e5ce6,#a78bfa)'}}
+              />
             ) : (
               // eslint-disable-next-line @next/next/no-img-element
               <img
@@ -374,20 +381,9 @@ export function TemplateCardRail({
                 alt=""
                 loading="lazy"
                 className="h-full w-full object-cover"
-                onError={(e) => {
-                  const el = e.currentTarget;
-                  el.style.display = 'none';
-                  const fb = el.nextElementSibling as HTMLElement | null;
-                  if (fb) fb.style.display = 'block';
-                }}
+                onError={() => setPosterFailed((prev) => new Set(prev).add(t))}
               />
             )}
-            {/* gradient fallback (revealed by img onError) */}
-            <span
-              aria-hidden
-              className="absolute inset-0 hidden"
-              style={{background: TEMPLATE_KIND_GRADIENT[t] ?? 'linear-gradient(135deg,#1b1f3a,#5e5ce6,#a78bfa)'}}
-            />
             {/* name + auto tag */}
             <span className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-black/55 px-1.5 py-1 font-ui text-[11px] font-semibold text-white">
               {t}

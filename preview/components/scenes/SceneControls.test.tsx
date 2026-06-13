@@ -2,11 +2,21 @@
 import {act, createElement} from 'react';
 import {createRoot, type Root} from 'react-dom/client';
 import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest';
-// framer-motion's useReducedMotion lazily inits a module-global matchMedia
-// listener ONCE (motion-dom hasReducedMotionListener). Reset it per-test so each
-// test's stubMatchMedia is honored instead of the first-run cached value.
-import {hasReducedMotionListener, prefersReducedMotion} from 'motion-dom';
 import {ScrollPool, TemplateCardRail} from './SceneControls';
+
+// Mock framer-motion's PUBLIC useReducedMotion so it reads matchMedia live each
+// render (framer's real impl caches a module-global listener once, defeating
+// per-test stubMatchMedia). Depends only on framer's stable public export.
+vi.mock('framer-motion', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('framer-motion')>();
+  return {
+    ...actual,
+    useReducedMotion: () =>
+      typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+        ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        : false,
+  };
+});
 
 (globalThis as unknown as {IS_REACT_ACT_ENVIRONMENT: boolean}).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -30,9 +40,6 @@ let root: Root;
 
 beforeEach(() => {
   stubMatchMedia(false);
-  // force framer to re-read the (stubbed) matchMedia on the next useReducedMotion
-  hasReducedMotionListener.current = false;
-  prefersReducedMotion.current = null;
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
