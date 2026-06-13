@@ -37,7 +37,7 @@ from typing import Dict, Optional
 from schema import Spec, Meta, Audio, Scene, Media, KenBurns, Caption, Theme, Transition
 from manifest import Manifest
 from pipeline.frames import seconds_to_frames
-from pipeline.recipe import ScenePlan, TransitionIntent
+from pipeline.recipe import ScenePlan, TransitionIntent, _stat_props, _enumeration_props
 
 
 def scene_spans(line_offsets, fps: int):
@@ -88,6 +88,7 @@ def build_spec(
     music: str | None = None,
     voiceover_rel: str = "assets/voiceover.wav",
     overrides: Optional[Dict] = None,
+    beats=None,
 ) -> Spec:
     scenes_plan = plan.scenes
     n = len(scenes_plan)
@@ -121,6 +122,9 @@ def build_spec(
         # OV-4 template_overrides: apply BEFORE transition resolution so the correct
         # template's durationFrames range is used when resolving the transition.
         template = ps.template
+        # Track whether a cross-kind override was applied and what the new kind is.
+        # Used below to re-derive props from beat data when the kind changes.
+        override_kind = None
         tmpl_row = tmpl_overrides.get(i)
         if tmpl_row is not None:
             # value is the template id string stored by the gate UI.
@@ -141,18 +145,102 @@ def build_spec(
                 )
             else:
                 template = override_id
+                override_kind = m.kind
 
         transition = _resolve_transition(ps.transition, dur_i, dur_next, catalog)
         t_frames = transition.durationInFrames if transition else 0
 
+        # Whether an override was successfully applied (template id changed).
+        override_applied = override_kind is not None  # set only when catalog lookup passed
+
+        # Is the override target a DATA-DRIVEN template (needs props re-derived from
+        # beat data, not from a footage clip)?  This is the key predicate for the
+        # cross-template prop re-derivation block below.
+        #
+        # NOTE: we detect data-driven templates by template id and manifest.consumes,
+        # NOT by kind alone.  The `enumeration` template has kind="scene" — the same
+        # as the footage `scene` template — so kind-comparison alone misses it.
+        def _is_data_driven(tmpl_id: str) -> bool:
+            m2 = catalog.get(tmpl_id)
+            if m2 is None:
+                return False
+            # stat / hook / outro have their own distinct kinds.
+            if m2.kind in ("stat", "hook", "outro"):
+                return True
+            # enumeration is kind=scene but declares consumes="enumeration".
+            if m2.consumes == "enumeration":
+                return True
+            return False
+
+        needs_rederive = override_applied and _is_data_driven(override_id)
+
         if ps.needs_footage:
             clip = clips_by_index.get(i)
-            if clip is None:
+            # If the override switched a footage scene to a data-driven template we
+            # no longer need the clip — props will be re-derived from beat data below.
+            if clip is None and not needs_rederive:
                 raise ValueError(f"No footage clip for scene index {i} (template {ps.template!r})")
-            media = _scene_media(clip, dur_i + t_frames)
-            props = {"media": media.model_dump(by_alias=True)}
+            if needs_rederive:
+                # Placeholder — the re-derivation block below overwrites props.
+                props = dict(ps.props)
+            else:
+                media = _scene_media(clip, dur_i + t_frames)
+                props = {"media": media.model_dump(by_alias=True)}
         else:
             props = dict(ps.props)
+
+        # Cross-template prop re-derivation: when the override targets a data-driven
+        # template, re-derive props from the beat (the recipe's prop builders are
+        # pure — no I/O needed).
+        #
+        # Also handles the reverse: switching a non-footage scene TO a footage-only
+        # template requires a clip — honest rejection if none is available (should
+        # have been blocked upstream by eligibility, but we guard here too).
+        if needs_rederive and beats is not None and 0 <= i < len(beats):
+            beat = beats[i]
+            new_kind = override_kind
+            if new_kind == "stat":
+                from pipeline.recipe import _is_stat
+                if _is_stat(beat):
+                    props = _stat_props(beat)
+                else:
+                    # Beat lacks stat data — override should have been blocked upstream
+                    print(
+                        f"assemble: template_override scene {i}: 'stat' override but "
+                        f"beat has no stat data — keeping original props",
+                        file=_sys.stderr,
+                    )
+                    template = ps.template
+            elif catalog.get(override_id) and catalog[override_id].consumes == "enumeration":
+                # Enumeration template (kind=scene, consumes=enumeration) — re-derive from items.
+                from pipeline.recipe import _is_enumeration
+                if _is_enumeration(beat):
+                    props = _enumeration_props(beat)
+                else:
+                    print(
+                        f"assemble: template_override scene {i}: enumeration override but "
+                        f"beat has no items data — keeping original props",
+                        file=_sys.stderr,
+                    )
+                    template = ps.template
+            elif new_kind == "hook":
+                props = {"title": beat.text}
+            elif new_kind == "outro":
+                props = {"title": beat.text}
+        elif override_applied and not needs_rederive and not ps.needs_footage:
+            # Non-footage scene switched to a footage template — needs a clip.
+            new_kind = override_kind
+            if new_kind == "scene" and not (catalog.get(override_id) and
+                                            catalog[override_id].consumes == "enumeration"):
+                clip = clips_by_index.get(i)
+                if clip is not None:
+                    media = _scene_media(clip, dur_i + t_frames)
+                    props = {"media": media.model_dump(by_alias=True)}
+                else:
+                    raise ValueError(
+                        f"assemble: template_override scene {i}: switching to a footage "
+                        f"layout needs a footage pick — use the footage pool"
+                    )
 
         # OV-4 background_overrides: inject backgroundClip into hero (non-footage)
         # scene props when an override row exists.  Footage scenes carry their media

@@ -205,8 +205,13 @@ def run_assemble(ctx: EngineContext, inputs: dict) -> Any:
     words = inputs["timing"]
     clips = inputs["footage"]["clips"]
     overrides = inputs.get("overrides")
+    # Pass beats for cross-template prop re-derivation (stat/enumeration/hook/outro
+    # overrides need to re-derive props from beat data, not the stale rendered props).
+    script_obj = inputs["script"].get("script")
+    beats = script_obj.beats if script_obj is not None and hasattr(script_obj, "beats") else None
     return assemble_stage.build_spec(
         plan, offsets, words, clips, catalog=ctx.catalog, fps=ctx.fps,
         voiceover_rel=f"assets/{ctx.voiceover_path.name}",
         overrides=overrides,
+        beats=beats,
     )

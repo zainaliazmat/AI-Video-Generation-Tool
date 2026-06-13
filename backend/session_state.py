@@ -31,6 +31,21 @@ def _beat_text_by_index(conn, sid: str) -> dict:
         return {}
 
 
+def _beat_data_by_index(conn, sid: str) -> dict:
+    """{scene_index: beat.data} from the persisted script stage.
+    Best-effort: returns {} if the script stage / JSON is missing.
+    beat.data is the structured payload ({value, label} / {items} / None) used
+    by eligibility to determine which templates a scene can switch to."""
+    row = store.get_stage(conn, sid, "script")
+    if row is None or row["output_json"] is None:
+        return {}
+    try:
+        beats = json.loads(row["output_json"])["script"]["beats"]
+        return {i: b.get("data") for i, b in enumerate(beats)}
+    except (ValueError, KeyError, TypeError):
+        return {}
+
+
 def _pool_errors_by_index(conn, sid: str) -> dict:
     """{scene_index: error_str} from the persisted footage stage output.
     Best-effort: returns {} when the footage stage / JSON is missing.
@@ -73,9 +88,14 @@ def build_state(sid: str) -> dict:
         template_overrides = store.get_template_overrides(conn, sid)
         background_overrides = store.get_background_overrides(conn, sid)
         pool_errors = _pool_errors_by_index(conn, sid)
+        # Beat data indexed by scene position — the eligibility signal (beat data +
+        # position), NOT the rendered templateProps (which was the M5-exit bug).
+        beat_data_map = _beat_data_by_index(conn, sid)
+        all_scenes = spec.get("scenes", [])
+        scene_count = len(all_scenes)
 
         scenes = []
-        for i, sc in enumerate(spec.get("scenes", [])):
+        for i, sc in enumerate(all_scenes):
             media = (sc.get("templateProps") or {}).get("media")
             needs_footage = media is not None
             candidates = []
@@ -87,9 +107,10 @@ def build_state(sid: str) -> dict:
             p = prov.get(i)
 
             # ── v3-M5 T7: five new keys ──────────────────────────────────────
-            # 1. eligibleTemplates: schema-driven, not hand-curated.
-            scene_props = sc.get("templateProps") or {}
-            eligible = eligible_templates(scene_props, catalog)
+            # 1. eligibleTemplates: beat data + position, not rendered props.
+            #    Mirrors recipe._derive_role so routing signal stays in lockstep.
+            beat_data = beat_data_map.get(i)
+            eligible = eligible_templates(beat_data, i, scene_count, catalog)
 
             # 2. templateOverride: {value, source, pickedRank} or null.
             tov = template_overrides.get(i)

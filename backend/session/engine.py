@@ -768,49 +768,77 @@ class Engine:
     def _pick_template(self, scene, op):
         """pick_template op: write template_overrides {source:'pinned', value: template_id}.
 
-        Eligibility: catalog presence + scene-kind (SCENE_KINDS from validate.py) + the
-        scene's existing templateProps must validate against the new template's inputSchema.
-        Reject on any mismatch with a clear ValueError.
+        Eligibility:
+          1. Catalog presence (precise error: "unknown template id").
+          2. Scene-kind (precise error: "kind ... only scene-kind templates").
+          3. Scene index bounds: checked against the script plan to give a clear
+             error ("no scene at index N") before any eligibility work.
+          4. Beat data + position: delegates to the shared eligible_templates()
+             helper so the routing signal is never duplicated.
+          5. Position gate: hook is only eligible at position 0; outro is only
+             eligible at the last position.
 
         Note on pick_log: the pick_log table CHECK constrains kind IN ('footage','background').
         Template picks are NOT in the log's vocabulary. template_overrides.updated_at is the
         audit record for template picks — do NOT attempt to append pick_log for template ops.
         """
         from pipeline import validate as validate_stage
-        import jsonschema
+        from pipeline.eligibility import eligible_templates
 
         template_id = op.get("template")
         if not template_id:
             raise ValueError("pick_template requires a 'template' field")
 
-        # Catalog presence check
+        # 1. Catalog presence check (precise error message preserved for existing tests)
         manifest = self.ctx.catalog.get(template_id)
         if manifest is None:
             raise ValueError(
                 f"pick_template: unknown template id {template_id!r} (not in catalog)")
 
-        # Kind check: only scene-kind templates are eligible for scene position override
+        # 2. Kind check: only scene-kind templates are eligible for scene position override
+        #    (precise error message preserved for existing tests — cases 8/9)
         if manifest.kind not in validate_stage.SCENE_KINDS:
             raise ValueError(
                 f"pick_template: template {template_id!r} has kind {manifest.kind!r}; "
                 f"only scene-kind templates ({sorted(validate_stage.SCENE_KINDS)}) are eligible")
 
-        # Prop compatibility: validate the scene's current templateProps against the new
-        # template's inputSchema. Retrieve the scene's current props from the assemble output
-        # if available, otherwise from a planner-derived default.
-        assemble_out = self._load_output("assemble")
-        current_props = {}
-        if assemble_out is not None:
-            scenes = assemble_out.scenes
-            if scene < len(scenes) and scenes[scene].templateProps:
-                current_props = scenes[scene].templateProps
+        # 3. Scene index bounds guard: load plan to know how many scenes exist.
+        script_bundle = self._load_output("script")
+        if script_bundle is not None:
+            plan = script_bundle.get("plan")
+            if plan is not None:
+                n = len(plan.scenes)
+                if scene >= n or scene < 0:
+                    raise ValueError(
+                        f"pick_template: no scene at index {scene} "
+                        f"(session has {n} scenes)")
 
-        try:
-            jsonschema.validate(instance=current_props, schema=manifest.inputSchema)
-        except jsonschema.ValidationError as e:
-            raise ValueError(
-                f"pick_template: scene {scene} props incompatible with template {template_id!r}: "
-                f"{e.message}") from e
+        # 4. Beat data + position eligibility via the shared helper.
+        #    Load beat data from the script bundle (same source as session_state.py).
+        beat_data = None
+        scene_count = 0
+        if script_bundle is not None:
+            script_obj = script_bundle.get("script")
+            plan = script_bundle.get("plan")
+            if script_obj is not None and hasattr(script_obj, "beats"):
+                beats = script_obj.beats
+                scene_count = len(beats)
+                if 0 <= scene < len(beats):
+                    beat_data = beats[scene].data if beats[scene].data else None
+
+        eligible = eligible_templates(beat_data, scene, scene_count, self.ctx.catalog)
+        if template_id not in eligible:
+            # Build a human-readable reason for the rejection
+            if template_id == "hook" and scene != 0:
+                reason = f"'hook' is only eligible at position 0 (scene {scene} is not the first)"
+            elif template_id == "outro" and scene_count > 0 and scene != scene_count - 1:
+                reason = f"'outro' is only eligible at the last position (scene {scene} is not the last)"
+            else:
+                reason = (
+                    f"template {template_id!r} requires data the beat at scene {scene} "
+                    f"does not carry (eligible: {eligible})"
+                )
+            raise ValueError(f"pick_template: {reason}")
 
         # All checks passed — write the override
         from datetime import datetime, timezone

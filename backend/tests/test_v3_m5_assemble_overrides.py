@@ -318,7 +318,13 @@ def test_pinned_override_survives_script_rederive(tmp_path, monkeypatch):
 
 def test_template_override_valid_flips_scene_template(tmp_path, monkeypatch):
     """A valid template_overrides row (scene-kind, exists in catalog) → spec scene's
-    template field flips to the overridden id."""
+    template field flips to the overridden id.
+
+    We use 'scene' explicitly (same-kind same-id override, always valid for a footage
+    scene — no data re-derivation needed) to keep the test deterministic regardless of
+    catalog iteration order.  The enumeration-specific cross-template override path
+    (beat with items → enumeration) is covered by test_t7_headline in state_surface.
+    """
     # Use a 4-beat script with a footage scene at index 1
     script = BeatsScript(title="Reefs", beats=[
         Beat(text="hook"),
@@ -328,11 +334,11 @@ def test_template_override_valid_flips_scene_template(tmp_path, monkeypatch):
     ])
     eng, conn, ctx, catalog = _make_session(tmp_path, monkeypatch, script=script)
 
-    # "enumeration" is a scene-kind template in the real catalog
-    # Find a valid scene-kind template id from the catalog
-    scene_templates = [m.id for m in catalog.values() if m.kind == "scene"]
-    assert scene_templates, "need at least one scene-kind template in catalog"
-    alt_template = scene_templates[0]  # e.g. "scene" or "enumeration"
+    # 'scene' is always a valid override for a footage scene slot (same kind, no
+    # prop re-derivation required, deterministic across catalog ordering).
+    alt_template = "scene"
+    assert alt_template in catalog, f"'scene' template must be in catalog"
+    assert catalog[alt_template].kind == "scene"
 
     # Seed a template_overrides row for scene 1 (footage scene)
     store.upsert_template_override(

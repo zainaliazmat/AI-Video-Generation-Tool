@@ -1,17 +1,18 @@
 """Studio v3 M5 T7 — eligibility + state surface.
 
 Test contract:
-  1. eligible_templates: stat props ({value, label}) → stat + other value+label templates
-     eligible; enumeration NOT eligible (needs items, not value/label).
-  2. eligible_templates: enumeration props ({items: [...]}) → enumeration eligible;
-     stat NOT eligible (needs value+label).
-  3. eligible_templates: hero props ({title: "..."}) → hook + outro eligible (both
-     need only title); stat + enumeration NOT eligible.
-  4. eligible_templates: scene props ({media: {...}}) → scene eligible; hero templates
-     (hook/outro/stat) need title/value+label → NOT eligible for a media-only prop.
-  5. eligible_templates: empty props ({}) → only templates with no required fields
-     eligible; stat/enumeration/scene all have required fields → not eligible.
-  6. eligible_templates: transition/overlay templates NEVER returned regardless of props.
+  1. eligible_templates: stat beat (data value+label) at middle position → 'scene' and
+     'stat' eligible; 'enumeration' NOT eligible (no items); 'hook'/'outro' NOT eligible
+     (middle position).
+  2. eligible_templates: beat with data.items at middle → 'scene' and 'enumeration'
+     eligible; 'stat' NOT eligible (no value+label); 'hook'/'outro' NOT eligible.
+  3. eligible_templates: first-position beat → 'hook' eligible; last-position beat →
+     'outro' eligible; middle → neither 'hook' nor 'outro'.
+  4. eligible_templates: plain beat (no data, no items) at middle → only 'scene'
+     eligible (no stat/enumeration/hook/outro).
+  5. eligible_templates: first+last coincide (scene_count==1, position==0) → both
+     'hook' AND 'outro' eligible (single-scene video edge case).
+  6. eligible_templates: transition/overlay templates NEVER returned regardless of beat.
 
   State surface (build_state):
   7. Gated session past the scenes gate: every scene carries the five new keys
@@ -125,60 +126,84 @@ def _build_state(tmp_path, monkeypatch, sid):
 # 1–6: eligible_templates unit tests (pure, no DB)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def test_eligible_templates_stat_props():
-    """stat props {value, label} → 'stat' eligible; 'enumeration' not (needs items)."""
+def test_eligible_templates_stat_beat_middle():
+    """Stat beat (data value+label) at middle position (not first, not last):
+    'scene' and 'stat' are eligible; 'enumeration' is NOT (no items);
+    'hook' and 'outro' are NOT (wrong position)."""
     catalog = validate_stage.load_catalog(_TEMPLATES)
-    result = eligible_templates({"value": "42%", "label": "of reefs bleached"}, catalog)
-    assert "stat" in result
-    assert "enumeration" not in result
+    beat_data = {"value": "42%", "label": "of reefs bleached"}
+    # position=1 in a 3-scene video → middle
+    result = eligible_templates(beat_data, position=1, scene_count=3, catalog=catalog)
+    assert "stat" in result, f"'stat' not in {result}"
+    assert "scene" in result, f"'scene' not in {result}"
+    assert "enumeration" not in result, f"'enumeration' should not be in {result} (no items)"
+    assert "hook" not in result, f"'hook' should not be in {result} (middle position)"
+    assert "outro" not in result, f"'outro' should not be in {result} (middle position)"
 
 
-def test_eligible_templates_enumeration_props():
-    """enumeration props {items: [...]} → 'enumeration' eligible; 'stat' not."""
+def test_eligible_templates_enumeration_beat_middle():
+    """Beat with data.items at middle → 'scene' and 'enumeration' eligible;
+    'stat' NOT eligible (no value+label); 'hook'/'outro' NOT eligible (middle)."""
     catalog = validate_stage.load_catalog(_TEMPLATES)
-    result = eligible_templates({"items": ["Sun", "Moon", "Stars"]}, catalog)
-    assert "enumeration" in result
-    assert "stat" not in result
+    beat_data = {"items": ["Coral", "Fish", "Seagrass"]}
+    result = eligible_templates(beat_data, position=1, scene_count=3, catalog=catalog)
+    assert "enumeration" in result, f"'enumeration' not in {result}"
+    assert "scene" in result, f"'scene' not in {result}"
+    assert "stat" not in result, f"'stat' should not be in {result} (no value+label)"
+    assert "hook" not in result, f"'hook' should not be in {result} (middle position)"
+    assert "outro" not in result, f"'outro' should not be in {result} (middle position)"
 
 
-def test_eligible_templates_hero_props():
-    """hook/outro props {title: ...} → 'hook' and 'outro' both eligible (both need only title)."""
+def test_eligible_templates_position_gating():
+    """Position gating:
+    - position==0 → 'hook' eligible; 'outro' NOT (unless also last).
+    - position==last → 'outro' eligible; 'hook' NOT.
+    - middle → neither."""
     catalog = validate_stage.load_catalog(_TEMPLATES)
-    result = eligible_templates({"title": "Oceans cover 71% of Earth"}, catalog)
-    assert "hook" in result
-    assert "outro" in result
-    # stat needs value+label; enumeration needs items — not in these props
-    assert "stat" not in result
-    assert "enumeration" not in result
+    # First position (beat has no special data)
+    first = eligible_templates(None, position=0, scene_count=3, catalog=catalog)
+    assert "hook" in first, f"'hook' not in first-position eligible: {first}"
+    assert "outro" not in first, f"'outro' should not be in first-position eligible: {first}"
+
+    # Last position
+    last = eligible_templates(None, position=2, scene_count=3, catalog=catalog)
+    assert "outro" in last, f"'outro' not in last-position eligible: {last}"
+    assert "hook" not in last, f"'hook' should not be in last-position eligible: {last}"
+
+    # Middle position
+    mid = eligible_templates(None, position=1, scene_count=3, catalog=catalog)
+    assert "hook" not in mid, f"'hook' should not be in middle-position eligible: {mid}"
+    assert "outro" not in mid, f"'outro' should not be in middle-position eligible: {mid}"
 
 
-def test_eligible_templates_scene_props():
-    """scene (footage) props {media: {type, src, fit}} → 'scene' eligible;
-    hero templates needing title/value+label → not eligible."""
+def test_eligible_templates_plain_beat_middle():
+    """Plain beat (no data, no items) at middle → only 'scene' eligible.
+    No stat data → stat not eligible; no items → enumeration not eligible;
+    middle position → hook/outro not eligible."""
     catalog = validate_stage.load_catalog(_TEMPLATES)
-    result = eligible_templates(
-        {"media": {"type": "video", "src": "assets/f1.mp4", "fit": "cover"}}, catalog)
-    assert "scene" in result
-    assert "hook" not in result
-    assert "stat" not in result
+    result = eligible_templates(None, position=1, scene_count=3, catalog=catalog)
+    assert "scene" in result, f"'scene' not in {result}"
+    assert "stat" not in result, f"'stat' should not be in {result} (no data)"
+    assert "enumeration" not in result, f"'enumeration' should not be in {result} (no items)"
+    assert "hook" not in result, f"'hook' should not be in {result} (not first)"
+    assert "outro" not in result, f"'outro' should not be in {result} (not last)"
 
 
-def test_eligible_templates_empty_props():
-    """Empty props {} → only templates with no required fields eligible.
-    All core templates have required fields — none should be eligible."""
+def test_eligible_templates_single_scene_both_hook_and_outro():
+    """Edge case: scene_count==1, position==0 is BOTH first AND last.
+    Both 'hook' and 'outro' should be eligible."""
     catalog = validate_stage.load_catalog(_TEMPLATES)
-    result = eligible_templates({}, catalog)
-    # All core scene templates require at least one field; none pass against {}
-    core_scene_templates = {"hook", "scene", "stat", "outro", "enumeration"}
-    overlap = set(result) & core_scene_templates
-    assert overlap == set(), f"unexpected core templates eligible for empty props: {overlap}"
+    result = eligible_templates(None, position=0, scene_count=1, catalog=catalog)
+    assert "hook" in result, f"'hook' not in single-scene eligible: {result}"
+    assert "outro" in result, f"'outro' not in single-scene eligible: {result}"
 
 
 def test_eligible_templates_excludes_transition_overlay():
-    """Transition and overlay templates MUST NOT appear regardless of props."""
+    """Transition and overlay templates MUST NOT appear regardless of beat data."""
     catalog = validate_stage.load_catalog(_TEMPLATES)
-    # Use props that might accidentally match if kind-gating were absent
-    result_set = set(eligible_templates({}, catalog))
+    # Use a beat with rich data that might accidentally match if kind-gating were absent
+    beat_data = {"value": "42%", "label": "stat", "items": ["a", "b", "c"]}
+    result_set = set(eligible_templates(beat_data, position=1, scene_count=3, catalog=catalog))
     for tmpl_id, manifest in catalog.items():
         if manifest.kind in ("transition", "overlay"):
             assert tmpl_id not in result_set, (
@@ -486,3 +511,79 @@ def test_state_existing_candidates_provenance_shape_unchanged(tmp_path, monkeypa
     assert hook_scene["candidates"] == []
     assert hook_scene["needsFootage"] is False
     assert hook_scene["durationInFrames"] is not None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# T7 HEADLINE E2E test: beat with data.items + scene template
+#   → eligibleTemplates includes 'enumeration'
+#   → pick_template('enumeration') succeeds
+#   → assemble re-derives templateProps = {items: [...]} from beat
+#   → spec validates cleanly
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_t7_headline_enumeration_switch_rerederives_props(tmp_path, monkeypatch):
+    """T7 HEADLINE E2E (mandated by review):
+
+    A beat carrying data.items whose CURRENT template is 'scene' (footage):
+    (a) /state lists 'enumeration' in eligibleTemplates for that scene.
+    (b) pick_template('enumeration') succeeds.
+    (c) The resulting assemble spec for that scene has templateProps with the
+        items from the beat (re-derived from beat data, NOT the stale media props).
+    (d) The full spec validates cleanly through validate_spec.
+    """
+    from pipeline import validate as vstage
+    from session import api as session_api, gatekeeper
+
+    items = ["Coral", "Seagrass", "Mangroves", "Saltmarshes"]
+    script = BeatsScript(title="Reef Ecosystem", beats=[
+        Beat(text="hook text"),
+        # Scene 1: has items data — eligible for enumeration switch
+        Beat(text="key habitat types", keywords="reef habitat",
+             data={"items": items}),
+        Beat(text="outro text"),
+    ])
+
+    catalog = validate_stage.load_catalog(_TEMPLATES)
+    sid = "t7-headline-e2e"
+    _install_fakes(monkeypatch, script)
+    ctx = _ctx(tmp_path, sid, catalog=catalog)
+    conn = store.connect(tmp_path / "s.db")
+    store.create_session(conn, id=sid, topic="Reef Ecosystem", now="t0")
+    eng = engine.Engine(conn, ctx, session_id=sid)
+    eng.run_all()
+
+    # (a) /state: eligibleTemplates for scene 1 must include 'enumeration'
+    import session_state as ss
+    monkeypatch.setattr("session.job_ctx.SESSIONS_DB", tmp_path / "s.db")
+    monkeypatch.setattr("session.job_ctx.REPO_ROOT", tmp_path)
+    monkeypatch.setattr("session.job_ctx.TEMPLATES_DIR", _TEMPLATES)
+    state = ss.build_state(sid)
+    scene1_state = next(s for s in state["scenes"] if s["index"] == 1)
+    assert "enumeration" in scene1_state["eligibleTemplates"], (
+        f"(a) 'enumeration' not in eligibleTemplates: {scene1_state['eligibleTemplates']}")
+    assert "scene" in scene1_state["eligibleTemplates"], (
+        f"(a) 'scene' not in eligibleTemplates: {scene1_state['eligibleTemplates']}")
+
+    # (b) pick_template('enumeration') succeeds
+    eng.edit("footage", {"op": "pick_template", "scene_index": 1, "template": "enumeration"})
+    tmpl_overrides = store.get_template_overrides(conn, sid)
+    assert 1 in tmpl_overrides, "(b) template_overrides row must be written after pick_template"
+    assert tmpl_overrides[1]["value"] == "enumeration"
+
+    # (c) assemble spec scene 1 has templateProps = {items: [...]} re-derived from beat
+    spec = eng._load_output("assemble")
+    scene1_spec = spec.scenes[1]
+    assert scene1_spec.template == "enumeration", (
+        f"(c) expected template='enumeration', got {scene1_spec.template!r}")
+    tp = scene1_spec.templateProps
+    assert "items" in tp, f"(c) templateProps must have 'items'; got: {tp}"
+    assert tp["items"] == items, (
+        f"(c) items must match beat data; expected {items}, got {tp['items']}")
+    # Must NOT contain stale 'media' key from the old footage props
+    assert "media" not in tp, (
+        f"(c) templateProps must NOT contain stale 'media' key; got: {tp}")
+
+    # (d) full spec validates cleanly
+    vstage.validate_spec(spec, catalog)
+
+    conn.close()
