@@ -13,6 +13,7 @@
 //   • Provenance popover — pickLogCount + last auto→human rank pair (ruling 19).
 
 import {useRef, useState, type ReactNode} from 'react';
+import {useReducedMotion} from 'framer-motion';
 import {toast} from 'sonner';
 import {studio, type SceneState, type Candidate, type GatesDict} from '@/lib/studio';
 import type {Spec} from '@remotion-src/schema';
@@ -148,37 +149,18 @@ export function SceneControls({
 
   return (
     <div className="min-w-0 space-y-4">
-      {/* ── Template chips ─────────────────────────────────────────────────── */}
+      {/* ── Template cards (horizontal scroll, poster + hover/active loop) ──── */}
       {scene.eligibleTemplates.length > 0 && (
         <section>
           <Eyebrow className="mb-1.5">Template</Eyebrow>
-          <div className="flex flex-wrap gap-1.5">
-            {scene.eligibleTemplates.map((t) => {
-              const active = t === currentTemplate;
-              // 'scene' on a clip-less hero needs a footage pick first (M5 amend 2).
-              const disabled = busy || (t === 'scene' && heroClipless && active === false);
-              return (
-                <button
-                  key={t}
-                  type="button"
-                  disabled={disabled || active}
-                  title={t === 'scene' && heroClipless ? 'pick a clip first — a scene template needs footage' : undefined}
-                  onClick={() => run(`Switching to ${t}…`, () => postEdit(sid, {op: 'pick_template', scene: scene.index, template: t}))}
-                  className={
-                    'rounded-full px-3 py-1.5 font-ui text-[12px] font-semibold transition disabled:cursor-not-allowed ' +
-                    (active
-                      ? 'bg-accent-1 text-white'
-                      : disabled
-                        ? 'bg-white/[0.04] text-ink-muted opacity-50'
-                        : 'bg-white/[0.06] text-ink-secondary hover:bg-white/[0.1]')
-                  }
-                >
-                  {t}
-                  {active && !overridden ? <span className="ml-1.5 font-mono text-[9px] opacity-80">auto</span> : null}
-                </button>
-              );
-            })}
-          </div>
+          <TemplateCardRail
+            templates={scene.eligibleTemplates}
+            current={currentTemplate}
+            overridden={overridden}
+            heroClipless={heroClipless}
+            busy={busy}
+            onPick={(t) => run(`Switching to ${t}…`, () => postEdit(sid, {op: 'pick_template', scene: scene.index, template: t}))}
+          />
         </section>
       )}
 
@@ -309,6 +291,116 @@ export function ScrollPool({children}: {children?: ReactNode}) {
       </div>
       {/* bottom fade — signals more content below the clamp */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-[var(--bg-surface)] to-transparent" />
+    </div>
+  );
+}
+
+// ─── TemplateCardRail: horizontal poster cards, one per eligible template ────
+// Poster = /previews/<id>.jpg; hover/active swaps to a muted looping
+// /previews/<id>.mp4 — UNLESS reduced motion (item 1: loops are killed). Radio
+// semantics (single-select). The 'scene'-on-clipless-hero card is eligible-but-
+// gated (item 3): disabled with an SR-reachable reason. Missing asset → gradient.
+const TEMPLATE_KIND_GRADIENT: Record<string, string> = {
+  hook: 'linear-gradient(160deg,#101631,#5e5ce6)',
+  scene: 'linear-gradient(135deg,#0a2540,#0a84ff 70%,#7cc4ff)',
+  stat: 'linear-gradient(135deg,#06281e,#30d158 90%)',
+  outro: 'linear-gradient(160deg,#1a0d00,#ff9f0a 90%)',
+  enumeration: 'linear-gradient(200deg,#33214d,#8b5cf6)',
+};
+
+export function TemplateCardRail({
+  templates,
+  current,
+  overridden,
+  heroClipless,
+  busy,
+  onPick,
+}: {
+  templates: string[];
+  current: string;
+  overridden: boolean;
+  heroClipless: boolean;
+  busy: boolean;
+  onPick: (t: string) => void;
+}) {
+  const reducedMotion = useReducedMotion() ?? false;
+  const [hovered, setHovered] = useState<string | null>(null);
+
+  return (
+    <div role="radiogroup" aria-label="Scene template" className="flex gap-2 overflow-x-auto scrollbar-hide snap-x pb-1">
+      {templates.map((t) => {
+        const active = t === current;
+        const gated = t === 'scene' && heroClipless && !active;
+        const disabled = busy || gated;
+        const showVideo = !reducedMotion && (active || hovered === t) && !disabled;
+        const descId = gated ? `tmpl-${t}-reason` : undefined;
+        return (
+          <button
+            key={t}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            aria-label={`${t} template${active ? ' (selected)' : ''}`}
+            aria-describedby={descId}
+            disabled={disabled || active}
+            onMouseEnter={() => setHovered(t)}
+            onMouseLeave={() => setHovered((h) => (h === t ? null : h))}
+            onFocus={() => setHovered(t)}
+            onBlur={() => setHovered((h) => (h === t ? null : h))}
+            onClick={() => onPick(t)}
+            className={
+              'group relative aspect-[9/16] w-[88px] shrink-0 snap-start overflow-hidden rounded-[var(--radius-sm)] border transition disabled:cursor-not-allowed ' +
+              (active
+                ? 'border-accent-1 ring-2 ring-accent-1'
+                : disabled
+                  ? 'border-white/10 opacity-50'
+                  : 'border-white/10 hover:border-white/30')
+            }
+          >
+            {showVideo ? (
+              <video
+                src={`/previews/${t}.mp4`}
+                poster={`/previews/${t}.jpg`}
+                autoPlay
+                loop
+                muted
+                playsInline
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={`/previews/${t}.jpg`}
+                alt=""
+                loading="lazy"
+                className="h-full w-full object-cover"
+                onError={(e) => {
+                  const el = e.currentTarget;
+                  el.style.display = 'none';
+                  const fb = el.nextElementSibling as HTMLElement | null;
+                  if (fb) fb.style.display = 'block';
+                }}
+              />
+            )}
+            {/* gradient fallback (revealed by img onError) */}
+            <span
+              aria-hidden
+              className="absolute inset-0 hidden"
+              style={{background: TEMPLATE_KIND_GRADIENT[t] ?? 'linear-gradient(135deg,#1b1f3a,#5e5ce6,#a78bfa)'}}
+            />
+            {/* name + auto tag */}
+            <span className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-black/55 px-1.5 py-1 font-ui text-[11px] font-semibold text-white">
+              {t}
+              {active && !overridden ? <span className="font-mono text-[9px] opacity-80">auto</span> : null}
+            </span>
+            {gated && (
+              <span id={descId} className="sr-only">
+                pick a clip first — a scene template needs footage
+              </span>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }

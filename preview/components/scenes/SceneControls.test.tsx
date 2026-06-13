@@ -2,7 +2,11 @@
 import {act, createElement} from 'react';
 import {createRoot, type Root} from 'react-dom/client';
 import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest';
-import {ScrollPool} from './SceneControls';
+// framer-motion's useReducedMotion lazily inits a module-global matchMedia
+// listener ONCE (motion-dom hasReducedMotionListener). Reset it per-test so each
+// test's stubMatchMedia is honored instead of the first-run cached value.
+import {hasReducedMotionListener, prefersReducedMotion} from 'motion-dom';
+import {ScrollPool, TemplateCardRail} from './SceneControls';
 
 (globalThis as unknown as {IS_REACT_ACT_ENVIRONMENT: boolean}).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -26,6 +30,9 @@ let root: Root;
 
 beforeEach(() => {
   stubMatchMedia(false);
+  // force framer to re-read the (stubbed) matchMedia on the next useReducedMotion
+  hasReducedMotionListener.current = false;
+  prefersReducedMotion.current = null;
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -50,5 +57,59 @@ describe('ScrollPool', () => {
     expect(scroller.className).toMatch(/max-h-\[/);
     expect(scroller.className).toMatch(/sm:max-h-\[/);
     expect(container.querySelector('[data-testid="child"]')).toBeTruthy();
+  });
+});
+
+describe('TemplateCardRail', () => {
+  const baseProps = {
+    templates: ['scene', 'stat'],
+    current: 'stat',
+    overridden: false,
+    heroClipless: false,
+    busy: false,
+    onPick: () => {},
+  };
+
+  it('renders a radiogroup with one radio card per eligible template', () => {
+    act(() => root.render(createElement(TemplateCardRail, baseProps)));
+    const group = container.querySelector('[role="radiogroup"]') as HTMLElement;
+    expect(group).toBeTruthy();
+    expect(group.className).toContain('overflow-x-auto'); // horizontal scroll
+    const cards = container.querySelectorAll('[role="radio"]');
+    expect(cards.length).toBe(2);
+  });
+
+  it('marks the current template aria-checked', () => {
+    act(() => root.render(createElement(TemplateCardRail, baseProps)));
+    const checked = container.querySelector('[role="radio"][aria-checked="true"]') as HTMLElement;
+    expect(checked).toBeTruthy();
+    expect(checked.textContent).toContain('stat');
+  });
+
+  it('disables the scene card on a clipless hero (eligible-but-gated)', () => {
+    act(() => root.render(createElement(TemplateCardRail, {
+      ...baseProps, current: 'hook', templates: ['hook', 'scene'], heroClipless: true,
+    })));
+    const sceneCard = Array.from(container.querySelectorAll('[role="radio"]'))
+      .find((el) => el.textContent?.includes('scene')) as HTMLButtonElement;
+    expect(sceneCard.disabled).toBe(true);
+    // tooltip reaches SR/keyboard users, not just hover
+    expect(sceneCard.getAttribute('aria-describedby')).toBeTruthy();
+  });
+
+  it('calls onPick with the template id when an enabled non-active card is clicked', () => {
+    const onPick = vi.fn();
+    act(() => root.render(createElement(TemplateCardRail, {...baseProps, onPick})));
+    const sceneCard = Array.from(container.querySelectorAll('[role="radio"]'))
+      .find((el) => el.textContent?.includes('scene')) as HTMLButtonElement;
+    act(() => sceneCard.click());
+    expect(onPick).toHaveBeenCalledWith('scene');
+  });
+
+  it('plays no video under reduced motion (poster-only)', () => {
+    stubMatchMedia(true); // prefers-reduced-motion: reduce
+    act(() => root.render(createElement(TemplateCardRail, baseProps)));
+    // active card would otherwise autoplay a loop; under reduced motion none render
+    expect(container.querySelector('video')).toBeNull();
   });
 });
