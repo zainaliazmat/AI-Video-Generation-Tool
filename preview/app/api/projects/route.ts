@@ -1,7 +1,8 @@
 // preview/app/api/projects/route.ts
 import {readdirSync, readFileSync, existsSync} from 'node:fs';
 import path from 'node:path';
-import {projectsDir, projectDir, type ProjectMeta} from '@/lib/projects';
+import {type ProjectMeta} from '@/lib/projects';
+import {projectsDir, projectDir} from '@/lib/projects-server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';

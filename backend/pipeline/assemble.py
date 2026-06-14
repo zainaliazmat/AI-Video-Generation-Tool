@@ -37,7 +37,9 @@ from typing import Dict, Optional
 from schema import Spec, Meta, Audio, Scene, Media, KenBurns, Caption, Theme, Transition
 from manifest import Manifest
 from pipeline.frames import seconds_to_frames
-from pipeline.recipe import ScenePlan, TransitionIntent
+from pipeline.recipe import ScenePlan, TransitionIntent, _stat_props, _enumeration_props
+from pipeline.validate import SCENE_KINDS
+from pipeline.contracts import Clip as _Clip
 
 
 def scene_spans(line_offsets, fps: int):
@@ -87,6 +89,8 @@ def build_spec(
     fps: int = 30,
     music: str | None = None,
     voiceover_rel: str = "assets/voiceover.wav",
+    overrides: Optional[Dict] = None,
+    beats=None,
 ) -> Spec:
     scenes_plan = plan.scenes
     n = len(scenes_plan)
@@ -97,28 +101,185 @@ def build_spec(
     starts, durations, total = scene_spans(line_offsets, fps)
     clips_by_index = {c.index: c for c in clips}
 
+    # OV-4: extract override dicts — both default to empty when not provided (pre-M5
+    # callers and main.py autopilot pass nothing → no backgroundClip → gradient cards).
+    bg_overrides: Dict = {}
+    tmpl_overrides: Dict = {}
+    if overrides:
+        bg_overrides = overrides.get("background") or {}
+        tmpl_overrides = overrides.get("template") or {}
+
+    # The store returns {int: row} but json round-trip (via inputs hash) converts int
+    # keys to strings; normalise to int for consistent lookup regardless of path.
+    bg_overrides = {int(k): v for k, v in bg_overrides.items()}
+    tmpl_overrides = {int(k): v for k, v in tmpl_overrides.items()}
+
     scenes = []
     for i, ps in enumerate(scenes_plan):
         dur_i = durations[i]
         dur_next = durations[i + 1] if i + 1 < n else dur_i
+
+        # OV-4 template_overrides: apply BEFORE transition resolution so the correct
+        # template's durationFrames range is used when resolving the transition.
+        template = ps.template
+        # Track whether a cross-kind override was applied and what the new kind is.
+        # Used below to re-derive props from beat data when the kind changes.
+        override_kind = None
+        tmpl_row = tmpl_overrides.get(i)
+        if tmpl_row is not None:
+            # value is the template id string stored by the gate UI.
+            override_id = tmpl_row.get("value") if isinstance(tmpl_row, dict) else tmpl_row
+            m = catalog.get(override_id)
+            if m is None:
+                print(
+                    f"assemble: template_override scene {i}: unknown template id "
+                    f"{override_id!r} — skipping (catalog has: {sorted(catalog)})",
+                    file=sys.stderr,
+                )
+            elif m.kind not in SCENE_KINDS:
+                # Transitions and overlays are not valid scene templates — reject.
+                print(
+                    f"assemble: template_override scene {i}: template {override_id!r} "
+                    f"has kind={m.kind!r} which is not a scene-template kind — skipping",
+                    file=sys.stderr,
+                )
+            else:
+                template = override_id
+                override_kind = m.kind
+
         transition = _resolve_transition(ps.transition, dur_i, dur_next, catalog)
         t_frames = transition.durationInFrames if transition else 0
 
+        # Whether an override was successfully applied (template id changed).
+        override_applied = override_kind is not None  # set only when catalog lookup passed
+
+        # Is the override target a DATA-DRIVEN template (needs props re-derived from
+        # beat data, not from a footage clip)?  This is the key predicate for the
+        # cross-template prop re-derivation block below.
+        #
+        # NOTE: we detect data-driven templates by template id and manifest.consumes,
+        # NOT by kind alone.  The `enumeration` template has kind="scene" — the same
+        # as the footage `scene` template — so kind-comparison alone misses it.
+        def _is_data_driven(tmpl_id: str) -> bool:
+            m2 = catalog.get(tmpl_id)
+            if m2 is None:
+                return False
+            # stat / hook / outro have their own distinct kinds.
+            if m2.kind in ("stat", "hook", "outro"):
+                return True
+            # enumeration is kind=scene but declares consumes="enumeration".
+            if m2.consumes == "enumeration":
+                return True
+            return False
+
+        needs_rederive = override_applied and _is_data_driven(override_id)
+
         if ps.needs_footage:
             clip = clips_by_index.get(i)
-            if clip is None:
+            # If the override switched a footage scene to a data-driven template we
+            # no longer need the clip — props will be re-derived from beat data below.
+            if clip is None and not needs_rederive:
                 raise ValueError(f"No footage clip for scene index {i} (template {ps.template!r})")
-            media = _scene_media(clip, dur_i + t_frames)
-            props = {"media": media.model_dump(by_alias=True)}
+            if needs_rederive:
+                # Placeholder — the re-derivation block below overwrites props.
+                props = dict(ps.props)
+            else:
+                media = _scene_media(clip, dur_i + t_frames)
+                props = {"media": media.model_dump(by_alias=True)}
         else:
             props = dict(ps.props)
+
+        # Cross-template prop re-derivation: when the override targets a data-driven
+        # template, re-derive props from the beat (the recipe's prop builders are
+        # pure — no I/O needed).
+        #
+        # Also handles the reverse: switching a non-footage scene TO a footage-only
+        # template requires a clip — honest rejection if none is available (should
+        # have been blocked upstream by eligibility, but we guard here too).
+        if needs_rederive and beats is not None and 0 <= i < len(beats):
+            beat = beats[i]
+            new_kind = override_kind
+            if new_kind == "stat":
+                from pipeline.recipe import _is_stat
+                if _is_stat(beat):
+                    props = _stat_props(beat)
+                else:
+                    # Beat lacks stat data — override should have been blocked upstream
+                    print(
+                        f"assemble: template_override scene {i}: 'stat' override but "
+                        f"beat has no stat data — keeping original props",
+                        file=sys.stderr,
+                    )
+                    template = ps.template
+            elif catalog.get(override_id) and catalog[override_id].consumes == "enumeration":
+                # Enumeration template (kind=scene, consumes=enumeration) — re-derive from items.
+                from pipeline.recipe import _is_enumeration
+                if _is_enumeration(beat):
+                    props = _enumeration_props(beat)
+                else:
+                    print(
+                        f"assemble: template_override scene {i}: enumeration override but "
+                        f"beat has no items data — keeping original props",
+                        file=sys.stderr,
+                    )
+                    template = ps.template
+            elif new_kind == "hook":
+                props = {"title": beat.text}
+            elif new_kind == "outro":
+                props = {"title": beat.text}
+        elif override_applied and not needs_rederive and not ps.needs_footage:
+            # Non-footage scene switched to a footage template — needs a clip.
+            # Defense-in-depth: engine._pick_template pre-checks this exact condition
+            # before writing the override row, so this branch should be unreachable from
+            # the normal _pick_template path.  It remains here as a backstop for any
+            # caller that writes template_overrides directly (e.g. spec_patch, future ops).
+            new_kind = override_kind
+            if new_kind == "scene" and not (catalog.get(override_id) and
+                                            catalog[override_id].consumes == "enumeration"):
+                clip = clips_by_index.get(i)
+                if clip is not None:
+                    media = _scene_media(clip, dur_i + t_frames)
+                    props = {"media": media.model_dump(by_alias=True)}
+                else:
+                    raise ValueError(
+                        f"assemble: template_override scene {i}: switching to a footage "
+                        f"layout needs a footage pick — use the footage pool"
+                    )
+
+        # OV-4 background_overrides: inject backgroundClip into hero (non-footage)
+        # scene props when an override row exists.  Footage scenes carry their media
+        # via the "media" key above — background override does not apply there.
+        #
+        # A hero whose template_override switched it to the footage `scene` template
+        # (override_applied, not data-driven) is now a footage scene: its props already
+        # carry "media" (from the promoted clip, L230-247), and the footage `scene`
+        # template's inputSchema rejects backgroundClip.  Skip injection in that case.
+        _overridden_to_footage = override_applied and not needs_rederive
+        bg_row = bg_overrides.get(i)
+        if bg_row is not None and not ps.needs_footage and not _overridden_to_footage:
+            clip_value = bg_row.get("value") if isinstance(bg_row, dict) else None
+            if clip_value:
+                # Reconstitute a Clip from the stored value dict (the auto-fill hook
+                # wrote it as {path, query, rank, pexels_id, pexels_url, duration_frames,
+                # kind}).  Use the stored kind so an uploaded image renders via <Img>
+                # rather than OffthreadVideo (Fix 1).
+                span = dur_i + t_frames
+                bg_clip = _Clip(
+                    index=i,
+                    query=clip_value.get("query", ""),
+                    path=clip_value["path"],
+                    duration_frames=clip_value.get("duration_frames"),
+                    kind=clip_value.get("kind", "video"),
+                )
+                bg_media = _scene_media(bg_clip, span)
+                props["backgroundClip"] = bg_media.model_dump(by_alias=True)
 
         scenes.append(
             Scene(
                 id=f"scene-{i}",
                 startFrame=starts[i],
                 durationInFrames=max(1, dur_i),
-                template=ps.template,
+                template=template,
                 templateProps=props,
                 transition=transition,
             )

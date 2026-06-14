@@ -23,6 +23,6 @@
     }
   },
   "comment": "Standalone check of the SDK contract + each template's zod schema.ts (zod is the one runtime dep present here). Template COMPONENTS import remotion/react and are typechecked through the consumers (remotion + preview) that have those installed; templates/ keeps no react/remotion node_modules of its own.",
-  "include": ["sdk.ts", "*/schema.ts"],
+  "include": ["sdk.ts", "mediaSchema.ts", "*/schema.ts"],
   "exclude": ["node_modules"]
 }

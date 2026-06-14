@@ -1,8 +1,8 @@
 import React from 'react';
-import {AbsoluteFill, Easing, interpolate, useCurrentFrame} from 'remotion';
+import {Easing, interpolate, useCurrentFrame} from 'remotion';
 import type {TemplateProps} from '../sdk';
 import type {OutroData} from './schema';
-import {heroBackground, HERO_BREATH_PERIOD} from '../heroBackground';
+import HeroBackdrop from '../HeroBackdrop';
 
 /**
  * `outro` — the closing card. The title rises+fades in, then the accent CTA pill
@@ -10,7 +10,7 @@ import {heroBackground, HERO_BREATH_PERIOD} from '../heroBackground';
  */
 const CLAMP = {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'} as const;
 
-const Component: React.FC<TemplateProps<OutroData>> = ({data, theme}) => {
+const Component: React.FC<TemplateProps<OutroData>> = ({data, theme, timing}) => {
   const frame = useCurrentFrame();
   const title = interpolate(frame, [0, 14], [0, 1], CLAMP);
   const cta = interpolate(frame, [9, 22], [0, 1], CLAMP);
@@ -21,15 +21,12 @@ const Component: React.FC<TemplateProps<OutroData>> = ({data, theme}) => {
   });
 
   return (
-    <AbsoluteFill
-      style={{
-        backgroundColor: theme.palette.background,
-        backgroundImage: heroBackground(theme.palette, frame / HERO_BREATH_PERIOD),
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '0 96px',
-        textAlign: 'center',
-      }}
+    <HeroBackdrop
+      clip={data.backgroundClip}
+      palette={theme.palette}
+      frame={frame}
+      durationInFrames={timing.durationInFrames}
+      containerStyle={{alignItems: 'center', justifyContent: 'center', padding: '0 96px', textAlign: 'center'}}
     >
       <div
         style={{
@@ -64,7 +61,7 @@ const Component: React.FC<TemplateProps<OutroData>> = ({data, theme}) => {
           {data.cta}
         </div>
       ) : null}
-    </AbsoluteFill>
+    </HeroBackdrop>
   );
 };
 

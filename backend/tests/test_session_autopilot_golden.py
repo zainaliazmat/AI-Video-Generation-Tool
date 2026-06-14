@@ -22,7 +22,7 @@ def _install_fakes(monkeypatch):
         Beat(text="Protect them — follow for more."),
     ])
 
-    def fake_script(topic, cache_dir=None):
+    def fake_script(topic, cache_dir=None, **kw):
         calls["script"] += 1
         return script
     monkeypatch.setattr("pipeline.script.generate_grounded_script", fake_script)

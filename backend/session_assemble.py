@@ -38,6 +38,18 @@ def _topic_for(sid: str) -> str:
         conn.close()
 
 
+def _row_for(sid: str) -> tuple[str, int]:
+    """Return (topic, target_length) from the stored session row."""
+    conn = store.connect(job_ctx.SESSIONS_DB)
+    try:
+        row = store.get_session(conn, sid)
+        if row is None:
+            raise KeyError(f"no session {sid!r}")
+        return row["topic"], row["target_length"]
+    finally:
+        conn.close()
+
+
 def _summary(spec) -> dict:
     data = spec.model_dump(by_alias=True)
     return {
@@ -66,7 +78,8 @@ def _history(conn, sid: str) -> dict:
 
 
 def read(sid: str) -> dict:
-    ctx = job_ctx.build_ctx(topic=_topic_for(sid), sid=sid)
+    topic, target_length = _row_for(sid)
+    ctx = job_ctx.build_ctx(topic=topic, sid=sid, target_length=target_length)
     sess = api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)
     try:
         spec = sess.engine._load_output("assemble")
@@ -97,14 +110,16 @@ def _llm_call(messages) -> str:
 
 def chat(sid: str, *, message: str, llm=None) -> dict:
     """Propose a patch for `message`. `llm(messages)->content` is injectable for tests."""
-    ctx = job_ctx.build_ctx(topic=_topic_for(sid), sid=sid)
+    topic, target_length = _row_for(sid)
+    ctx = job_ctx.build_ctx(topic=topic, sid=sid, target_length=target_length)
     sess = api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)
     try:
         spec = sess.engine._load_output("assemble")
         if spec is None:
             raise RuntimeError("assemble stage has not completed")
         call = llm or _llm_call
-        messages = spec_patch.build_chat_messages(message, spec)
+        catalog = ctx.catalog
+        messages = spec_patch.build_chat_messages(message, spec, catalog)
         last_err = ""
         for attempt in range(2):                  # one bounded retry with the error in context
             content = call(messages)
@@ -113,6 +128,13 @@ def chat(sid: str, *, message: str, llm=None) -> dict:
                 valid, err = spec_patch.validate_patch(ops) if ops else (True, "")
                 if ops and not valid:
                     raise spec_patch.PatchError(err)
+                # Catalog membership: a hallucinated/slot-wrong template id (e.g.
+                # 'clip') passes the path whitelist but must NOT be shown as 'valid'
+                # — catch it here so the retry can fix it, not at apply/render.
+                if ops:
+                    tvalid, terr = spec_patch.validate_template_ops(ops, catalog)
+                    if not tvalid:
+                        raise spec_patch.PatchError(terr)
                 diff = spec_patch.diff_lines(spec, ops) if ops else []
                 return {"ok": True, "sid": sid, "ops": ops, "reply": reply,
                         "diff": diff, "valid": True}
@@ -129,7 +151,8 @@ def chat(sid: str, *, message: str, llm=None) -> dict:
 
 
 def apply(sid: str, *, patch) -> dict:
-    ctx = job_ctx.build_ctx(topic=_topic_for(sid), sid=sid)
+    topic, target_length = _row_for(sid)
+    ctx = job_ctx.build_ctx(topic=topic, sid=sid, target_length=target_length)
     sess = api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)
     try:
         spec_before = sess.engine._load_output("assemble")
@@ -144,7 +167,8 @@ def apply(sid: str, *, patch) -> dict:
 def revert(sid: str, *, seq: int) -> dict:
     """F-5: undo the newest un-reverted patch (LIFO). The engine validates the seq
     and applies the inverse ops through the normal whitelist machinery."""
-    ctx = job_ctx.build_ctx(topic=_topic_for(sid), sid=sid)
+    topic, target_length = _row_for(sid)
+    ctx = job_ctx.build_ctx(topic=topic, sid=sid, target_length=target_length)
     sess = api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)
     try:
         api.edit(sess, "assemble", {"revert": seq})

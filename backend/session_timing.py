@@ -34,6 +34,18 @@ def _topic_for(sid: str) -> str:
         conn.close()
 
 
+def _row_for(sid: str) -> tuple[str, int]:
+    """Return (topic, target_length) from the stored session row."""
+    conn = store.connect(job_ctx.SESSIONS_DB)
+    try:
+        row = store.get_session(conn, sid)
+        if row is None:
+            raise KeyError(f"no session {sid!r}")
+        return row["topic"], row["target_length"]
+    finally:
+        conn.close()
+
+
 def _serialize(sess) -> dict:
     words = sess.engine._load_output("timing") or []
     offsets = sess.engine._load_output("voice") or []
@@ -46,7 +58,8 @@ def _serialize(sess) -> dict:
 
 
 def read(sid: str) -> dict:
-    ctx = job_ctx.build_ctx(topic=_topic_for(sid), sid=sid)
+    topic, target_length = _row_for(sid)
+    ctx = job_ctx.build_ctx(topic=topic, sid=sid, target_length=target_length)
     sess = api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)
     try:
         return {"ok": True, "sid": sid, **_serialize(sess)}
@@ -55,7 +68,8 @@ def read(sid: str) -> dict:
 
 
 def fix_word(sid: str, *, index: int, text: str) -> dict:
-    ctx = job_ctx.build_ctx(topic=_topic_for(sid), sid=sid)
+    topic, target_length = _row_for(sid)
+    ctx = job_ctx.build_ctx(topic=topic, sid=sid, target_length=target_length)
     sess = api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)
     try:
         api.edit(sess, "timing", {"op": "fix_word", "index": index, "text": text})

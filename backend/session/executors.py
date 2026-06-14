@@ -15,7 +15,7 @@ from pipeline import footage as footage_stage
 from pipeline import assemble as assemble_stage
 from pipeline import recipe as recipe_stage
 from pipeline.contracts import FootageRequest
-from pipeline.footage_query import harden
+from pipeline.footage_query import anchor_query, topic_anchor
 from schema import Theme
 
 
@@ -36,6 +36,8 @@ class EngineContext:
     voice: str = "af_heart"            # Voice gate selection (Kokoro voice id)
     speed: float = 1.0                 # Voice gate speed (0.8x-1.2x)
     extra_user_block: str = ""         # Script gate regenerate-with-feedback + style memory
+    # Studio v3 M2: target video length in seconds (drives system_prompt_for preset)
+    target_length: int = 60            # default 60 → system_prompt_for(60) == SYSTEM_PROMPT
 
 
 def run_script(ctx: EngineContext, inputs: dict) -> dict:
@@ -45,10 +47,20 @@ def run_script(ctx: EngineContext, inputs: dict) -> dict:
     `inputs` is unused — script is the source stage with no upstream deps.
     `ctx.extra_user_block` (Studio v2) injects style memory + regenerate feedback as
     an additive USER-prompt block; empty by default → byte-identical to a plain run.
+    `ctx.target_length` (Studio v3 M2) selects the system prompt preset via
+    system_prompt_for(); default 60 → system_prompt_for(60) == SYSTEM_PROMPT (golden).
     """
     # Pass extra_user_block ONLY when set, so the default call is byte-identical to
     # the pre-Studio-v2 signature (keeps existing stage stubs valid).
     kw = {"extra_user_block": ctx.extra_user_block} if ctx.extra_user_block else {}
+    # pass system_prompt only for non-default presets: at 60 it's byte-identical to
+    # SYSTEM_PROMPT, and omitting it keeps existing call signatures (and test stubs
+    # without **kw) stable.
+    system_prompt = script_stage.system_prompt_for(ctx.target_length)
+    if system_prompt != script_stage.SYSTEM_PROMPT:
+        kw["system_prompt"] = system_prompt
+    # M2-T3: always pass target_length so the unified band+parse retry is active.
+    kw["target_length"] = ctx.target_length
     script = script_stage.generate_grounded_script(ctx.topic, cache_dir=ctx.cache_dir, **kw)
     plan = recipe_stage.plan(script, theme=ctx.theme, manifests=ctx.catalog)
     return {"script": script, "plan": plan}
@@ -81,26 +93,33 @@ def run_timing(ctx: EngineContext, inputs: dict) -> list:
 
 
 def _footage_requests(ctx: EngineContext, plan, offsets: list) -> list:
-    """Mirrors main.run()'s _footage_requests(plan, offsets, catalog, fps) exactly:
-        _, durations, _ = assemble_stage.scene_spans(offsets, fps)
-        headroom = max((m.durationFrames.max for m in catalog.values()
-                        if m.kind == "transition"), default=0)
-        FootageRequest(index=i, query=ps.query,
-                       min_frames=(durations[i] + headroom) // 2,
-                       broad_query=harden(plan.title, title=plan.title))
-        for i, ps in enumerate(plan.scenes) if ps.needs_footage
+    """One FootageRequest per `scene`-kind beat (the live builder the engine uses).
+
+    `min_frames` is the loop FLOOR — half the on-screen span (scene span + widest
+    transition), i.e. K=2: skip clips that would loop more than ~2× over the beat;
+    select_clip applies it softly so relevance still wins among clips that clear it.
+
+    Topic anchoring (footage-topic-anchor): each per-scene `keywords` query loses the
+    video's subject, and Pexels matches literally, so a drifted keyword returns an
+    off-topic clip. `topic_anchor(ctx.topic)` derives the clean subject; `query` gets
+    it prepended on drift (`anchor_query`), and `broad_query` broadens a whiff to that
+    subject. An empty/degenerate topic yields no anchor → today's behavior preserved.
     """
     _, durations, _ = assemble_stage.scene_spans(offsets, ctx.fps)
     headroom = max(
         (m.durationFrames.max for m in ctx.catalog.values() if m.kind == "transition"),
         default=0,
     )
+    # Carry the video's subject into every query so it survives Pexels' literal
+    # matching: anchor a drifted keyword, and broaden a whiff to the clean subject
+    # (not the clickbait title). topic_anchor("") is "" → today's behavior preserved.
+    anchor = topic_anchor(ctx.topic)
     return [
         FootageRequest(
             index=i,
-            query=ps.query,
+            query=anchor_query(ps.query, anchor),
             min_frames=(durations[i] + headroom) // 2,
-            broad_query=harden(plan.title, title=plan.title),
+            broad_query=anchor or ps.query,
         )
         for i, ps in enumerate(plan.scenes)
         if ps.needs_footage
@@ -116,34 +135,64 @@ def run_footage(ctx: EngineContext, inputs: dict) -> dict:
     The candidate pool is auxiliary (for the HITL gate). Record it best-effort:
     a missing PEXELS_API_KEY or a search failure yields an empty pool for the
     scene WITHOUT failing the footage stage (clips already came from fetch_footage).
+
+    v3 M5 (D4 + OV-6): pools are fetched for ALL scenes that carry a query — heroes
+    (hook/outro) included. Heroes: pool fetched + cached, NOTHING downloads
+    (needs_footage stays False). The per-hardened-query pool cache
+    (ctx.cache_dir / footage_pools/) makes repeated queries free (zero network calls).
+    A 429 exhaustion records pool=[] + pool_error="rate_limited" for that scene
+    instead of crashing (OV-6 honesty).
     """
     plan = inputs["script"]["plan"]
     offsets = inputs["voice"]
     reqs = _footage_requests(ctx, plan, offsets)
     clips = footage_stage.fetch_footage(reqs, ctx.assets_dir, fps=ctx.fps)
     chosen = {c.index: (c.query, c.rank) for c in clips}
-    candidates = {}
-    for r in reqs:
-        # Best-effort (see docstring): a missing key / search failure -> empty pool.
-        try:
-            key = footage_stage.require_env("PEXELS_API_KEY")
-            data = footage_stage.search_pexels(r.query, key)
-            rows = footage_stage.candidate_rows(data.get("videos", []), query=r.query, fps=ctx.fps)
-        except Exception:
-            rows = []
+
+    # Build the pool for every scene that has a query — footage scenes AND heroes.
+    # `candidates` stays {scene_index: [rows]} (list) so _sync_footage_candidates_to_db
+    # and _edit_footage read it without changes.  Structured error state (OV-6) goes
+    # into a separate `pool_errors` dict: {scene_index: error_str} so downstream
+    # stages that don't know about errors continue to see a list (possibly empty).
+    candidates: dict = {}
+    pool_errors: dict = {}
+    try:
+        key = footage_stage.require_env("PEXELS_API_KEY")
+    except Exception:
+        key = None
+
+    for i, ps in enumerate(plan.scenes):
+        if not ps.query:
+            continue  # stat / enumeration / no-query scenes: no pool
+        pool_result = {"rows": [], "error": "fetch_error"}
+        if key:
+            pool_result = footage_stage.fetch_pool(
+                ps.query, key, ctx.fps, cache_dir=ctx.cache_dir)
+        rows = pool_result["rows"]
+        pool_error = pool_result.get("error")
+
         for row in rows:
-            # EXACT initial selection: mark the row matching the clip's real (query, rank)
-            # from A.2a provenance — so a K-floor displacement to rank>1 rings the clip
-            # that was actually bound, not rank-1. No row is marked when fetch_footage
-            # broadened a whiffing query to the title (the pool is the specific query,
-            # the clip came from the broadened one) or for legacy clips with rank=None.
-            # The gate's pick/re_query ops still set `selected` precisely on edit.
-            q, rank = chosen.get(r.index, (None, None))
-            row["selected"] = 1 if (row["query"] == q and rank is not None
-                                    and row["rank"] == rank) else 0
+            if ps.needs_footage:
+                # EXACT initial selection: mark the row matching the clip's real (query, rank)
+                # from A.2a provenance — so a K-floor displacement to rank>1 rings the clip
+                # that was actually bound, not rank-1. No row is marked when fetch_footage
+                # broadened a whiffing query to the title (the pool is the specific query,
+                # the clip came from the broadened one) or for legacy clips with rank=None.
+                # The gate's pick/re_query ops still set `selected` precisely on edit.
+                q, rank = chosen.get(i, (None, None))
+                row["selected"] = 1 if (row["query"] == q and rank is not None
+                                        and row["rank"] == rank) else 0
+            else:
+                # Hero scenes: pool stored, never selected (no clip downloaded)
+                row["selected"] = 0
             row["clip_path"] = None
-        candidates[r.index] = rows
-    return {"clips": clips, "candidates": candidates}
+
+        candidates[i] = rows
+        if pool_error:
+            # OV-6 honesty: record the error marker alongside the (empty) pool
+            pool_errors[i] = pool_error
+
+    return {"clips": clips, "candidates": candidates, "pool_errors": pool_errors}
 
 
 def run_assemble(ctx: EngineContext, inputs: dict) -> Any:
@@ -151,12 +200,25 @@ def run_assemble(ctx: EngineContext, inputs: dict) -> Any:
         spec = assemble_stage.build_spec(
             plan, offsets, words, clips, catalog=catalog, fps=fps)
     All kwargs match exactly.
+
+    OV-4: when the engine has seeded override rows, _inputs_for injects an
+    "overrides" key ({"template": {...}, "background": {...}}) into inputs.
+    We extract and forward it to build_spec; missing key → None (pre-M5 callers
+    and main.py autopilot pass nothing → no backgroundClip → gradient cards,
+    which is the v2-byte-identical contract for the non-session autopilot path).
     """
     plan = inputs["script"]["plan"]
     offsets = inputs["voice"]
     words = inputs["timing"]
     clips = inputs["footage"]["clips"]
+    overrides = inputs.get("overrides")
+    # Pass beats for cross-template prop re-derivation (stat/enumeration/hook/outro
+    # overrides need to re-derive props from beat data, not the stale rendered props).
+    script_obj = inputs["script"].get("script")
+    beats = script_obj.beats if script_obj is not None and hasattr(script_obj, "beats") else None
     return assemble_stage.build_spec(
         plan, offsets, words, clips, catalog=ctx.catalog, fps=ctx.fps,
         voiceover_rel=f"assets/{ctx.voiceover_path.name}",
+        overrides=overrides,
+        beats=beats,
     )

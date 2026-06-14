@@ -1,4 +1,5 @@
-"""HITL A.6.1 — session CLI entrypoints (state read + pick edit) and the sid emit."""
+"""HITL A.6.1 — session CLI entrypoints (state read + pick edit) and the sid emit.
+Also covers Task 9: session_voice.apply gate-aware seam and session_state gates/autoRun."""
 import json
 from pathlib import Path
 
@@ -16,7 +17,7 @@ def _seed_session(tmp_path, monkeypatch, *, sid="s-cli"):
     script = BeatsScript(title="Reefs", beats=[
         Beat(text="hook"), Beat(text="mid", keywords="coral reef"), Beat(text="out")])
     monkeypatch.setattr("pipeline.script.generate_grounded_script",
-                        lambda topic, cache_dir=None: script)
+                        lambda topic, cache_dir=None, **kw: script)
     monkeypatch.setattr("pipeline.tts.synthesize",
                         lambda lines, path: (Path(path).parent.mkdir(parents=True, exist_ok=True),
                                              Path(path).write_bytes(b"W"),
@@ -56,7 +57,7 @@ def test_run_emits_session_id(tmp_path, monkeypatch):
     # fake the stages main.run drives (same shapes as the seed) + redirect output paths
     script = BeatsScript(title="Reefs", beats=[
         Beat(text="hook"), Beat(text="mid", keywords="coral reef"), Beat(text="out")])
-    monkeypatch.setattr("pipeline.script.generate_grounded_script", lambda topic, cache_dir=None: script)
+    monkeypatch.setattr("pipeline.script.generate_grounded_script", lambda topic, cache_dir=None, **kw: script)
     monkeypatch.setattr("pipeline.tts.synthesize",
                         lambda lines, path: (Path(path).parent.mkdir(parents=True, exist_ok=True),
                                              Path(path).write_bytes(b"W"),
@@ -153,6 +154,78 @@ def test_build_state_bad_sid_raises(tmp_path, monkeypatch):
     # empty db (no such session) → KeyError
     with pytest.raises(KeyError):
         ss.build_state("nope")
+
+
+def test_build_state_pre_spec_returns_partial_payload(tmp_path, monkeypatch):
+    """Holistic fix: build_state must not raise when spec.json doesn't exist yet
+    (gated session at the script/voice gate). Returns gates + empty scenes."""
+    from session import store as st, gatekeeper
+    from pipeline.contracts import LineOffset, WordTiming, Clip
+    from pipeline import validate as validate_stage
+    from session import executors, engine as eng_mod
+    from pipeline import projects as projects_mod
+
+    script = BeatsScript(title="Reefs", beats=[
+        Beat(text="hook"), Beat(text="mid", keywords="coral reef"), Beat(text="out")])
+    monkeypatch.setattr("pipeline.script.generate_grounded_script",
+                        lambda topic, cache_dir=None, **kw: script)
+    monkeypatch.setattr("pipeline.tts.synthesize",
+                        lambda lines, path, **kw: (
+                            Path(path).parent.mkdir(parents=True, exist_ok=True),
+                            Path(path).write_bytes(b"W"),
+                            [LineOffset(i, t, float(i), float(i + 1)) for i, t in enumerate(lines)])[-1])
+    monkeypatch.setattr("pipeline.timing.transcribe_words", lambda wav, fps: [WordTiming("w", 0, 5)])
+    monkeypatch.setattr("pipeline.footage.fetch_footage",
+                        lambda reqs, out_dir, *, fps=30, **kw: [
+                            Clip(index=r.index, query=r.query, path=f"assets/f{r.index}.mp4",
+                                 duration_frames=300) for r in reqs])
+    monkeypatch.setattr("pipeline.footage.search_pexels", lambda q, key: {"videos": []})
+    monkeypatch.setattr("pipeline.footage.require_env", lambda name: "K")
+
+    sid = "pre-spec"
+    sid_dir = tmp_path / "projects" / sid
+    sid_dir.mkdir(parents=True, exist_ok=True)
+    catalog = validate_stage.load_catalog(Path(__file__).resolve().parents[2] / "templates")
+    ctx = executors.EngineContext(
+        topic="Reefs", fps=30, theme=__import__("schema").Theme(), catalog=catalog,
+        assets_dir=tmp_path / "a", cache_dir=tmp_path / "c",
+        voiceover_path=tmp_path / "a" / projects_mod.voiceover_name(sid),
+        spec_out=sid_dir / "spec.json", sources_out=sid_dir / "sources.json")
+    conn = st.connect(tmp_path / "s.db")
+    st.create_session(conn, id=sid, topic="Reefs", now="t0")
+    from session import api as session_api
+    sess = session_api.Session(conn=conn, engine=eng_mod.Engine(conn, ctx, session_id=sid), id=sid)
+    gatekeeper.start(sess)   # halted at script gate — spec.json does NOT exist yet
+    assert not (sid_dir / "spec.json").exists(), "spec.json must not exist at script gate"
+    conn.close()
+
+    import session_state as ss
+    monkeypatch.setattr("session.job_ctx.SESSIONS_DB", tmp_path / "s.db")
+    monkeypatch.setattr("session.job_ctx.REPO_ROOT", tmp_path)
+    state = ss.build_state(sid)   # must not raise
+
+    assert state["sid"] == sid
+    assert state["scenes"] == []
+    assert "gates" in state
+    assert state["gates"]["script"]["state"] == "awaiting_approval"
+    assert "autoRun" in state
+    assert state["autoRun"] is False
+
+
+def test_build_state_post_spec_payload_unchanged(tmp_path, monkeypatch):
+    """Holistic fix: sessions with spec.json present must return the full payload
+    byte-identically (existing ungated path unchanged)."""
+    conn, ctx, sid = _seed_session(tmp_path, monkeypatch)
+    conn.close()
+    import session_state as ss
+    monkeypatch.setattr("session.job_ctx.SESSIONS_DB", tmp_path / "s.db")
+    monkeypatch.setattr("session.job_ctx.REPO_ROOT", tmp_path)
+    state = ss.build_state(sid)
+    # spec exists → full payload with populated scenes
+    assert state["sid"] == sid
+    assert len(state["scenes"]) > 0
+    assert "gates" in state
+    assert "autoRun" in state
 
 
 def test_apply_pick_rebinds_and_returns_selection(tmp_path, monkeypatch):
@@ -262,3 +335,149 @@ def test_apply_upload_bad_extension_fails_loud(tmp_path, monkeypatch):
     import pytest
     with pytest.raises(ValueError, match="unsupported upload extension"):
         se.apply_upload(sid, scene=1, file=str(f))
+
+
+# ---------------------------------------------------------------------------
+# Task 9 (Step 1): session_state.build_state gates/autoRun keys
+# ---------------------------------------------------------------------------
+
+def test_build_state_includes_gates_and_auto_run_for_ungated_session(tmp_path, monkeypatch):
+    """A legacy/autopilot session (no gate rows) returns gates: {} and autoRun: False."""
+    conn, ctx, sid = _seed_session(tmp_path, monkeypatch)
+    conn.close()
+    import session_state as ss
+    monkeypatch.setattr("session.job_ctx.SESSIONS_DB", tmp_path / "s.db")
+    monkeypatch.setattr("session.job_ctx.REPO_ROOT", tmp_path)
+    state = ss.build_state(sid)
+    assert "gates" in state
+    assert state["gates"] == {}          # ungated session — no gate rows
+    assert "autoRun" in state
+    assert state["autoRun"] is False
+
+
+def test_build_state_gates_populated_for_gated_session(tmp_path, monkeypatch):
+    """A gated session (v3 flow) returns the actual gate states under 'gates'."""
+    from session import store as st, gatekeeper
+    from pipeline.content import Beat, BeatsScript
+    from pipeline.contracts import LineOffset, WordTiming, Clip
+    from pipeline import validate as validate_stage
+    from session import executors, engine as eng_mod
+    from pipeline import projects as projects_mod
+
+    script = BeatsScript(title="Reefs", beats=[
+        Beat(text="hook"), Beat(text="mid", keywords="coral reef"), Beat(text="out")])
+    monkeypatch.setattr("pipeline.script.generate_grounded_script",
+                        lambda topic, cache_dir=None, **kw: script)
+    monkeypatch.setattr("pipeline.tts.synthesize",
+                        lambda lines, path, **kw: (
+                            Path(path).parent.mkdir(parents=True, exist_ok=True),
+                            Path(path).write_bytes(b"W"),
+                            [LineOffset(i, t, float(i), float(i + 1)) for i, t in enumerate(lines)])[-1])
+    monkeypatch.setattr("pipeline.timing.transcribe_words", lambda wav, fps: [WordTiming("w", 0, 5)])
+    monkeypatch.setattr("pipeline.footage.fetch_footage",
+                        lambda reqs, out_dir, *, fps=30, **kw: [
+                            Clip(index=r.index, query=r.query, path=f"assets/f{r.index}.mp4",
+                                 duration_frames=300) for r in reqs])
+    monkeypatch.setattr("pipeline.footage.search_pexels", lambda q, key: {"videos": []})
+    monkeypatch.setattr("pipeline.footage.require_env", lambda name: "K")
+
+    sid = "g-state"
+    sid_dir = tmp_path / "projects" / sid
+    sid_dir.mkdir(parents=True, exist_ok=True)
+    catalog = validate_stage.load_catalog(Path(__file__).resolve().parents[2] / "templates")
+    ctx = executors.EngineContext(
+        topic="Reefs", fps=30, theme=__import__("schema").Theme(), catalog=catalog,
+        assets_dir=tmp_path / "a", cache_dir=tmp_path / "c",
+        voiceover_path=tmp_path / "a" / projects_mod.voiceover_name(sid),
+        spec_out=sid_dir / "spec.json", sources_out=sid_dir / "sources.json")
+    conn = st.connect(tmp_path / "s.db")
+    st.create_session(conn, id=sid, topic="Reefs", now="t0")
+    from session import api as session_api
+    sess = session_api.Session(conn=conn, engine=eng_mod.Engine(conn, ctx, session_id=sid), id=sid)
+    gatekeeper.start(sess)                # halted at script gate
+    gatekeeper.approve(sess, "script")    # voice gate opens
+    gatekeeper.approve(sess, "voice")     # heavy segment runs → spec materialised; scenes gate opens
+    conn.close()
+
+    import session_state as ss
+    monkeypatch.setattr("session.job_ctx.SESSIONS_DB", tmp_path / "s.db")
+    monkeypatch.setattr("session.job_ctx.REPO_ROOT", tmp_path)
+    state = ss.build_state(sid)
+    assert "gates" in state and "autoRun" in state
+    assert state["gates"]["script"]["state"] == "approved"
+    assert state["gates"]["voice"]["state"] == "approved"
+    assert state["gates"]["scenes"]["state"] == "awaiting_approval"
+    assert state["autoRun"] is False
+
+
+# ---------------------------------------------------------------------------
+# Task 9 (Step 0b): session_voice.apply gate-aware seam
+# ---------------------------------------------------------------------------
+
+def test_voice_apply_defers_when_gate_rows_present(tmp_path, monkeypatch):
+    """session_voice.apply routes through gatekeeper.set_voice (defer) when gate
+    rows exist, instead of calling api.regenerate (which would blow past gates)."""
+    from session import store as st, gatekeeper
+    from pipeline.contracts import LineOffset, WordTiming, Clip
+    from pipeline import validate as validate_stage
+    from session import executors, engine as eng_mod
+    from pipeline import projects as pm
+
+    script_val = BeatsScript(title="Reefs", beats=[
+        Beat(text="hook"), Beat(text="mid", keywords="coral reef"), Beat(text="out")])
+    monkeypatch.setattr("pipeline.script.generate_grounded_script",
+                        lambda topic, cache_dir=None, **kw: script_val)
+    monkeypatch.setattr("pipeline.tts.synthesize",
+                        lambda lines, path, **kw: (
+                            Path(path).parent.mkdir(parents=True, exist_ok=True),
+                            Path(path).write_bytes(b"W"),
+                            [LineOffset(i, t, float(i), float(i + 1)) for i, t in enumerate(lines)])[-1])
+    monkeypatch.setattr("pipeline.timing.transcribe_words", lambda wav, fps: [WordTiming("w", 0, 5)])
+    monkeypatch.setattr("pipeline.footage.fetch_footage",
+                        lambda reqs, out_dir, *, fps=30, **kw: [
+                            Clip(index=r.index, query=r.query, path=f"assets/f{r.index}.mp4",
+                                 duration_frames=300) for r in reqs])
+    monkeypatch.setattr("pipeline.footage.search_pexels", lambda q, key: {"videos": []})
+    monkeypatch.setattr("pipeline.footage.require_env", lambda name: "K")
+
+    sid = "voice-gate-seam"
+    sid_dir = tmp_path / "projects" / sid
+    sid_dir.mkdir(parents=True, exist_ok=True)
+    catalog = validate_stage.load_catalog(Path(__file__).resolve().parents[2] / "templates")
+    ctx = executors.EngineContext(
+        topic="Reefs", fps=30, theme=Theme(), catalog=catalog,
+        assets_dir=tmp_path / "a", cache_dir=tmp_path / "c",
+        voiceover_path=tmp_path / "a" / pm.voiceover_name(sid),
+        spec_out=sid_dir / "spec.json", sources_out=sid_dir / "sources.json")
+    conn = st.connect(tmp_path / "s.db")
+    st.create_session(conn, id=sid, topic="Reefs", now="t0")
+    from session import api as session_api
+    sess = session_api.Session(conn=conn, engine=eng_mod.Engine(conn, ctx, session_id=sid), id=sid)
+    # advance to the assemble gate (all three approvals done) via the gatekeeper
+    gatekeeper.start(sess)
+    gatekeeper.approve(sess, "script")
+    gatekeeper.approve(sess, "voice")
+    gatekeeper.approve(sess, "scenes")
+    # gate rows now present — voice apply must defer, not regenerate
+    monkeypatch.setattr("pipeline.tts.is_valid_voice", lambda v: True)
+    write_calls = []
+    monkeypatch.setattr("pipeline.projects.write_voice",
+                        lambda root, s, *, voice, speed: write_calls.append((voice, speed)))
+    monkeypatch.setattr("session.job_ctx.SESSIONS_DB", tmp_path / "s.db")
+    monkeypatch.setattr("session.job_ctx.REPO_ROOT", tmp_path)
+    monkeypatch.setattr("session.job_ctx.ASSETS_DIR", tmp_path / "a")
+    monkeypatch.setattr("session.job_ctx.RETRIEVAL_CACHE", tmp_path / "c")
+    conn.close()
+
+    import session_voice as sv
+    res = sv.apply(sid, voice="af_bella", speed=1.1)
+
+    assert res["ok"] is True
+    # write_voice called once
+    assert len(write_calls) == 1 and write_calls[0] == ("af_bella", 1.1)
+    # voice gate reopened (deferred), NOT immediately re-synthesized
+    conn2 = st.connect(tmp_path / "s.db")
+    g = st.get_gate_states(conn2, sid)
+    conn2.close()
+    assert g["voice"]["state"] == "awaiting_approval"   # reopened
+    assert g["scenes"]["state"] == "stale"              # downstream stale

@@ -6,6 +6,7 @@
  * derives a `stat` from a beat whose data carries both `value` and `label`.
  */
 import {z} from 'zod';
+import {mediaSchema} from '../mediaSchema';
 
 export const schema = z
   .object({
@@ -13,6 +14,7 @@ export const schema = z
     label: z.string(),
     /** optional leading glyph/emoji shown above the value */
     icon: z.string().optional(),
+    backgroundClip: mediaSchema.optional(),
   })
   .strict();
 

@@ -29,6 +29,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # backend/
 
 import json
 from session import api, store, job_ctx
+from session import prefs as prefs_mod
 from pipeline import style_memory
 
 
@@ -39,6 +40,18 @@ def _topic_for(sid: str) -> str:
         if row is None:
             raise KeyError(f"no session {sid!r}")
         return row["topic"]
+    finally:
+        conn.close()
+
+
+def _row_for(sid: str) -> tuple[str, int]:
+    """Return (topic, target_length) from the stored session row."""
+    conn = store.connect(job_ctx.SESSIONS_DB)
+    try:
+        row = store.get_session(conn, sid)
+        if row is None:
+            raise KeyError(f"no session {sid!r}")
+        return row["topic"], row["target_length"]
     finally:
         conn.close()
 
@@ -68,6 +81,7 @@ def _serialize(bundle) -> dict:
         "sources": [{"url": x.url, "title": x.title} for x in (s.sources or [])],
         "verifyReport": s.verify_report or [],
         "factFloor": _floor(s.beats),
+        "bandMiss": s.band_miss,
     }
 
 
@@ -87,7 +101,8 @@ def _build_verify_fns():
 
 
 def read(sid: str) -> dict:
-    ctx = job_ctx.build_ctx(topic=_topic_for(sid), sid=sid)
+    topic, target_length = _row_for(sid)
+    ctx = job_ctx.build_ctx(topic=topic, sid=sid, target_length=target_length)
     sess = api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)
     try:
         bundle = sess.engine._load_output("script")
@@ -99,7 +114,8 @@ def read(sid: str) -> dict:
 
 
 def edit_beat(sid: str, *, index: int, text=None, data=None, clear_data=False) -> dict:
-    ctx = job_ctx.build_ctx(topic=_topic_for(sid), sid=sid)
+    topic, target_length = _row_for(sid)
+    ctx = job_ctx.build_ctx(topic=topic, sid=sid, target_length=target_length)
     sess = api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)
     try:
         vfn, rfn = _build_verify_fns()
@@ -117,7 +133,8 @@ def edit_beat(sid: str, *, index: int, text=None, data=None, clear_data=False) -
 
 
 def drop_beat(sid: str, *, index: int) -> dict:
-    ctx = job_ctx.build_ctx(topic=_topic_for(sid), sid=sid)
+    topic, target_length = _row_for(sid)
+    ctx = job_ctx.build_ctx(topic=topic, sid=sid, target_length=target_length)
     sess = api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)
     try:
         api.edit(sess, "script", {"op": "drop_beat", "index": index})
@@ -127,15 +144,13 @@ def drop_beat(sid: str, *, index: int) -> dict:
 
 
 def regenerate(sid: str, *, feedback: str = "") -> dict:
-    mem = style_memory.load(job_ctx.STYLE_MEMORY_PATH)
-    block_parts = []
-    if feedback.strip():
-        block_parts.append(f"OPERATOR FEEDBACK for this regeneration: {feedback.strip()}")
-    mem_block = style_memory.to_prompt_block(mem)
-    if mem_block:
-        block_parts.append(mem_block)
-    extra = "\n\n".join(block_parts)
-    ctx = job_ctx.build_ctx(topic=_topic_for(sid), sid=sid, extra_user_block=extra)
+    # Single source of truth for the additive USER block: channel-voice prefs
+    # (global ⊕ this session's override) + style memory + this regeneration's
+    # feedback. The frozen SYSTEM_PROMPT and grounding rules stay untouched.
+    extra = prefs_mod.compose_extra_block(sid, feedback=feedback)
+    topic, target_length = _row_for(sid)
+    ctx = job_ctx.build_ctx(topic=topic, sid=sid, extra_user_block=extra,
+                            target_length=target_length)
     sess = api.resume(job_ctx.SESSIONS_DB, ctx, session_id=sid)
     try:
         api.regenerate(sess, "script")

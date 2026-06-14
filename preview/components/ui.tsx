@@ -16,7 +16,7 @@ export function Eyebrow({children, className}: {children: React.ReactNode; class
   );
 }
 
-type BadgeTone = 'green' | 'amber' | 'red' | 'purple' | 'blue' | 'dim';
+export type BadgeTone = 'green' | 'amber' | 'red' | 'purple' | 'blue' | 'dim';
 
 const BADGE_TONES: Record<BadgeTone, string> = {
   green: 'bg-[rgba(16,185,129,0.15)] text-[#34d399]',
@@ -68,7 +68,7 @@ export function ProgressBar({value}: {value: number}) {
   );
 }
 
-type ButtonVariant = 'primary' | 'ghost' | 'danger';
+type ButtonVariant = 'primary' | 'ghost' | 'danger' | 'warn';
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   primary:
@@ -76,6 +76,10 @@ const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   ghost: 'glass glass-hover text-ink',
   danger:
     'bg-[rgba(239,68,68,0.10)] border border-[rgba(239,68,68,0.25)] text-[#f87171] hover:bg-[rgba(239,68,68,0.16)]',
+  // M6 amber Re-approve/Reopen CTA (§4.1 design contract ruling 16).
+  // Amber fill, near-black text for contrast, weight 600 per spec.
+  // hover: slightly brighter fill; active: scale-down micro-tap feedback.
+  warn: 'bg-warn text-[#1a1308] font-semibold shadow-[0_4px_16px_rgba(232,163,61,0.3)] hover:-translate-y-px hover:shadow-[0_6px_24px_rgba(232,163,61,0.45)] hover:bg-[#f0b24d] active:scale-[0.97] active:shadow-none',
 };
 
 /** Button (spec §10.7): radius 8px, 13.5px, weight 500, 150ms ease-out. */

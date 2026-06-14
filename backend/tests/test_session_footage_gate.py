@@ -28,7 +28,7 @@ _TEMPLATES = Path(__file__).resolve().parents[2] / "templates"
 def _seed(tmp_path, monkeypatch):
     script = BeatsScript(title="Reefs", beats=[
         Beat(text="hook"), Beat(text="mid", keywords="coral reef"), Beat(text="out")])
-    monkeypatch.setattr("pipeline.script.generate_grounded_script", lambda topic, cache_dir=None: script)
+    monkeypatch.setattr("pipeline.script.generate_grounded_script", lambda topic, cache_dir=None, **kw: script)
     monkeypatch.setattr("pipeline.tts.synthesize",
                         lambda lines, path: (Path(path).parent.mkdir(parents=True, exist_ok=True),
                                              Path(path).write_bytes(b"W"),

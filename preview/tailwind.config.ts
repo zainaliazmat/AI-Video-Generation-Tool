@@ -11,7 +11,11 @@ const config: Config = {
         elevated: 'var(--bg-elevated)',
         accent: {1: '#5e5ce6', 2: '#8b5cf6', 3: '#a78bfa'},
         ok: 'var(--green)',
-        warn: 'var(--amber)',
+        // M6 canonical amber token (§4.1 ruling 16). Repointed from --amber to
+        // --warn; --amber kept in :root for backward-compat but no longer the
+        // primary warn hue. warn-soft for tinted fills (bg-warn-soft).
+        warn: 'var(--warn)',
+        'warn-soft': 'var(--warn-soft)',
         bad: 'var(--red)',
         info: 'var(--blue)',
         ink: {

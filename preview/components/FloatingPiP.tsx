@@ -2,27 +2,32 @@
 
 import {useCallback, useEffect, useState} from 'react';
 import {PlayerClient} from './PlayerClient';
+import {useVideoLayout} from './VideoChrome';
+import {shouldMountPiP} from '@/lib/playerBudget';
 
-// Mobile player — Decision 2A (locked mobile pattern; scheduling ratified in
-// docs/superpowers/specs/2026-06-12-design-ratifications.md §5). Below lg the
-// rail is `hidden`, which used to mean NO player at all on mobile. This is the
-// locked pattern instead: a persistent floating PiP that survives gate-to-gate
-// navigation (it lives in the /video/[id] layout, same trick as the rail), and
-// tapping it opens the fullscreen "exactly what exports" view.
+// FloatingPiP — the persistent floating preview (PRD §8 "nested-layout trick":
+// lives in the /video/[id] layout so it survives gate-to-gate navigation).
+// Originally mobile-only; now the editing-gate preview on ALL viewports — the
+// fixed 300px "Live preview" rail is reserved for the Assemble gate, where the
+// full assembly is the point. A mini thumbnail floats bottom-right; tapping it
+// opens the fullscreen "exactly what exports" view.
 //
-// Deliberately self-contained (own fetch + spec-changed listener, duplicated
-// from PreviewRail) rather than sharing a hook — the rail is being reworked on
-// a parallel branch and this file must not conflict with it.
-export function MobilePiP({id}: {id: string}) {
+// `hideOnDesktop` (set on the Assemble gate) collapses it to mobile-only via
+// `lg:hidden` so it doesn't double up with the desktop rail there.
+//
+// Mount budget (lib/playerBudget): unmounts while a scene row is open (the
+// per-scene player takes over), so at most one @remotion/player is mounted.
+export function FloatingPiP({id, hideOnDesktop = false}: {id: string; hideOnDesktop?: boolean}) {
   const [spec, setSpec] = useState<any>(null);
   const [fetchCount, setFetchCount] = useState(0);
   const [full, setFull] = useState(false);
+  const {openSceneIndex} = useVideoLayout();
 
   const load = useCallback(async () => {
     try {
       const res = await fetch(`/api/projects/${id}`, {cache: 'no-store'});
       const data = await res.json();
-      if (!res.ok) return; // no player is better than a broken one on mobile
+      if (!res.ok) return; // no player is better than a broken one
       setSpec(data.spec);
       setFetchCount((v) => v + 1);
     } catch {
@@ -47,7 +52,7 @@ export function MobilePiP({id}: {id: string}) {
     };
   }, [full]);
 
-  // Esc closes fullscreen (hardware keyboards exist on tablets).
+  // Esc closes fullscreen (hardware keyboards exist on tablets + desktop).
   useEffect(() => {
     if (!full) return;
     const onKey = (e: KeyboardEvent) => {
@@ -58,17 +63,25 @@ export function MobilePiP({id}: {id: string}) {
   }, [full]);
 
   if (!spec) return null;
+  // Unmount entirely while a scene row is open (mount-budget partner is the
+  // per-scene player). Closing the fullscreen view first avoids a stuck overlay.
+  if (!shouldMountPiP(openSceneIndex)) return null;
 
   return (
-    <div className="lg:hidden">
+    <div className={hideOnDesktop ? 'lg:hidden' : undefined}>
       {!full ? (
-        // Mini PiP: glass frame (floating control layer — layer discipline holds),
-        // player chrome disabled so the single tap target is "go fullscreen".
+        // Mini PiP: glass frame, a thin label so a floating thumbnail reads as a
+        // preview (esp. on desktop), then the player. The whole card is one tap
+        // target = "go fullscreen"; player chrome stays disabled.
         <button
           onClick={() => setFull(true)}
           aria-label="Open the video preview fullscreen"
-          className="glass fixed bottom-4 right-4 z-40 w-[112px] rounded-[var(--radius-md)] p-1"
+          className="glass fixed bottom-4 right-4 z-40 w-[120px] overflow-hidden rounded-[var(--radius-md)] p-1 transition hover:brightness-110 lg:w-[150px]"
         >
+          <div className="flex items-center justify-between px-1 pb-1 pt-0.5">
+            <span className="font-ui text-[10px] font-semibold text-ink-secondary">Preview</span>
+            <ExpandIcon />
+          </div>
           <div className="pointer-events-none overflow-hidden rounded-[8px] border border-white/10 bg-black">
             <PlayerClient key={fetchCount} spec={spec} controls={false} />
           </div>
@@ -108,3 +121,18 @@ export function MobilePiP({id}: {id: string}) {
     </div>
   );
 }
+
+const ExpandIcon = () => (
+  <svg
+    className="h-3 w-3 text-ink-muted"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2.4"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden
+  >
+    <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+  </svg>
+);

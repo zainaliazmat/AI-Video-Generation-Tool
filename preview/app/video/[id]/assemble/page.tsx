@@ -1,18 +1,22 @@
 'use client';
 
 import {useCallback, useEffect, useRef, useState} from 'react';
+import Link from 'next/link';
 import {useParams} from 'next/navigation';
 import {toast} from 'sonner';
 import {studio, type AssembleGate, type ChatResult, type DiffLine} from '@/lib/studio';
 import {GateHeader} from '@/components/GateHeader';
+import {StatefulStamp} from '@/components/StatefulStamp';
+import {useVideoLayout} from '@/components/VideoChrome';
 import {Eyebrow, Badge} from '@/components/ui';
 import {RenderControls} from '@/components/RenderControls';
 import {notifySpecChanged} from '@/components/PreviewRail';
 
-// Studio v2 Assemble gate (PRD §6.5). The director chat → spec.json patch card →
-// apply & re-render. Frames are never edited; spec.json is the contract. Content
-// sits on quiet `content-card` surfaces; the single tinted action ("Apply &
-// re-render") lives on the patch card, not the GateHeader.
+// Studio v3 Assemble gate (PRD §6.5, M6-T8). The terminal gate: per-scene controls
+// live in /scenes (the chat whitelist still patches them, §5.4). What remains here:
+// theme cards (Ember flips the studio chrome live via body.ember), the director chat
+// + history/revert (v2), and Render with a done-state that demotes to Download + New.
+// Frames are never edited; spec.json is the contract.
 
 const QUICK_CHIPS = [
   'Make the captions bigger',
@@ -40,6 +44,70 @@ function fmtValue(v: unknown): string {
 let counter = 0;
 const nextId = () => `m${++counter}-${Date.now()}`;
 
+// Theme card — the Ember toggle flips the studio chrome live via body.ember
+// (CSS-cascade accent override, F1). The card surfaces the spec's own palette so
+// the change is honest: to bake a warm palette into the EXPORT, ask the director
+// ("switch to a dark ember theme") — that produces a reviewable spec patch.
+const THEMES: {key: 'default' | 'ember'; label: string; swatch: string}[] = [
+  {key: 'default', label: 'Indigo', swatch: 'linear-gradient(135deg,#5e5ce6,#22d3ee)'},
+  {key: 'ember', label: 'Ember', swatch: 'linear-gradient(135deg,#c96a10,#e8a33d)'},
+];
+
+function ThemeCard({palette, themeName}: {palette: string[]; themeName: string | null}) {
+  const [ember, setEmber] = useState(false);
+
+  // Reflect the current global class on mount (it persists across navigation).
+  useEffect(() => {
+    setEmber(document.body.classList.contains('ember'));
+  }, []);
+
+  function apply(key: 'default' | 'ember') {
+    const on = key === 'ember';
+    document.body.classList.toggle('ember', on);
+    setEmber(on);
+  }
+
+  return (
+    <div className="content-card p-4">
+      <Eyebrow className="mb-2.5">Theme{themeName ? ` · ${themeName}` : ''}</Eyebrow>
+      <div className="mb-3 grid grid-cols-2 gap-2">
+        {THEMES.map((t) => {
+          const active = t.key === 'ember' ? ember : !ember;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => apply(t.key)}
+              aria-pressed={active}
+              className={
+                'flex items-center gap-2 rounded-[var(--radius-md)] border px-3 py-2 font-ui text-[12px] font-semibold transition ' +
+                (active ? 'border-accent-1 bg-white/[0.06] text-ink' : 'border-white/10 text-ink-secondary hover:bg-white/[0.04]')
+              }
+            >
+              <span className="h-4 w-4 rounded-full border border-white/15" style={{background: t.swatch}} aria-hidden />
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+      <p className="mb-2.5 font-ui text-[11px] leading-relaxed text-ink-muted">
+        Flips the studio accent live. To bake a warm palette into the export, ask the director
+        to “switch to a dark ember theme”.
+      </p>
+      {palette.length ? (
+        <div className="flex flex-wrap gap-2">
+          {palette.map((c, i) => (
+            <div key={i} className="flex flex-col items-center gap-1">
+              <span className="h-7 w-7 rounded-[var(--radius-sm)] border border-white/10" style={{backgroundColor: c}} title={c} />
+              <span className="font-mono text-[9px] text-ink-muted">{c}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function DiffRow({line}: {line: DiffLine}) {
   return (
     <div className="font-mono text-[11px] leading-relaxed">
@@ -54,11 +122,14 @@ function DiffRow({line}: {line: DiffLine}) {
 export default function AssembleGatePage() {
   const params = useParams();
   const id = params.id as string;
+  const {gates} = useVideoLayout();
+  const assembleGate = gates.assemble;
 
   const [gate, setGate] = useState<AssembleGate | null>(null);
   const [spec, setSpec] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [rendered, setRendered] = useState(false);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -194,7 +265,13 @@ export default function AssembleGatePage() {
 
   return (
     <div>
-      <GateHeader id={id} gate="assemble" status={statusNode} />
+      <GateHeader id={id} gate="assemble" status={statusNode} gates={gates} />
+
+      {assembleGate && (
+        <div className="content-card mb-4 px-4 py-3">
+          <StatefulStamp gate="assemble" gateState={assembleGate} specVersion={gate?.version} />
+        </div>
+      )}
 
       {loading ? (
         <div className="space-y-2.5">
@@ -370,8 +447,20 @@ export default function AssembleGatePage() {
             {/* Render section */}
             {spec ? (
               <div className="space-y-1.5">
-                <RenderControls spec={spec} projectId={id} onRendered={() => {}} />
-                <p className="px-1 font-ui text-[11px] text-ink-muted">~40 s local re-render</p>
+                <RenderControls spec={spec} projectId={id} onRendered={() => setRendered(true)} />
+                {rendered ? (
+                  <div className="flex items-center gap-2 px-1">
+                    <span className="font-ui text-[11px] text-ink-muted">Exported · download above.</span>
+                    <Link
+                      href="/"
+                      className="rounded-full bg-accent-1 px-4 py-1.5 font-ui text-[12px] font-semibold text-white shadow-[0_4px_14px_rgba(94,92,230,0.35)] transition hover:brightness-110"
+                    >
+                      + New video
+                    </Link>
+                  </div>
+                ) : (
+                  <p className="px-1 font-ui text-[11px] text-ink-muted">~40 s local re-render</p>
+                )}
               </div>
             ) : (
               <div className="content-card p-4">
@@ -384,28 +473,15 @@ export default function AssembleGatePage() {
 
           {/* Scene / theme summary column */}
           <div className="space-y-4">
-            <div className="content-card p-4">
-              <Eyebrow className="mb-2.5">Theme{themeName ? ` · ${themeName}` : ''}</Eyebrow>
-              {palette.length ? (
-                <div className="flex flex-wrap gap-2">
-                  {palette.map((c, i) => (
-                    <div key={i} className="flex flex-col items-center gap-1">
-                      <span
-                        className="h-8 w-8 rounded-[var(--radius-sm)] border border-white/10"
-                        style={{backgroundColor: c}}
-                        title={c}
-                      />
-                      <span className="font-mono text-[9px] text-ink-muted">{c}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="font-ui text-[12px] text-ink-muted">No palette in theme.</p>
-              )}
-            </div>
+            <ThemeCard palette={palette} themeName={themeName} />
 
             <div className="content-card p-4">
-              <Eyebrow className="mb-2.5">Scenes</Eyebrow>
+              <div className="mb-2.5 flex items-center justify-between">
+                <Eyebrow>Scenes</Eyebrow>
+                <Link href={`/video/${id}/scenes`} className="font-ui text-[11px] font-semibold text-accent-1 hover:underline">
+                  Edit in Scenes →
+                </Link>
+              </div>
               <div className="space-y-2">
                 {gate.scenes.map((s) => (
                   <div

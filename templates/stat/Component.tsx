@@ -1,8 +1,8 @@
 import React from 'react';
-import {AbsoluteFill, Easing, interpolate, useCurrentFrame} from 'remotion';
+import {Easing, interpolate, useCurrentFrame} from 'remotion';
 import type {TemplateProps} from '../sdk';
 import type {StatData} from './schema';
-import {heroBackground, HERO_BREATH_PERIOD} from '../heroBackground';
+import HeroBackdrop from '../HeroBackdrop';
 import {parseCountUp, formatCount} from '../countUp';
 
 /**
@@ -24,7 +24,7 @@ function valueFontSize(text: string): number {
 const CLAMP = {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'} as const;
 const COUNT_FRAMES = 30; // count-up settles by here, then shows the exact value
 
-const Component: React.FC<TemplateProps<StatData>> = ({data, theme}) => {
+const Component: React.FC<TemplateProps<StatData>> = ({data, theme, timing}) => {
   const frame = useCurrentFrame();
   const pop = interpolate(frame, [0, 14], [0.6, 1], {
     ...CLAMP,
@@ -48,15 +48,12 @@ const Component: React.FC<TemplateProps<StatData>> = ({data, theme}) => {
     : data.value;
 
   return (
-    <AbsoluteFill
-      style={{
-        backgroundColor: theme.palette.background,
-        backgroundImage: heroBackground(theme.palette, frame / HERO_BREATH_PERIOD),
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '0 80px',
-        textAlign: 'center',
-      }}
+    <HeroBackdrop
+      clip={data.backgroundClip}
+      palette={theme.palette}
+      frame={frame}
+      durationInFrames={timing.durationInFrames}
+      containerStyle={{alignItems: 'center', justifyContent: 'center', padding: '0 80px', textAlign: 'center'}}
     >
       {data.icon ? (
         <div style={{fontSize: 96, lineHeight: 1, marginBottom: 24, opacity: iconFade}}>
@@ -92,7 +89,7 @@ const Component: React.FC<TemplateProps<StatData>> = ({data, theme}) => {
       >
         {data.label}
       </div>
-    </AbsoluteFill>
+    </HeroBackdrop>
   );
 };
 
