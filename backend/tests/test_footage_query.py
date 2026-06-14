@@ -78,6 +78,14 @@ def test_topic_anchor_returns_empty_for_a_degenerate_topic():
     assert topic_anchor("   ") == ""
 
 
+def test_topic_anchor_returns_empty_for_a_topic_with_no_real_subject_words():
+    # punctuation/emoji-only, or nothing but listicle framing, has no subject to
+    # anchor on — must NOT prepend junk ("!!!", "facts about") to every query.
+    assert topic_anchor("!!!") == ""
+    assert topic_anchor("10 facts about") == ""
+    assert topic_anchor("😀 facts about 🐙") == ""
+
+
 # ── anchor_query: prepend the subject only when the keyword has drifted ──
 
 def test_anchor_query_prepends_subject_when_keyword_has_drifted():

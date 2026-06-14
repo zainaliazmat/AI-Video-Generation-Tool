@@ -41,6 +41,12 @@ _LIST_FRAME = re.compile(
     r"(?:about|of|on|in|for|to|regarding)\s+",
     re.IGNORECASE,
 )
+# Depluralized roots of the listicle nouns + connectives in _LIST_FRAME (kept in sync
+# with it). A stripped topic that is nothing but these has no subject to anchor on.
+_FRAMING_ROOTS = frozenset({
+    "fact", "thing", "way", "reason", "tip", "secret", "type", "kind", "example",
+    "myth", "mistake", "lesson", "rule", "sign", "step", "about", "regarding",
+})
 
 
 def _normalize(q: str) -> str:
@@ -103,11 +109,16 @@ def topic_anchor(topic: str) -> str:
     "top 5 ways to save money" → "save money"), then routes the result through
     harden() so a colliding/proper-noun subject degrades to a filmable category
     ("the Antikythera mechanism" → "antique astronomical instrument") instead of a
-    zero-result named search. Returns "" for an empty/degenerate topic, so the caller
-    anchors nothing and falls back to today's behavior."""
+    zero-result named search. Returns "" for an empty/degenerate topic (empty,
+    punctuation/emoji-only, or nothing but listicle framing), so the caller anchors
+    nothing and falls back to today's behavior rather than poisoning every query."""
+    if not topic:
+        return ""
     stripped = _COUNT_PREFIX.sub("", topic, count=1)
     stripped = _LIST_FRAME.sub("", stripped, count=1).strip()
-    if not stripped:
+    # No real subject word survived (just punctuation/emoji, or bare framing like
+    # "facts about") → nothing to anchor on.
+    if not (_content_roots(stripped) - _FRAMING_ROOTS):
         return ""
     return harden(stripped, title=stripped)
 
