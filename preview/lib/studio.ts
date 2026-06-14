@@ -1,6 +1,8 @@
-// Studio v2 — client types mirroring the backend gate CLIs (session_script.py,
-// session_voice.py, session_timing.py, session_assemble.py, session_state.py).
-// These are display contracts; the authoritative shapes live in Python.
+// Studio v2/v3 — client types mirroring the backend gate CLIs.
+// The v2 types (ScriptGate, VoiceGate, etc.) are display contracts; the
+// authoritative shapes live in Python.
+// Studio v3 M6 types (GateState, SessionState, etc.) are the normative data
+// contract for the new staged-flow pages.
 
 export type BeatFlag = 'supported' | 'unverified' | null;
 
@@ -16,6 +18,11 @@ export type ScriptBeat = {
 
 export type FactFloor = {supported: number; total: number; level: 'ok' | 'warn' | 'hard_fail'};
 
+// M2 amend 4: out-of-band scripts ride a `bandMiss` (camelCase) on the read
+// payload — `requested` is the [min,max] beat band, `got` is the actual count.
+// null when the script landed in-band. Drives the T3 warn pill.
+export type BandMiss = {requested: [number, number]; got: number};
+
 export type ScriptGate = {
   ok: boolean;
   sid: string;
@@ -24,6 +31,7 @@ export type ScriptGate = {
   sources: {url: string; title: string | null}[];
   verifyReport: {text: string; verdict: string}[];
   factFloor: FactFloor;
+  bandMiss?: BandMiss | null;
 };
 
 export type Voice = {id: string; name: string; character: string; lang: string};
@@ -47,6 +55,92 @@ export type AssembleHistory = {version: number; revertableSeq: number | null; hi
 export type AssembleGate = {ok: boolean; sid: string; theme: Record<string, unknown>; scenes: AssembleScene[]} & AssembleHistory;
 export type ChatResult = {ok: boolean; ops: PatchOp[]; reply: string; diff: DiffLine[]; valid: boolean};
 
+// ---------------------------------------------------------------------------
+// Studio v3 M6 — typed SessionState data contract (normative)
+// ---------------------------------------------------------------------------
+
+export type GateState = 'awaiting_approval' | 'approved' | 'reopened' | 'stale';
+export interface Gate {state: GateState; approved_at: string | null}
+export type GatesDict = Partial<Record<'script' | 'voice' | 'scenes' | 'assemble', Gate>>;
+
+export interface Candidate {
+  rank: number;
+  thumbUrl: string;
+  query: string;
+  durationFrames: number;
+  selected: boolean;
+}
+export interface FootageProvenance {
+  source: 'auto' | 'pick' | 're_query' | 'uploaded';
+  query: string | null;
+  rank: number | null;
+  pexelsId: number | null;
+  pexelsUrl: string | null;
+}
+export interface TemplateOverride {value: string; source: string; pickedRank: number | null}
+export interface BackgroundPool {rows: Candidate[]; poolError: string | null}
+export interface BackgroundProvenance {
+  source: string;
+  pickedRank: number | null;
+  query: string | null;
+  pexelsId: number | null;
+  pexelsUrl: string | null;
+  updatedAt: string;
+}
+export interface LastPick {autoRank: number; humanRank: number}
+export interface SceneState {
+  index: number;
+  template: string;
+  needsFootage: boolean;
+  beatText: string | null;
+  durationInFrames: number | null;
+  candidates: Candidate[];
+  provenance: FootageProvenance | null;
+  eligibleTemplates: string[];
+  templateOverride: TemplateOverride | null;
+  backgroundPool: BackgroundPool;
+  backgroundProvenance: BackgroundProvenance | null;
+  pickLogCount: number;
+  lastPick: LastPick | null;
+}
+/** scenes:[] before the spec is generated (partial pre-spec state) */
+export interface SessionState {
+  sid: string;
+  scenes: SceneState[];
+  gates: GatesDict;
+  autoRun: boolean;
+}
+export interface ReopenPreview {
+  gate: string;
+  reruns: string[];
+  staleGates: string[];
+}
+
+const GATE_ORDER: ('script' | 'voice' | 'scenes' | 'assemble')[] = [
+  'script',
+  'voice',
+  'scenes',
+  'assemble',
+];
+
+/**
+ * The live frontier gate: the latest-in-order gate that is awaiting approval.
+ * After a normal script approve this is `voice`; after an auto-run cascade it is
+ * `assemble`. Used to navigate to the right place when an approve SSE finishes.
+ * Returns null when no gate is awaiting (e.g. an all-approved terminal session).
+ */
+export function frontierGate(
+  gates: GatesDict,
+): 'script' | 'voice' | 'scenes' | 'assemble' | null {
+  for (let i = GATE_ORDER.length - 1; i >= 0; i--) {
+    const g = GATE_ORDER[i];
+    if (gates[g]?.state === 'awaiting_approval') return g;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+
 async function j<T>(res: Response): Promise<T> {
   const data = await res.json();
   if (!res.ok) throw new Error((data && data.error) || `${res.status}`);
@@ -58,6 +152,28 @@ export type StyleMemoryDoc = {
   examples: {index: number; before: string; after: string; pinned: boolean}[];
   guidance: {index: number; text: string; pinned: boolean}[];
   caps: {examples: number; guidance: number};
+};
+
+// Channel-voice script preferences (the operator's DECLARED style; the sibling of
+// the LEARNED StyleMemoryDoc). Mirrors backend/pipeline/script_prefs.py EMPTY.
+// Every field is optional/empty by default — an empty doc keeps the prompt
+// byte-identical. Video length is NOT here; it's the existing target-length chip.
+export type ScriptPrefs = {
+  tone: string;
+  audience: {age_range: string; knowledge_level: string; interests: string[]};
+  style: {
+    wording: string;
+    sentence_length: string;
+    use_questions: boolean | null;
+    use_statistics: string;
+  };
+  hook_style: string;
+  personality: string;
+  use_humor: string;
+  storytelling: string;
+  cta_preference: string;
+  channel_niche: string;
+  script_types: string[];
 };
 
 export const studio = {
@@ -88,9 +204,76 @@ export const studio = {
       fetch(`/api/session/${id}/assemble`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({op: 'revert', seq})}).then(j<{ok: boolean; reverted: number} & AssembleHistory>),
   },
   footage: {
-    state: (id: string) => fetch(`/api/session/${id}/state`).then(j<any>),
+    state: (id: string) => fetch(`/api/session/${id}/state`).then(j<SessionState>),
     suggest: (id: string, scene: number) =>
       fetch(`/api/session/${id}/footage/suggest`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({scene})}).then(j<{ok: boolean; scene: number; query: string; raw: string}>),
   },
   project: (id: string) => fetch(`/api/projects/${id}`).then(j<{spec: any; sources: any}>),
+
+  // Global channel-voice preferences (set once, reused on every generation).
+  prefs: {
+    get: (): Promise<{ok: boolean; initialized: boolean; prefs: ScriptPrefs}> =>
+      fetch('/api/prefs').then(j<{ok: boolean; initialized: boolean; prefs: ScriptPrefs}>),
+    save: (prefs: Partial<ScriptPrefs>): Promise<{ok: boolean; initialized: boolean; prefs: ScriptPrefs}> =>
+      fetch('/api/prefs', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify(prefs),
+      }).then(j<{ok: boolean; initialized: boolean; prefs: ScriptPrefs}>),
+  },
+
+  // Studio v3 M6 — session client.  Returns the raw streaming Response for
+  // start/approve so the caller drives parsing via readSse (lib/sse.ts).
+  session: {
+    /** POST /api/session/start — returns the raw SSE streaming Response. */
+    start: (
+      topic: string,
+      opts?: {autoRun?: boolean; targetLength?: number; prefsOverride?: Partial<ScriptPrefs>},
+    ): Promise<Response> =>
+      fetch('/api/session/start', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({topic, ...(opts ?? {})}),
+      }),
+
+    /** POST /api/session/[id]/approve — returns the raw SSE streaming Response. */
+    approve: (
+      id: string,
+      gate: string,
+      opts?: {voice?: string; speed?: number},
+    ): Promise<Response> =>
+      fetch(`/api/session/${id}/approve`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({gate, ...(opts ?? {})}),
+      }),
+
+    /** GET /api/session/[id]/state — typed SessionState. */
+    state: (id: string): Promise<SessionState> =>
+      fetch(`/api/session/${id}/state`).then(j<SessionState>),
+
+    /** POST /api/session/[id]/set-auto-run — toggle auto-run flag. */
+    setAutoRun: (id: string, flag: boolean): Promise<{ok: boolean}> =>
+      fetch(`/api/session/${id}/set-auto-run`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({flag}),
+      }).then(j<{ok: boolean}>),
+
+    /** POST /api/session/[id]/set-voice — §4.1 deferred voice reopen (T9). */
+    setVoice: (id: string, voice: string, speed: number): Promise<{ok: boolean}> =>
+      fetch(`/api/session/${id}/set-voice`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({voice, speed}),
+      }).then(j<{ok: boolean}>),
+
+    /** POST /api/session/[id]/preview-reopen — preview gate-reopen side-effects. */
+    previewReopen: (id: string, gate: string): Promise<ReopenPreview> =>
+      fetch(`/api/session/${id}/preview-reopen`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({gate}),
+      }).then(j<ReopenPreview>),
+  },
 };

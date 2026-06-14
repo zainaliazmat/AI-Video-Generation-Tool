@@ -21,6 +21,10 @@
 
   --green: #30d158;
   --amber: #ff9f0a;
+  /* M6 canonical amber/costly-action tokens (§4.1 design contract ruling 16).
+     --amber is kept for backward-compat; --warn/--warn-soft are the M6 palette. */
+  --warn: #e8a33d;
+  --warn-soft: rgba(232, 163, 61, 0.14);
   --red: #ef4444;
   --blue: #0a84ff;
 
@@ -104,6 +108,76 @@
     -webkit-backdrop-filter: blur(8px) saturate(150%);
     backdrop-filter: blur(8px) saturate(150%);
   }
+}
+
+/* ── M6 design system: stale-dot amber glow ───────────────────────────────
+   A small pulsing amber dot used to signal "scene data is stale / needs
+   re-approve". The glow keyframe runs at ~2 s; collapses to a static dot
+   under prefers-reduced-motion (the @media block below also fires, but we
+   add an explicit override here for clarity). */
+@keyframes stale-glow-pulse {
+  0%, 100% {
+    box-shadow: 0 0 6px rgba(232, 163, 61, 0.8);
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 3px rgba(232, 163, 61, 0.35);
+    opacity: 0.7;
+  }
+}
+
+.stale-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 6px rgba(232, 163, 61, 0.8);
+  animation: stale-glow-pulse 2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stale-dot {
+    animation: none;
+    box-shadow: 0 0 6px rgba(232, 163, 61, 0.8);
+  }
+}
+
+/* ── M6 body.ember theme layer ─────────────────────────────────────────────
+   Toggle document.body.classList.add('ember') from the T8 theme card to
+   flip the app palette orange. Mechanism: CSS-cascade token overrides only —
+   no prop-drilling needed.
+
+   Ground-truth: the PreviewRail renders its hero via .glass + border on a
+   wrapper <div> (no .heroB / .glow class exists). We therefore override
+   the shared palette tokens that the glass/accent layers consume. Any
+   component that reads --accent-1/--accent-2/--grad-main will pick up the
+   orange hue automatically. The rail's ambient body::before gradient is also
+   overridden so the whole field tints orange.
+
+   T8's theme cards toggle `document.body.classList` — add 'ember' to
+   activate, remove to revert. The .6 s transition on --accent-1 gives a
+   smooth crossfade (token transitions work in Chrome/Safari/FF via
+   @property or by animating the class-carrying element; we animate body
+   directly here). */
+body.ember {
+  /* Override accent palette → orange family */
+  --accent-1: #c96a10;
+  --accent-2: #e8a33d;
+  --accent-3: #f5c87a;
+  --grad-main: linear-gradient(135deg, #c96a10, #e8a33d);
+  /* Override glass active border to amber */
+  --glass-border-active: rgba(232, 163, 61, 0.4);
+  transition: background 0.6s;
+}
+
+/* Override the ambient gradient field to orange when ember is active */
+body.ember::before {
+  background:
+    radial-gradient(ellipse 80% 50% at 20% 10%, rgba(201, 106, 16, 0.14) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 80%, rgba(232, 163, 61, 0.1) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 60% at 50% 50%, rgba(245, 200, 122, 0.05) 0%, transparent 70%);
 }
 
 /* ── Accessibility in the material (ratified 2026-06-12; locked ruling made
@@ -320,4 +394,15 @@
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
+}
+
+/* Cross-browser scrollbar hide — used by the Scenes template rail (horizontal)
+   and the clamped footage/background pools (vertical). Scroll still works; only
+   the visible track is suppressed. */
+.scrollbar-hide {
+  -ms-overflow-style: none;   /* IE/Edge */
+  scrollbar-width: none;      /* Firefox */
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;              /* WebKit */
 }

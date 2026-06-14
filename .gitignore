@@ -73,6 +73,8 @@ remotion/public/assets/enum-gate-*.wav
 remotion/public/assets/voiceover.wav
 # project-scoped voiceovers (studio voice gate, suffixed by project id) — same class
 remotion/public/assets/voiceover_auto-*.wav
+# v3 staged-flow E2E voiceovers (sid-prefixed v3-…) — render artifacts, never committed
+remotion/public/assets/voiceover_v3-*.wav
 # studio voice-gate preview clips (generated per voice on demand) — same class
 remotion/public/assets/voice_preview_*.wav
 

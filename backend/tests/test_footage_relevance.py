@@ -171,33 +171,9 @@ def test_clip_duration_only_toggles_loop_never_timing():
     assert spec_l.scenes[1].templateProps["media"]["loop"] is False    # long clip -> no loop
 
 
-# ── wiring: the recipe title is threaded as the broaden fallback (E2E guard) ──
-
-def test_footage_requests_carry_title_as_broad_query():
-    from main import _footage_requests
-    p = plan(BeatsScript(title="Coral Reefs", beats=[Beat(text="h"), Beat(text="scene"), Beat(text="o")]),
-             theme=Theme())
-    offsets = [LineOffset(0, "h", 0.0, 1.0), LineOffset(1, "scene", 1.0, 3.0), LineOffset(2, "o", 3.0, 4.0)]
-    reqs = _footage_requests(p, offsets, {}, 30)
-    assert len(reqs) == 1                          # only the middle scene needs footage
-    assert reqs[0].broad_query == "Coral Reefs"    # title threaded so fetch_footage can broaden on a whiff
-
-
-def test_footage_request_min_frames_is_half_span_loop_floor():
-    # Phase 4 duration floor (K=2): min_frames is the loop FLOOR, not the full span.
-    # half-span means "skip clips that would loop more than ~2× over the beat" — set
-    # here, applied as a soft floor in select_clip. Full span would resurrect the old
-    # over-aggressive bias that dropped the relevant top hit for a longer worse one.
-    from main import _footage_requests
-    from pipeline import assemble as assemble_stage
-    p = plan(BeatsScript(title="T", beats=[Beat(text="h"), Beat(text="scene"), Beat(text="o")]), theme=Theme())
-    offsets = [LineOffset(0, "h", 0.0, 1.0), LineOffset(1, "scene", 1.0, 3.0), LineOffset(2, "o", 3.0, 4.0)]
-    _, durations, _ = assemble_stage.scene_spans(offsets, 30)
-    reqs = _footage_requests(p, offsets, {}, 30)
-    assert reqs[0].min_frames == durations[1] // 2   # half the span (K=2), not the full span
-
-
-# ── Item 1: harden() is wired into the query seam (recipe + broad_query) ──
+# ── Item 1: harden() is wired into the query seam (recipe) ──
+# The FootageRequest builder (query anchoring + broad_query) lives in the engine; its
+# wiring is covered by tests/test_session_executors.py against the live builder.
 
 def test_recipe_hardens_a_colliding_keyword_into_a_filmable_query():
     from pipeline.recipe import plan
@@ -208,14 +184,3 @@ def test_recipe_hardens_a_colliding_keyword_into_a_filmable_query():
     ])
     p = plan(script, theme=Theme())
     assert p.scenes[1].query == "antique brass gears turning"   # collision remapped, not "hand crank"
-
-
-def test_footage_requests_harden_the_broad_query_too():
-    from main import _footage_requests
-    from pipeline.recipe import plan
-    p = plan(BeatsScript(title="The Antikythera Mechanism",
-                         beats=[Beat(text="h"), Beat(text="scene"), Beat(text="o")]),
-             theme=Theme())
-    offsets = [LineOffset(0, "h", 0.0, 1.0), LineOffset(1, "scene", 1.0, 3.0), LineOffset(2, "o", 3.0, 4.0)]
-    reqs = _footage_requests(p, offsets, {}, 30)
-    assert reqs[0].broad_query == "antique astronomical instrument"   # hardened, not the colliding title

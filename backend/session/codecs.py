@@ -80,14 +80,23 @@ def script_bundle_from_json(d):
 
 
 def footage_to_json(bundle):
-    """bundle = {"clips": [Clip], "candidates": {scene_index: [cand dict]}}."""
-    return {"clips": clips_to_json(bundle["clips"]),
-            "candidates": {str(k): v for k, v in bundle.get("candidates", {}).items()}}
+    """bundle = {"clips": [Clip], "candidates": {scene_index: [cand dict]},
+    "pool_errors": {scene_index: error_str}}."""
+    out = {
+        "clips": clips_to_json(bundle["clips"]),
+        "candidates": {str(k): v for k, v in bundle.get("candidates", {}).items()},
+    }
+    if bundle.get("pool_errors"):
+        out["pool_errors"] = {str(k): v for k, v in bundle["pool_errors"].items()}
+    return out
 
 
 def footage_from_json(d):
-    return {"clips": clips_from_json(d["clips"]),
-            "candidates": {int(k): v for k, v in d.get("candidates", {}).items()}}
+    return {
+        "clips": clips_from_json(d["clips"]),
+        "candidates": {int(k): v for k, v in d.get("candidates", {}).items()},
+        "pool_errors": {int(k): v for k, v in d.get("pool_errors", {}).items()},
+    }
 
 
 def spec_to_json(spec: Spec):

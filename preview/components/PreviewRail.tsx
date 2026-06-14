@@ -3,6 +3,8 @@
 import {useCallback, useEffect, useState} from 'react';
 import {PlayerClient} from './PlayerClient';
 import {Eyebrow} from './ui';
+import {useVideoLayout} from './VideoChrome';
+import {railPaused} from '@/lib/playerBudget';
 
 // The persistent preview rail (PRD §8 "the nested-layout trick"). Lives in the
 // /video/[id] layout so gate-to-gate navigation swaps the content pane while the
@@ -17,6 +19,9 @@ export function PreviewRail({id}: {id: string}) {
   const [meta, setMeta] = useState<RailMeta>(null);
   const [fetchCount, setFetchCount] = useState(0); // player remount key, NOT a version
   const [error, setError] = useState<string | null>(null);
+  // T6: auto-pause while a per-scene player owns playback; arrival auto-play once.
+  const {openSceneIndex} = useVideoLayout();
+  const [playSignal, setPlaySignal] = useState(0);
 
   const load = useCallback(async () => {
     try {
@@ -35,8 +40,13 @@ export function PreviewRail({id}: {id: string}) {
   useEffect(() => {
     load();
     const onChange = () => load();
+    const onPlay = () => setPlaySignal((n) => n + 1); // arrival auto-play (ruling 12)
     window.addEventListener('studio:spec-changed', onChange);
-    return () => window.removeEventListener('studio:spec-changed', onChange);
+    window.addEventListener('studio:rail-play', onPlay);
+    return () => {
+      window.removeEventListener('studio:spec-changed', onChange);
+      window.removeEventListener('studio:rail-play', onPlay);
+    };
   }, [load]);
 
   return (
@@ -45,7 +55,12 @@ export function PreviewRail({id}: {id: string}) {
         <Eyebrow className="mb-2 px-1">Live preview</Eyebrow>
         <div className="overflow-hidden rounded-[var(--radius-md)] border border-white/10 bg-black">
           {spec ? (
-            <PlayerClient key={fetchCount} spec={spec} />
+            <PlayerClient
+              key={fetchCount}
+              spec={spec}
+              paused={railPaused(openSceneIndex)}
+              playSignal={playSignal}
+            />
           ) : (
             <div className="aspect-[1080/1920] w-full animate-pulse-dot bg-white/[0.03]" />
           )}
@@ -87,4 +102,9 @@ function ValidityPill({label, ok}: {label: string; ok: boolean | undefined}) {
 /** Gates call this after an apply that changed spec.json, to refresh the rail. */
 export function notifySpecChanged() {
   if (typeof window !== 'undefined') window.dispatchEvent(new Event('studio:spec-changed'));
+}
+
+/** Ask the rail to play the full assembly once from frame 0 (arrival, ruling 12). */
+export function notifyRailPlay() {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('studio:rail-play'));
 }

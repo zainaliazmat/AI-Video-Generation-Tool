@@ -7,11 +7,13 @@
  * (HookData = z.infer), so it never enters the render bundle.
  */
 import {z} from 'zod';
+import {mediaSchema} from '../mediaSchema';
 
 export const schema = z
   .object({
     title: z.string(),
     subtitle: z.string().optional(),
+    backgroundClip: mediaSchema.optional(),
   })
   .strict();
 

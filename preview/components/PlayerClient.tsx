@@ -13,6 +13,16 @@ const VideoPlayer = dynamic(() => import('./VideoPlayer').then((m) => m.VideoPla
   ),
 });
 
-export function PlayerClient({spec, controls = true}: {spec: Spec; controls?: boolean}) {
-  return <VideoPlayer spec={spec} controls={controls} />;
+export function PlayerClient({
+  spec,
+  controls = true,
+  paused = false,
+  playSignal = 0,
+}: {
+  spec: Spec;
+  controls?: boolean;
+  paused?: boolean;
+  playSignal?: number;
+}) {
+  return <VideoPlayer spec={spec} controls={controls} paused={paused} playSignal={playSignal} />;
 }

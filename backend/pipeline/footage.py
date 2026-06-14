@@ -38,6 +38,17 @@ Selection = namedtuple("Selection", "link duration_frames rank pexels_id pexels_
 
 PEXELS_VIDEO_SEARCH = "https://api.pexels.com/videos/search"
 
+# v3-M5 T2 (OV-5): hero scene background auto-fill policy.
+# "auto"     → pick rank-1 from the scene's pool (with K-floor) and download it.
+# "gradient" → pool stays fetched for the gate UI; NO override row, NO download.
+# Policy-as-data lives here, next to select_clip and fetch_pool (its mechanism),
+# NOT in main.py (which imports torch-heavy pipeline.tts at module level).
+HERO_BACKGROUND_POLICY: dict[str, str] = {
+    "hook": "auto",
+    "outro": "auto",
+    "stat": "gradient",
+}
+
 
 def query_slug(query: str) -> str:
     return hashlib.sha1(query.strip().lower().encode("utf-8")).hexdigest()[:8]
@@ -126,6 +137,63 @@ def search_pexels(query: str, key: str, *, _get=None, _sleep=None, max_retries: 
             continue
         r.raise_for_status()
         return r.json()
+
+
+def fetch_pool(
+    query: str,
+    key: str,
+    fps: int,
+    *,
+    cache_dir=None,
+    search=None,
+) -> dict:
+    """Fetch (or return cached) the ranked candidate pool for `query`.
+
+    Returns a dict with:
+      - "rows":  list[dict] from candidate_rows — empty on any error
+      - "error": None | "rate_limited" | "fetch_error" — structured error state
+        (OV-6 honesty contract: exhaustion records pool=[] + error marker instead
+        of crashing; the M6 strip copy is "pool fetch hit the rate limit — retry
+        in N min").
+
+    Cache layout: `cache_dir / footage_pools / pool_{sha1(hardened_query)[:16]}.json`
+    Mirrors the retrieval Tavily cache keying (sha1, 16 hex chars, json file).
+    A repeated hardened query costs ZERO network calls (same idiom, different dir).
+    """
+    search = search or search_pexels
+
+    cache_path = None
+    if cache_dir is not None:
+        pool_cache_dir = Path(cache_dir) / "footage_pools"
+        pool_cache_dir.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha1(query.strip().lower().encode("utf-8")).hexdigest()[:16]
+        cache_path = pool_cache_dir / f"pool_{digest}.json"
+        if cache_path.exists():
+            try:
+                return json.loads(cache_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                pass  # corrupt cache file — fall through to re-fetch
+
+    try:
+        data = search(query, key)
+        rows = candidate_rows(data.get("videos", []), query=query, fps=fps)
+        result = {"rows": rows, "error": None}
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 429:
+            result = {"rows": [], "error": "rate_limited"}
+        else:
+            result = {"rows": [], "error": "fetch_error"}
+    except Exception:
+        result = {"rows": [], "error": "fetch_error"}
+
+    if cache_path is not None and result["error"] is None:
+        # Only cache successful fetches — a transient error must not freeze an empty pool.
+        try:
+            cache_path.write_text(json.dumps(result), encoding="utf-8")
+        except OSError:
+            pass  # write failure is non-fatal; next run re-fetches
+
+    return result
 
 
 def _download(url: str, dest: Path) -> None:

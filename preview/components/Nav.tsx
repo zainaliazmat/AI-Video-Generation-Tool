@@ -9,9 +9,14 @@ const LINKS = [
   {href: '/templates', label: 'Templates'},
 ];
 
-/** Slim global top nav: Studio (generate flow) ↔ Templates (gallery). */
+/** Slim global top nav: Studio (generate flow) ↔ Templates (gallery).
+ *
+ * v3 M6: suppressed on /video/[id] routes — there the floating GateStepper bar
+ * (VideoChrome) is the editing-mode top chrome, and a second fixed bar would
+ * collide. Home is reachable from the stepper's Topic ✦ step / the hub crumb. */
 export function Nav() {
   const pathname = usePathname();
+  if (pathname?.startsWith('/video/')) return null;
   return (
     <nav className="sticky top-0 z-20 border-b border-glass bg-black/40 backdrop-blur-md">
       <div className="mx-auto flex max-w-[1040px] items-center gap-1 px-7 py-3 sm:px-8">

@@ -50,6 +50,34 @@ def test_footage_requests_min_frames_formula_and_needs_footage_filter(tmp_path, 
     reqs = executors._footage_requests(_ctx(tmp_path, catalog=catalog), plan, offsets=[])
 
     assert [r.index for r in reqs] == [1]              # only the needs_footage scene
-    assert reqs[0].query == "coral reef"
+    assert reqs[0].query == "coral reef"                # keyword already on-subject → un-anchored
     assert reqs[0].min_frames == (200 + 18) // 2       # 109 — headroom from the transition only
-    assert reqs[0].broad_query is not None             # hardened from the plan title
+    assert reqs[0].broad_query is not None             # subject anchor for the whiff broaden
+
+
+def test_footage_requests_anchor_a_drifted_query_to_the_topic_subject(tmp_path, monkeypatch):
+    # A keyword that has drifted off the subject gets the topic anchor prepended, and
+    # the whiff fallback broadens to the clean subject (not the keyword, not the title).
+    monkeypatch.setattr("pipeline.assemble.scene_spans", lambda offsets, fps: (None, [120], None))
+    plan = ScenePlan(title="Octopuses Are Aliens", scenes=[
+        PlannedScene(role="scene", template="scene", props={}, needs_footage=True,
+                     query="color changing skin"),
+    ])
+    ctx = _ctx(tmp_path, topic="3 facts about octopuses", catalog={})
+    reqs = executors._footage_requests(ctx, plan, offsets=[])
+
+    assert reqs[0].query == "octopuses color changing skin"   # subject anchored onto the drift
+    assert reqs[0].broad_query == "octopuses"                 # broaden to the subject, not the title
+
+
+def test_footage_requests_harden_a_colliding_subject_into_the_broaden_fallback(tmp_path, monkeypatch):
+    # A colliding/proper-noun topic is hardened to a filmable category before it
+    # becomes the whiff-broaden fallback — never shipped as a zero-result named search.
+    monkeypatch.setattr("pipeline.assemble.scene_spans", lambda offsets, fps: (None, [120], None))
+    plan = ScenePlan(title="The Antikythera Mechanism", scenes=[
+        PlannedScene(role="scene", template="scene", props={}, needs_footage=True, query="ancient gears"),
+    ])
+    ctx = _ctx(tmp_path, topic="The Antikythera Mechanism", catalog={})
+    reqs = executors._footage_requests(ctx, plan, offsets=[])
+
+    assert reqs[0].broad_query == "antique astronomical instrument"   # hardened, not the colliding name

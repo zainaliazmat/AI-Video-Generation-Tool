@@ -25,13 +25,30 @@ from pipeline.content import Beat, BeatsScript, HookCandidate, Source, parse_bea
 from pipeline import retrieval
 from pipeline import verify as verify_stage
 
-SYSTEM_PROMPT = (
-    "You are a scriptwriter for short-form faceless videos (vertical, ~60-90s). "
+# ---------------------------------------------------------------------------
+# SYSTEM_PROMPT segments (D1-B surgery, Studio v3 M2)
+# ---------------------------------------------------------------------------
+# The prompt is split into named segments that concatenate back to the original
+# SYSTEM_PROMPT byte-for-byte when target_length=60 (D1-B golden test).
+#
+# Original sentence layout (preserved in full by system_prompt_for):
+#   _intro_sentence(p)   — "You are a scriptwriter … (~60-90s). "
+#   _JSON_SCHEMA_BLOCK   — "Respond ONLY with a JSON object …"
+#   _beats_sentence(p)   — "Each beat's `text` is ONE … Produce 5-8 beats. "
+#   _STRUCTURE_SEGMENT   — "Pace for retention … never put both on one beat. "
+#   KEYWORD_RULE_SEGMENT — ① keyword-rule block (never varies)
+#   GROUNDING_SEGMENT    — citation / grounding rules (never varies)
+
+# Constant: JSON response-schema declaration (lines 30-33 of the original prompt).
+_JSON_SCHEMA_BLOCK = (
     "Respond ONLY with a JSON object of the form "
     '{"title": string, "beats": Beat[], "hook_candidates"?: Hook[]} where a Beat is '
     '{"text": string, "data"?: object, "keywords"?: string, "source"?: string} '
     'and a Hook is {"text": string, "pattern": string, "source"?: string}. '
-    "Each beat's `text` is ONE spoken narration sentence (8-18 words). Produce 5-8 beats. "
+)
+
+# Constant: structural beat/data rules that follow the beats-count sentence.
+_STRUCTURE_SEGMENT = (
     "Pace for retention: open tight, deliver a clear payoff, no filler or dead air. "
     "The FIRST beat must be a punchy hook that opens the video; the LAST beat must be a "
     "closing call to action (e.g. follow for more). "
@@ -44,6 +61,10 @@ SYSTEM_PROMPT = (
     "ORDER the narration speaks them, and make the beat `text` actually name each item in "
     "that order. Use `items` for an enumerable set, NOT for a single statistic (that is "
     "`value`/`label`); never put both on one beat. "
+)
+
+# Segment ①: keyword-rule block — byte-identical across ALL presets.
+KEYWORD_RULE_SEGMENT = (
     'For EVERY beat, add "keywords": "<2-4 words>" for stock-footage search. GUIDING PRINCIPLE: '
     'pick words whose DOMINANT stock-footage meaning IS your subject — a stock library returns '
     'the COMMON sense of a phrase, not the one you intended. Apply it: '
@@ -59,11 +80,87 @@ SYSTEM_PROMPT = (
     'landmark a viewer would recognize ("celestial globe" or "the Antikythera mechanism" -> '
     '"antique astronomical instrument", not a famous astronomical clock; "Challenger Deep" -> '
     '"dark ocean abyss"; "Nobel medal" -> "physics laboratory"). '
+)
+
+# Segment ②: grounding / citation rules — byte-identical across ALL presets.
+GROUNDING_SEGMENT = (
     "When grounding SOURCES are provided in the user message, state ONLY facts those "
     'sources support and set each factual beat\'s "source" to the exact URL of the '
     "specific source that backs it; never invent a URL or an unsupported fact. "
     "No emojis, no markdown, no numbering."
 )
+
+# ---------------------------------------------------------------------------
+# Length presets (OV-3: 60s band is 5-8 beats, matching the frozen prompt)
+# Fields used by system_prompt_for():
+#   duration_desc  — "~60-90s" style wording for the intro sentence
+#   beat_min       — minimum beat count
+#   beat_max       — maximum beat count
+#   wpb_min        — words-per-beat minimum
+#   wpb_max        — words-per-beat maximum
+#   sentence_desc  — "ONE spoken narration sentence" or "one to two spoken …"
+# ---------------------------------------------------------------------------
+LENGTH_PRESETS: dict[int, dict] = {
+    30: {
+        "duration_desc": "~30s",
+        "beat_min": 5,
+        "beat_max": 6,
+        "wpb_min": 8,
+        "wpb_max": 18,
+        "sentence_desc": "ONE spoken narration sentence",
+    },
+    60: {
+        # OV-3: 5-8 beats matches the frozen prompt's "Produce 5-8 beats";
+        # PRD §5.0's 7-9 was a drafting artifact — band 5-8 is normative.
+        "duration_desc": "~60-90s",
+        "beat_min": 5,
+        "beat_max": 8,
+        "wpb_min": 8,
+        "wpb_max": 18,
+        "sentence_desc": "ONE spoken narration sentence",
+    },
+    180: {
+        "duration_desc": "~2-3 minutes",
+        "beat_min": 22,
+        "beat_max": 30,
+        "wpb_min": 15,
+        "wpb_max": 45,
+        "sentence_desc": "one to two spoken narration sentences",
+    },
+    300: {
+        "duration_desc": "~4-5 minutes",
+        "beat_min": 38,
+        "beat_max": 48,
+        "wpb_min": 15,
+        "wpb_max": 45,
+        "sentence_desc": "one to two spoken narration sentences",
+    },
+}
+
+
+def system_prompt_for(target_length: int) -> str:
+    """Return the full system prompt parametrized for `target_length` seconds.
+
+    Raises KeyError if `target_length` is not in LENGTH_PRESETS (codebase idiom).
+    SYSTEM_PROMPT == system_prompt_for(60) — byte-identical (D1-B golden test).
+
+    Sentence order mirrors the original frozen prompt exactly:
+      intro_sentence → JSON schema → beats_sentence → structure → keywords → grounding
+    """
+    p = LENGTH_PRESETS[target_length]  # KeyError on unknown length — codebase idiom
+    intro = (
+        f"You are a scriptwriter for short-form faceless videos (vertical, {p['duration_desc']}). "
+    )
+    beats = (
+        f"Each beat's `text` is {p['sentence_desc']} ({p['wpb_min']}-{p['wpb_max']} words). "
+        f"Produce {p['beat_min']}-{p['beat_max']} beats. "
+    )
+    return intro + _JSON_SCHEMA_BLOCK + beats + _STRUCTURE_SEGMENT + KEYWORD_RULE_SEGMENT + GROUNDING_SEGMENT
+
+
+# SYSTEM_PROMPT: module-level constant preserved for all existing importers.
+# Byte-identical to system_prompt_for(60) — verified by test_system_prompt_golden_60.
+SYSTEM_PROMPT = system_prompt_for(60)
 
 VERIFY_SYSTEM_PROMPT = (
     "You are a strict fact-checker. Each item has a CLAIM, an optional on-screen "
@@ -78,6 +175,99 @@ VERIFY_SYSTEM_PROMPT = (
 )
 
 MAX_RETRIES = 1  # one retry on an invalid reply, then fail loudly (6.1 v1)
+
+
+def _corrective_suffix(got: int, beat_min: int, beat_max: int) -> str:
+    """Return the corrective line appended to the USER message on a band-miss retry.
+    Appended to the user prompt ONLY — the system prompt is never touched."""
+    return (
+        f"\n\nYour previous response had {got} beats; "
+        f"produce between {beat_min} and {beat_max} beats."
+    )
+
+
+def _parse_with_retry(do_call) -> "BeatsScript":
+    """Call the LLM (do_call -> raw content str), parse+validate, retry once.
+
+    Legacy entry point (used when target_length is None / not given): parse failures
+    get one retry, then fail loudly. Band checking is NOT performed here — it lives
+    in _generate_with_band_retry which is the unified entry point for preset-aware
+    generation. Both share the same MAX_RETRIES=1 budget."""
+    last_err: Exception | None = None
+    for _ in range(MAX_RETRIES + 1):
+        content = do_call()
+        try:
+            return parse_beats_response(content)
+        except ValueError as e:  # bad JSON or schema violation
+            last_err = e
+    raise ValueError(
+        f"LLM script response invalid after {MAX_RETRIES + 1} attempts: {last_err}"
+    )
+
+
+def _generate_with_band_retry(
+    do_call,
+    make_corrective_call,
+    target_length: int,
+) -> "BeatsScript":
+    """Unified retry for band-and-parse failures (M2-T3, OV-8).
+
+    ONE bounded extra attempt for BOTH band misses and malformed/truncated JSON —
+    parse failure and band miss share the same single retry budget (never stacked).
+
+    Attempt 1  —  plain do_call():
+      • parse error  → attempt 2 (no corrective line — the failure is formatting)
+      • success, in-band  → return, no band_miss
+      • success, out-of-band  → attempt 2 WITH corrective user line
+
+    Attempt 2  —  make_corrective_call(suffix: str):
+      • parse error  → raise ValueError with a clean "unparseable JSON" message
+      • success, in-band  → return, no band_miss
+      • success, out-of-band  → return as-is, set band_miss on the script
+
+    The system prompt is NEVER modified; the corrective line goes into the USER
+    message only (via make_corrective_call receiving the suffix string).
+    """
+    preset = LENGTH_PRESETS[target_length]
+    beat_min, beat_max = preset["beat_min"], preset["beat_max"]
+
+    # --- Attempt 1 ---
+    try:
+        script1 = parse_beats_response(do_call())
+    except ValueError:
+        # Parse failure on attempt 1 — retry with no corrective line (just re-ask).
+        try:
+            script2 = parse_beats_response(make_corrective_call(""))
+        except ValueError as e:
+            raise ValueError(
+                f"script generation returned unparseable JSON twice: {e}"
+            ) from e
+        n2 = len(script2.beats)
+        if beat_min <= n2 <= beat_max:
+            return script2
+        script2.band_miss = {"requested": [beat_min, beat_max], "got": n2}
+        return script2
+
+    # --- Attempt 1 succeeded: check band ---
+    n1 = len(script1.beats)
+    if beat_min <= n1 <= beat_max:
+        return script1
+
+    # Out-of-band: retry WITH corrective line.
+    suffix = _corrective_suffix(n1, beat_min, beat_max)
+    try:
+        script2 = parse_beats_response(make_corrective_call(suffix))
+    except ValueError:
+        # Attempt 2 unparseable after attempt 1 was valid but out-of-band:
+        # return the parseable attempt-1 script with band_miss rather than
+        # raising — an out-of-band-but-valid script beats a dead stage.
+        script1.band_miss = {"requested": [beat_min, beat_max], "got": n1}
+        return script1
+    n2 = len(script2.beats)
+    if beat_min <= n2 <= beat_max:
+        return script2
+    script2.band_miss = {"requested": [beat_min, beat_max], "got": n2}
+    return script2
 
 
 def build_user_prompt(topic: str, evidence_block: str | None = None,
@@ -107,64 +297,61 @@ def build_user_prompt(topic: str, evidence_block: str | None = None,
     return f"Topic: {topic}{tail}\nReturn the JSON object now."
 
 
-def _parse_with_retry(do_call) -> BeatsScript:
-    """Call the LLM (do_call -> raw content str), parse+validate, retry once."""
-    last_err: Exception | None = None
-    for _ in range(MAX_RETRIES + 1):
-        content = do_call()
-        try:
-            return parse_beats_response(content)
-        except ValueError as e:  # bad JSON or schema violation
-            last_err = e
-    raise ValueError(
-        f"LLM script response invalid after {MAX_RETRIES + 1} attempts: {last_err}"
-    )
-
-
 def generate_script(
     topic: str, *, provider: str | None = None, client=None, model: str | None = None,
     evidence_block: str | None = None, extra_user_block: str | None = None,
+    system_prompt: str | None = None, target_length: int | None = None,
 ) -> BeatsScript:
     """Pure LLM generation. `evidence_block` (optional) injects retrieved grounding
     sources into the prompt; `generate_grounded_script` is the grounded entry point.
-    `extra_user_block` is the Studio v2 additive seam (style memory + feedback)."""
+    `extra_user_block` is the Studio v2 additive seam (style memory + feedback).
+    `system_prompt` (Studio v3 M2) overrides the system prompt for the selected
+    length preset; defaults to SYSTEM_PROMPT when None (byte-identical to 60s).
+    `target_length` (M2-T3, OV-8) enables unified beat-band + parse retry: if set,
+    uses _generate_with_band_retry instead of _parse_with_retry so parse failures
+    and band misses share the same single retry budget (never stacked)."""
+    sp = system_prompt if system_prompt is not None else SYSTEM_PROMPT
     provider = provider or get_env("LLM_PROVIDER", "deepseek")
     if provider == "deepseek":
         return _generate_openai_compatible(
             topic, client=client, model=model, evidence_block=evidence_block,
-            extra_user_block=extra_user_block,
+            extra_user_block=extra_user_block, system_prompt=sp,
             default_model="deepseek-v4-flash",
             api_key_env="DEEPSEEK_API_KEY",
             base_url=get_env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
             model_env="DEEPSEEK_MODEL",
+            target_length=target_length,
         )
     if provider == "ollama":
         return _generate_openai_compatible(
             topic, client=client, model=model, evidence_block=evidence_block,
-            extra_user_block=extra_user_block,
+            extra_user_block=extra_user_block, system_prompt=sp,
             default_model="llama3.1",
             api_key_env=None,
             base_url=get_env("OLLAMA_BASE_URL", "http://localhost:11434") + "/v1",
             model_env="OLLAMA_MODEL",
+            target_length=target_length,
         )
     if provider == "anthropic":
         return _generate_anthropic(topic, client=client, model=model,
-                                   evidence_block=evidence_block, extra_user_block=extra_user_block)
+                                   evidence_block=evidence_block, extra_user_block=extra_user_block,
+                                   system_prompt=sp, target_length=target_length)
     raise ValueError(f"Unknown LLM_PROVIDER: {provider!r}")
 
 
-def _generate_openai_compatible(topic, *, client, model, default_model, api_key_env, base_url, model_env, evidence_block=None, extra_user_block=None) -> BeatsScript:
+def _generate_openai_compatible(topic, *, client, model, default_model, api_key_env, base_url, model_env, evidence_block=None, extra_user_block=None, system_prompt=None, target_length=None) -> BeatsScript:
     if client is None:
         from openai import OpenAI
         api_key = require_env(api_key_env) if api_key_env else "ollama"
         client = OpenAI(api_key=api_key, base_url=base_url)
     model = model or get_env(model_env, default_model)
+    sp = system_prompt if system_prompt is not None else SYSTEM_PROMPT
 
     def do_call() -> str:
         resp = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": sp},
                 {"role": "user", "content": build_user_prompt(topic, evidence_block, extra_user_block)},
             ],
             response_format={"type": "json_object"},
@@ -172,23 +359,54 @@ def _generate_openai_compatible(topic, *, client, model, default_model, api_key_
         )
         return resp.choices[0].message.content
 
+    if target_length is not None:
+        # M2-T3: unified band+parse retry — parse failure and band miss share one budget.
+        def make_corrective_call(suffix: str) -> str:
+            tail = (extra_user_block or "") + suffix
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": sp},
+                    {"role": "user", "content": build_user_prompt(topic, evidence_block, tail or None)},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.8,
+            )
+            return resp.choices[0].message.content
+
+        return _generate_with_band_retry(do_call, make_corrective_call, target_length)
+
     return _parse_with_retry(do_call)
 
 
-def _generate_anthropic(topic, *, client, model, evidence_block=None, extra_user_block=None) -> BeatsScript:
+def _generate_anthropic(topic, *, client, model, evidence_block=None, extra_user_block=None, system_prompt=None, target_length=None) -> BeatsScript:
     if client is None:
         import anthropic
         client = anthropic.Anthropic(api_key=require_env("ANTHROPIC_API_KEY"))
     model = model or get_env("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+    sp = system_prompt if system_prompt is not None else SYSTEM_PROMPT
 
     def do_call() -> str:
         msg = client.messages.create(
             model=model,
             max_tokens=1024,
-            system=SYSTEM_PROMPT,
+            system=sp,
             messages=[{"role": "user", "content": build_user_prompt(topic, evidence_block, extra_user_block)}],
         )
         return msg.content[0].text
+
+    if target_length is not None:
+        def make_corrective_call(suffix: str) -> str:
+            tail = (extra_user_block or "") + suffix
+            msg = client.messages.create(
+                model=model,
+                max_tokens=1024,
+                system=sp,
+                messages=[{"role": "user", "content": build_user_prompt(topic, evidence_block, tail or None)}],
+            )
+            return msg.content[0].text
+
+        return _generate_with_band_retry(do_call, make_corrective_call, target_length)
 
     return _parse_with_retry(do_call)
 
@@ -205,6 +423,8 @@ def generate_grounded_script(
     verify: bool = True,
     verify_fn=None,
     extra_user_block: str | None = None,
+    system_prompt: str | None = None,
+    target_length: int | None = None,
 ) -> BeatsScript:
     """Retrieval-grounded generation (3.1) + hook selection (3.2) + verification (3.3).
 
@@ -213,12 +433,17 @@ def generate_grounded_script(
     hook, then (default-on, `verify=False` to skip for reach-only runs) verify each
     claim is actually supported. `retrieve_fn`/`verify_fn` are injectable so this
     runs fully offline in tests; the LLM provider stays DeepSeek. `extra_user_block`
-    is the Studio v2 additive seam (style memory + regenerate feedback)."""
+    is the Studio v2 additive seam (style memory + regenerate feedback).
+    `system_prompt` (Studio v3 M2) overrides the system prompt for the selected
+    length preset; defaults to SYSTEM_PROMPT when None.
+    `target_length` (M2-T3) enables the unified beat-band + parse retry; when set,
+    generate_script uses _generate_with_band_retry instead of _parse_with_retry."""
     retrieve_fn = retrieve_fn or retrieval.retrieve
     ctx = retrieve_fn(topic, key=retrieval_key, cache_dir=cache_dir)
     script = generate_script(
         topic, provider=provider, client=client, model=model, evidence_block=ctx.prompt_block(),
-        extra_user_block=extra_user_block,
+        extra_user_block=extra_user_block, system_prompt=system_prompt,
+        target_length=target_length,
     )
     _select_hook(script, ctx)
     _enforce_grounding(script, ctx)
@@ -227,6 +452,7 @@ def generate_grounded_script(
         verify_stage.verify_script(
             script, ctx, verify_fn=vfn, retrieve_fn=retrieve_fn,
             retrieval_key=retrieval_key, cache_dir=cache_dir,
+            max_targeted=verify_stage.scaled_max_targeted(len(script.beats)),
         )
         _reselect_hook_if_dropped(script, ctx, vfn)
         _enforce_floor(script)

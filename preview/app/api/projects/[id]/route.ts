@@ -1,7 +1,8 @@
 // preview/app/api/projects/[id]/route.ts
 import {readFileSync, existsSync} from 'node:fs';
 import path from 'node:path';
-import {isValidProjectId, projectDir} from '@/lib/projects';
+import {isValidProjectId} from '@/lib/projects';
+import {projectDir} from '@/lib/projects-server';
 import {spawnJson} from '../../_spawn';
 
 export const runtime = 'nodejs';

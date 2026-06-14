@@ -1,29 +1,73 @@
 'use client';
 
-import {useCallback, useEffect, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import {useRouter} from 'next/navigation';
-import {toast} from 'sonner';
-import {Eyebrow, Badge, Button} from '@/components/ui';
-import {
-  PipelineStepper,
-  DEFAULT_STAGES,
-  type Stage,
-  type StageState,
-} from '@/components/PipelineStepper';
+import {Eyebrow, Button} from '@/components/ui';
 import {ProjectList} from '@/components/HistoryList';
 import type {ProjectMeta} from '@/lib/projects';
+import {studio, type ScriptPrefs} from '@/lib/studio';
+import {readSse} from '@/lib/sse';
+import {LENHINT, DEFAULT_TARGET_LENGTH, type TargetLength} from '@/lib/topicScreen';
+import {cn} from '@/lib/cn';
+import {StylePrefsForm} from '@/components/StylePrefsForm';
+import {EMPTY_PREFS, diffOverride} from '@/lib/scriptPrefs';
 
-// Studio v2 Home (PRD §5 + §10.8). A topic bar that kicks the backend pipeline via
-// /api/generate (SSE), shows a live stepper, then routes into the per-video hub at
-// /video/[sid]. Below: the project library as "Recents", each item opening the hub.
-const freshStages = (): Stage[] => DEFAULT_STAGES.map((s) => ({...s, state: 'queued'}));
+// Studio v3 T1 Home — Topic screen with length presets + auto-run toggle.
+//
+// Generate flow (ruling 2):
+//   1. POST studio.session.start(topic, {autoRun, targetLength}) → SSE stream.
+//   2. On {type:'sid', sid} → router.push('/video/' + sid + '/script') IMMEDIATELY.
+//      The script segment may still be running server-side; the script page polls
+//      /state until gates.script === 'awaiting_approval'.  (See T3.)
+//   3. Error before sid → show failed state inline (no toast redirect).
+//
+// /api/generate is UNTOUCHED (OV-15 — survives for autopilot/QA).
+
+const LENGTH_CHIPS: {value: TargetLength; label: string}[] = [
+  {value: 30, label: '30 s'},
+  {value: 60, label: '60 s'},
+  {value: 180, label: '3 min'},
+  {value: 300, label: '5 min'},
+];
 
 export default function Home() {
   const router = useRouter();
   const [topic, setTopic] = useState('');
+  const [targetLength, setTargetLength] = useState<TargetLength>(DEFAULT_TARGET_LENGTH);
+  const [autoRun, setAutoRun] = useState(false);
   const [generating, setGenerating] = useState(false);
-  const [stages, setStages] = useState<Stage[]>(freshStages);
+  const [startError, setStartError] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
+  // Channel-voice prefs: the global default + a per-video edit. The override sent to
+  // the backend is the DIFF (changed fields only) so an untouched panel keeps the
+  // prompt byte-identical.
+  const [globalPrefs, setGlobalPrefs] = useState<ScriptPrefs>(EMPTY_PREFS);
+  const [editedPrefs, setEditedPrefs] = useState<ScriptPrefs>(EMPTY_PREFS);
+  const [prefsInitialized, setPrefsInitialized] = useState(true); // assume true until told otherwise (no nudge flash)
+  const [styleOpen, setStyleOpen] = useState(false);
+  // Guard state writes after the user navigates away mid-generate (the stale
+  // `generating` closure can't detect unmount).
+  const mountedRef = useRef(true);
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    studio.prefs
+      .get()
+      .then((r) => {
+        const merged = {
+          ...EMPTY_PREFS,
+          ...r.prefs,
+          audience: {...EMPTY_PREFS.audience, ...r.prefs.audience},
+          style: {...EMPTY_PREFS.style, ...r.prefs.style},
+        };
+        setGlobalPrefs(merged);
+        setEditedPrefs(merged);
+        setPrefsInitialized(r.initialized);
+      })
+      .catch(() => {/* prefs are optional; ignore load failure */});
+  }, []);
 
   const refreshProjects = useCallback(async () => {
     try {
@@ -43,70 +87,45 @@ export default function Home() {
     const t = topic.trim();
     if (!t || generating) return;
     setGenerating(true);
-    setStages(freshStages());
-    const toastId = toast.loading('Generating video…', {
-      description: 'script → voice → timing → footage → assemble',
-    });
+    setStartError(null);
 
     try {
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: {'content-type': 'application/json'},
-        body: JSON.stringify({topic: t}),
+      const override = diffOverride(globalPrefs, editedPrefs);
+      const res = await studio.session.start(t, {
+        autoRun,
+        targetLength,
+        ...(Object.keys(override).length > 0 ? {prefsOverride: override} : {}),
       });
-      if (res.status === 409) {
-        toast.error('A generation is already in progress', {id: toastId});
-        return;
+
+      if (!res.ok || !res.body) {
+        throw new Error(`Request failed (${res.status})`);
       }
-      if (!res.ok || !res.body) throw new Error(`Request failed (${res.status})`);
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let finished = false;
+      let sidReceived = false;
 
-      for (;;) {
-        const {value, done} = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, {stream: true});
-        const frames = buffer.split('\n\n');
-        buffer = frames.pop() ?? '';
-        for (const f of frames) {
-          const line = f.split('\n').find((l) => l.startsWith('data: '));
-          if (!line) continue;
-          let msg: {type: string; [k: string]: unknown};
-          try {
-            msg = JSON.parse(line.slice(6));
-          } catch {
-            continue;
-          }
-          if (msg.type === 'stage') {
-            const stage = msg.stage as string;
-            const state = msg.state as StageState;
-            setStages((prev) => prev.map((s) => (s.key === stage ? {...s, state} : s)));
-          } else if (msg.type === 'done') {
-            finished = true;
-            const sid = typeof msg.sid === 'string' ? msg.sid : null;
-            toast.success('Video generated', {id: toastId});
-            if (sid) {
-              router.push('/video/' + sid);
-              return;
-            }
-          } else if (msg.type === 'error') {
-            finished = true;
-            throw new Error(String(msg.message));
-          }
+      await readSse(res, (event) => {
+        if (event.type === 'sid') {
+          sidReceived = true;
+          // Ruling 2 — navigate IMMEDIATELY on sid; script page handles the
+          // interstitial while the backend finishes the script segment.
+          router.push('/video/' + event.sid + '/script');
+          // readSse keeps consuming but the navigation has happened; any further
+          // events are benign (they arrive before the route change completes).
+          return;
         }
-      }
-      if (!finished) toast.dismiss(toastId);
+
+        if (event.type === 'error' && !sidReceived && mountedRef.current) {
+          // Error before a sid: show failed state on this screen.
+          const msg = event.error ?? event.message ?? 'Script generation failed';
+          setStartError(msg);
+        }
+      });
     } catch (e) {
-      const message = e instanceof Error ? e.message : 'Generation failed';
-      setStages((prev) =>
-        prev.map((s) => (s.state === 'running' ? {...s, state: 'failed'} : s)),
-      );
-      toast.error('Generation failed', {id: toastId, description: message});
+      if (!mountedRef.current) return; // navigated away mid-generate
+      const msg = e instanceof Error ? e.message : 'Generation failed';
+      setStartError(msg);
     } finally {
-      setGenerating(false);
+      if (mountedRef.current) setGenerating(false);
     }
   }
 
@@ -134,33 +153,177 @@ export default function Home() {
           placeholder="3 facts about deep sea creatures…"
           className="flex-1 rounded-[var(--radius-md)] border border-transparent bg-white/[0.03] px-4 py-3 font-ui text-[15px] text-ink outline-none transition-all duration-150 ease-out placeholder:text-ink-muted focus:border-[var(--glass-border-active)] focus:bg-white/[0.05] focus:shadow-[0_0_0_4px_rgba(99,102,241,0.12)] disabled:opacity-50"
         />
-        <Button onClick={generate} disabled={generating} className="shrink-0">
+        <Button onClick={generate} disabled={generating || !topic.trim()} className="shrink-0">
           {generating ? 'Generating…' : 'Generate'}
         </Button>
       </div>
-      <p className="mx-auto mt-2 max-w-[640px] px-1 text-center font-ui text-[12px] text-ink-muted">
-        Runs the full pipeline on your machine — a couple of minutes on CPU. All local, all free.
-      </p>
 
-      {/* Live pipeline while generating */}
+      {/* Length preset chips (#lenchips) — mock §1 */}
+      <div className="mx-auto mt-4 max-w-[640px] px-1">
+        <p className="mb-2 font-ui text-[12px] font-semibold text-ink-secondary">Target length</p>
+        <div className="flex flex-wrap gap-[7px]" id="lenchips" role="group" aria-label="Target length">
+          {LENGTH_CHIPS.map(({value, label}) => (
+            <button
+              key={value}
+              type="button"
+              data-len={value}
+              onClick={() => setTargetLength(value)}
+              aria-pressed={targetLength === value}
+              className={cn(
+                'rounded-full border px-[14px] py-[7px] font-ui text-[12px] font-semibold',
+                'transition-all duration-200',
+                targetLength === value
+                  ? 'border-[rgba(94,92,230,0.4)] bg-[var(--tint-soft,rgba(94,92,230,0.12))] text-[var(--accent-1)]'
+                  : 'border-transparent bg-white/[0.12] text-ink-secondary hover:bg-white/[0.2]',
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {/* Length hint line (#lenhint) — exact strings from LENHINT map */}
+        <p
+          id="lenhint"
+          className="mt-2 font-ui text-[12px] text-ink-muted"
+        >
+          {LENHINT[targetLength]}
+        </p>
+      </div>
+
+      {/* Auto-run toggle — mock §0 top bar. Shown inline on the topic screen per
+          the task spec (keep it if clean; skip gate stepper bar until /video pages). */}
+      <div className="mx-auto mt-4 max-w-[640px] px-1">
+        <div
+          role="switch"
+          aria-checked={autoRun}
+          aria-label="Auto-run"
+          tabIndex={0}
+          onClick={() => setAutoRun((v) => !v)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setAutoRun((v) => !v);
+            }
+          }}
+          className={cn(
+            'inline-flex cursor-pointer select-none items-center gap-2',
+            'font-ui text-[12px] font-semibold',
+            autoRun ? 'text-ink' : 'text-ink-muted',
+            'transition-colors duration-[250ms]',
+          )}
+        >
+          {/* Toggle pill */}
+          <span
+            className={cn(
+              'relative h-[18px] w-[30px] flex-none rounded-full transition-colors duration-[250ms]',
+              autoRun ? 'bg-[var(--accent-1)]' : 'bg-white/[0.14]',
+            )}
+            aria-hidden="true"
+          >
+            <span
+              className={cn(
+                'absolute top-[2.5px] h-[13px] w-[13px] rounded-full bg-white opacity-85',
+                'transition-transform duration-[250ms]',
+                autoRun ? 'left-[3px] translate-x-[11px]' : 'left-[3px]',
+              )}
+            />
+          </span>
+          Auto-run
+        </div>
+        <p className="mt-1 font-ui text-[11px] text-ink-muted">
+          approves every gate with defaults — you can still edit after
+        </p>
+      </div>
+
+      {/* First-run nudge — only until the operator has set a channel voice */}
+      {!prefsInitialized && (
+        <div className="mx-auto mt-4 flex max-w-[640px] items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-[rgba(94,92,230,0.25)] bg-[var(--tint-soft,rgba(94,92,230,0.1))] px-4 py-3">
+          <p className="font-ui text-[12px] text-ink-secondary">
+            Set up your channel voice once — tone, hook style, audience — and every
+            video follows it.
+          </p>
+          <button
+            type="button"
+            onClick={() => router.push('/settings/style')}
+            className="shrink-0 font-ui text-[12px] font-semibold text-[var(--accent-1)] hover:underline"
+          >
+            Set up →
+          </button>
+        </div>
+      )}
+
+      {/* Per-video style override — collapsible, prefilled from the global voice */}
+      <div className="mx-auto mt-4 max-w-[640px] px-1">
+        <button
+          type="button"
+          onClick={() => setStyleOpen((v) => !v)}
+          aria-expanded={styleOpen}
+          className="font-ui text-[12px] font-semibold text-ink-secondary hover:text-ink"
+        >
+          {styleOpen ? '▾' : '▸'} Style for this video
+          {Object.keys(diffOverride(globalPrefs, editedPrefs)).length > 0 && (
+            <span className="ml-2 rounded-full bg-[var(--accent-1)] px-2 py-[1px] text-[10px] text-white">
+              overridden
+            </span>
+          )}
+        </button>
+        {styleOpen && (
+          <div className="glass mt-3 rounded-[var(--radius-xl)] p-4">
+            <StylePrefsForm value={editedPrefs} onChange={setEditedPrefs} />
+            <div className="mt-4 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setEditedPrefs(globalPrefs)}
+                className="font-ui text-[12px] font-semibold text-ink-muted hover:text-ink"
+              >
+                Reset to channel voice
+              </button>
+              <button
+                type="button"
+                onClick={() => router.push('/settings/style')}
+                className="font-ui text-[12px] font-semibold text-ink-secondary hover:text-ink"
+              >
+                Edit channel voice →
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Generating affordance — covers the ~instant gap between click and sid */}
       {generating && (
-        <div className="glass mx-auto mt-6 max-w-[640px] rounded-[var(--radius-xl)] p-5">
-          <div className="flex items-center justify-between">
-            <Eyebrow>Pipeline</Eyebrow>
-            <Badge tone="blue" dot>
-              Running
-            </Badge>
-          </div>
-          <div className="mt-5 px-1">
-            <PipelineStepper stages={stages} />
-          </div>
-          <p className="mt-4 font-ui text-[12px] text-ink-muted">
-            Generating locally — you’ll land on the editing hub when it’s done.
+        <div className="glass mx-auto mt-6 max-w-[640px] rounded-[var(--radius-xl)] p-5 text-center">
+          <p className="font-ui text-[13px] text-ink-secondary">
+            Starting session…
+          </p>
+          <p className="mt-1 font-ui text-[12px] text-ink-muted">
+            You'll land on the script gate in a moment.
           </p>
         </div>
       )}
 
-      {/* Recents — the project library */}
+      {/* Error state — script failed before sid arrived */}
+      {startError && !generating && (
+        <div className="glass mx-auto mt-6 max-w-[640px] rounded-[var(--radius-xl)] border border-[rgba(255,80,80,0.2)] p-5">
+          <p className="font-ui text-[13px] font-semibold text-[#ff5050]">
+            draft — script failed
+          </p>
+          <p className="mt-1 font-ui text-[12px] text-ink-muted">{startError}</p>
+          <div className="mt-4">
+            <Button
+              onClick={() => {
+                setStartError(null);
+                generate();
+              }}
+              disabled={!topic.trim()}
+            >
+              Retry
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Recents — the project library (T11 handles stub metas) */}
       <div className="mx-auto mt-10 max-w-[640px]">
         <ProjectList
           projects={projects}
