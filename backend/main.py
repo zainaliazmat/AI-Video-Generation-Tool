@@ -25,11 +25,8 @@ from pipeline import script as script_stage       # noqa: F401 — test patches 
 from pipeline import tts as tts_stage             # noqa: F401 — test patches via m.tts_stage
 from pipeline import timing as timing_stage       # noqa: F401 — test patches via m.timing_stage
 from pipeline import footage as footage_stage     # noqa: F401 — test patches via m.footage_stage
-from pipeline import assemble as assemble_stage
 from pipeline import validate as validate_stage
 from pipeline import projects as projects_mod
-from pipeline.contracts import FootageRequest
-from pipeline.footage_query import harden
 from schema import Theme
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -100,31 +97,6 @@ def run(topic: str, fps: int = DEFAULT_FPS, on_stage=None):
         return spec
     finally:
         conn.close()
-
-
-def _footage_requests(plan, offsets, catalog, fps):
-    """One FootageRequest per `scene`-kind beat.
-
-    NOTE (HITL A.1): run() no longer calls this — the engine builds requests via
-    session.executors._footage_requests (verified identical). Kept here because
-    test_footage_relevance.py imports it directly; unify on a future cleanup branch.
-
-    `min_frames` is the loop FLOOR — HALF
-    the on-screen span (scene span + widest transition), i.e. K=2: skip clips that
-    would loop more than ~2× over the beat. select_clip applies it softly (relevance
-    wins among clips that clear it; a too-short top hit only yields to a longer usable
-    clip below). Half-span, not full span, so we don't resurrect the old bias that
-    dropped the relevant top hit for a longer worse one. `broad_query` carries the
-    title so fetch_footage can broaden a too-specific query that returns no clip."""
-    _, durations, _ = assemble_stage.scene_spans(offsets, fps)
-    headroom = max((m.durationFrames.max for m in catalog.values() if m.kind == "transition"), default=0)
-    return [
-        # broad_query hardening: only the Layer-A lexicon matters here (Layer B is
-        # identity when query == title); a colliding title is remapped before broaden.
-        FootageRequest(index=i, query=ps.query, min_frames=(durations[i] + headroom) // 2, broad_query=harden(plan.title, title=plan.title))
-        for i, ps in enumerate(plan.scenes)
-        if ps.needs_footage
-    ]
 
 
 if __name__ == "__main__":
