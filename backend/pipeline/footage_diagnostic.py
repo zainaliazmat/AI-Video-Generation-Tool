@@ -142,7 +142,7 @@ def _run_topic(topic, *, fps, thumbs_dir, top_n, key):
             continue
         words = len(beat.text.split())
         est_span = round(words / 2.5 * fps)  # ~2.5 words/sec; NO TTS here, so ESTIMATE
-        floor = est_span // 2                # half-span loop floor (K=2), mirrors main._footage_requests
+        floor = est_span // 2                # half-span loop floor (K=2), mirrors executors._footage_requests
         videos = search_pexels(ps.query, key).get("videos", [])
         usable = any(pick_video_file(v.get("video_files", [])) for v in videos)
         _report(f"beat {i} (~{words}w, est span {est_span}f)", ps.query, videos, fps=fps,

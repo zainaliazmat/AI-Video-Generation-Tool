@@ -15,7 +15,7 @@ from pipeline import footage as footage_stage
 from pipeline import assemble as assemble_stage
 from pipeline import recipe as recipe_stage
 from pipeline.contracts import FootageRequest
-from pipeline.footage_query import harden
+from pipeline.footage_query import anchor_query, topic_anchor
 from schema import Theme
 
 
@@ -81,26 +81,33 @@ def run_timing(ctx: EngineContext, inputs: dict) -> list:
 
 
 def _footage_requests(ctx: EngineContext, plan, offsets: list) -> list:
-    """Mirrors main.run()'s _footage_requests(plan, offsets, catalog, fps) exactly:
-        _, durations, _ = assemble_stage.scene_spans(offsets, fps)
-        headroom = max((m.durationFrames.max for m in catalog.values()
-                        if m.kind == "transition"), default=0)
-        FootageRequest(index=i, query=ps.query,
-                       min_frames=(durations[i] + headroom) // 2,
-                       broad_query=harden(plan.title, title=plan.title))
-        for i, ps in enumerate(plan.scenes) if ps.needs_footage
+    """One FootageRequest per `scene`-kind beat (the live builder the engine uses).
+
+    `min_frames` is the loop FLOOR — half the on-screen span (scene span + widest
+    transition), i.e. K=2: skip clips that would loop more than ~2× over the beat;
+    select_clip applies it softly so relevance still wins among clips that clear it.
+
+    Topic anchoring (footage-topic-anchor): each per-scene `keywords` query loses the
+    video's subject, and Pexels matches literally, so a drifted keyword returns an
+    off-topic clip. `topic_anchor(ctx.topic)` derives the clean subject; `query` gets
+    it prepended on drift (`anchor_query`), and `broad_query` broadens a whiff to that
+    subject. An empty/degenerate topic yields no anchor → today's behavior preserved.
     """
     _, durations, _ = assemble_stage.scene_spans(offsets, ctx.fps)
     headroom = max(
         (m.durationFrames.max for m in ctx.catalog.values() if m.kind == "transition"),
         default=0,
     )
+    # Carry the video's subject into every query so it survives Pexels' literal
+    # matching: anchor a drifted keyword, and broaden a whiff to the clean subject
+    # (not the clickbait title). topic_anchor("") is "" → today's behavior preserved.
+    anchor = topic_anchor(ctx.topic)
     return [
         FootageRequest(
             index=i,
-            query=ps.query,
+            query=anchor_query(ps.query, anchor),
             min_frames=(durations[i] + headroom) // 2,
-            broad_query=harden(plan.title, title=plan.title),
+            broad_query=anchor or ps.query,
         )
         for i, ps in enumerate(plan.scenes)
         if ps.needs_footage

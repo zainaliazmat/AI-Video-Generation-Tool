@@ -101,7 +101,9 @@ def test_run_builds_multi_template_spec_from_a_plan(monkeypatch, tmp_path):
     # footage requested ONLY for the scene beat (index 2), as FootageRequests
     assert [r.index for r in seen["footage_reqs"]] == [2]
     assert all(isinstance(r, FootageRequest) for r in seen["footage_reqs"])
-    assert seen["footage_reqs"][0].query == "ocean"
+    # the keyword "ocean" is anchored to the video subject ("anything") so the topic
+    # survives Pexels' literal matching (footage-topic-anchor).
+    assert seen["footage_reqs"][0].query == "anything ocean"
     assert seen["footage_reqs"][0].min_frames > 0          # biased by scene duration
 
     # the written spec is multi-template and valid (validate ran without raising)

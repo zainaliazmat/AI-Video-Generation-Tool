@@ -28,6 +28,20 @@ COLLISION_LEXICON: dict[str, str] = {
 _STOPWORDS = {"the", "a", "an", "of", "and", "in", "on", "at", "to", "for", "with"}
 _WORD = re.compile(r"[A-Za-z][A-Za-z'\-]*")
 
+# Leading count ("3 ", "top 5 ") — mirrors script._COUNT_PREFIX so topic anchoring
+# strips the same framing the title cleaner does.
+_COUNT_PREFIX = re.compile(r"^\s*(?:top\s+)?\d+\s+", re.IGNORECASE)
+# Leading list framing ("facts about ", "ways to ", "types of ") that wraps the real
+# subject in listicle phrasing: optional leading adjectives, a list noun, then a
+# connective — stripped so only the subject remains to anchor on.
+_LIST_FRAME = re.compile(
+    r"^(?:[a-z]+\s+)*?"
+    r"(?:facts?|things?|ways?|reasons?|tips?|secrets?|types?|kinds?|examples?|"
+    r"myths?|mistakes?|lessons?|rules?|signs?|steps?)\s+"
+    r"(?:about|of|on|in|for|to|regarding)\s+",
+    re.IGNORECASE,
+)
+
 
 def _normalize(q: str) -> str:
     return re.sub(r"\s+", " ", q.strip().lower())
@@ -65,3 +79,49 @@ def harden(query: str, *, title: str) -> str:
     if _propers(query) & _propers(title):
         return title
     return query
+
+
+def _depluralize(token: str) -> str:
+    """Naive trailing-'s' strip so an overlap check is singular/plural-insensitive
+    ('reefs' ~ 'reef'). Only for comparison, never for the emitted query. Skips short
+    words and '-ss' endings ('glass', 'bus') to avoid mangling non-plurals."""
+    if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
+        return token[:-1]
+    return token
+
+
+def _content_roots(text: str) -> set[str]:
+    """Lowercased, depluralized word tokens minus stopwords — the subject roots used
+    to tell whether a keyword already names the topic (so anchoring is a no-op)."""
+    return {_depluralize(t.lower()) for t in _WORD.findall(text) if t.lower() not in _STOPWORDS}
+
+
+def topic_anchor(topic: str) -> str:
+    """Raw user topic → a short, Pexels-safe subject anchor for footage queries.
+
+    Strips leading count + list framing ("3 facts about octopuses" → "octopuses";
+    "top 5 ways to save money" → "save money"), then routes the result through
+    harden() so a colliding/proper-noun subject degrades to a filmable category
+    ("the Antikythera mechanism" → "antique astronomical instrument") instead of a
+    zero-result named search. Returns "" for an empty/degenerate topic, so the caller
+    anchors nothing and falls back to today's behavior."""
+    stripped = _COUNT_PREFIX.sub("", topic, count=1)
+    stripped = _LIST_FRAME.sub("", stripped, count=1).strip()
+    if not stripped:
+        return ""
+    return harden(stripped, title=stripped)
+
+
+def anchor_query(query: str, anchor: str) -> str:
+    """Prepend `anchor` (a subject from topic_anchor) to a per-scene footage query so
+    the video's domain survives Pexels' literal matching ("color changing skin" →
+    "octopuses color changing skin").
+
+    No-op when either side is empty, or when the query already names the subject (a
+    shared content token): an on-subject keyword stays byte-identical, so the anchor
+    fires only when the keyword has drifted off the subject."""
+    if not anchor or not query.strip():
+        return query
+    if _content_roots(anchor) & _content_roots(query):
+        return query
+    return f"{anchor} {query}"
