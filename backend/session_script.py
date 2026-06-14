@@ -29,6 +29,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # backend/
 
 import json
 from session import api, store, job_ctx
+from session import prefs as prefs_mod
 from pipeline import style_memory
 
 
@@ -143,14 +144,10 @@ def drop_beat(sid: str, *, index: int) -> dict:
 
 
 def regenerate(sid: str, *, feedback: str = "") -> dict:
-    mem = style_memory.load(job_ctx.STYLE_MEMORY_PATH)
-    block_parts = []
-    if feedback.strip():
-        block_parts.append(f"OPERATOR FEEDBACK for this regeneration: {feedback.strip()}")
-    mem_block = style_memory.to_prompt_block(mem)
-    if mem_block:
-        block_parts.append(mem_block)
-    extra = "\n\n".join(block_parts)
+    # Single source of truth for the additive USER block: channel-voice prefs
+    # (global ⊕ this session's override) + style memory + this regeneration's
+    # feedback. The frozen SYSTEM_PROMPT and grounding rules stay untouched.
+    extra = prefs_mod.compose_extra_block(sid, feedback=feedback)
     topic, target_length = _row_for(sid)
     ctx = job_ctx.build_ctx(topic=topic, sid=sid, extra_user_block=extra,
                             target_length=target_length)

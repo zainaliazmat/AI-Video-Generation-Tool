@@ -5,8 +5,8 @@
 // This is the single home for the floating GateStepper bar (F3a) and the single
 // source of truth for the session's gate state across the chrome and every gate
 // page. It replaces the old layout.tsx markup (grid + rail + PiP) so the React
-// context wraps children + PreviewRail + MobilePiP — the three surfaces T6 needs
-// to coordinate the ≤2-player mount budget.
+// context wraps children + PreviewRail + FloatingPiP — the surfaces that
+// coordinate the player mount budget (lib/playerBudget).
 //
 // Responsibilities:
 //   • Poll /state once per navigation → expose {gates, autoRun, refresh}.
@@ -35,7 +35,7 @@ import {cn} from '@/lib/cn';
 import {studio, type GatesDict} from '@/lib/studio';
 import {GateStepper} from './GateStepper';
 import {PreviewRail} from './PreviewRail';
-import {MobilePiP} from './MobilePiP';
+import {FloatingPiP} from './FloatingPiP';
 
 type GateKey = 'script' | 'voice' | 'scenes' | 'assemble';
 const GATE_KEYS: readonly GateKey[] = ['script', 'voice', 'scenes', 'assemble'];
@@ -90,6 +90,7 @@ export function VideoChrome({id, children}: {id: string; children: React.ReactNo
   const [openSceneIndex, setOpenSceneIndex] = useState<number | null>(null);
 
   const current = currentGateFromPath(pathname);
+  const onAssemble = current === 'assemble';
 
   // Keep a ref to the freshest gates so the poll loop can read without re-binding.
   const gatesRef = useRef<GatesDict>(gates);
@@ -170,16 +171,28 @@ export function VideoChrome({id, children}: {id: string; children: React.ReactNo
           current ? 'pt-[72px]' : 'pt-6',
         )}
       >
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
+        {/* The fixed 300px "Live preview" rail is reserved for the Assemble gate,
+            where the full assembly is the point. Editing gates (script/voice/
+            scenes) + the hub run full-width with the floating PiP instead. */}
+        <div
+          className={cn(
+            'grid grid-cols-1 gap-5',
+            onAssemble && 'lg:grid-cols-[minmax(0,1fr)_300px]',
+          )}
+        >
           <div className="min-w-0">{children}</div>
-          <div className="hidden lg:block">
-            <PreviewRail id={id} />
-          </div>
+          {onAssemble && (
+            <div className="hidden lg:block">
+              <PreviewRail id={id} />
+            </div>
+          )}
         </div>
       </main>
       {/* OUTSIDE <main> on purpose: main is `relative z-[1]` (a stacking context),
-          which would trap the fixed PiP/fullscreen under the nav's z-20. */}
-      <MobilePiP id={id} />
+          which would trap the fixed PiP/fullscreen under the nav's z-20.
+          The floating preview shows on every gate; on Assemble it yields to the
+          desktop rail (hideOnDesktop → mobile-only there). */}
+      <FloatingPiP id={id} hideOnDesktop={onAssemble} />
     </VideoLayoutContext.Provider>
   );
 }

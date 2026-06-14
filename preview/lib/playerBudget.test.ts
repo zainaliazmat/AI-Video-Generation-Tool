@@ -1,39 +1,41 @@
 import {describe, expect, it} from 'vitest';
 import {mountedPlayers, shouldMountPiP, railPaused, type PlayerId} from './playerBudget';
 
-// T6 mount budget: never more than two @remotion/player instances mounted at once,
-// counting the MobilePiP (PRD §5.3 acceptance).
-describe('mountedPlayers — ≤2 budget', () => {
-  const cases: {isDesktop: boolean; openSceneIndex: number | null}[] = [
-    {isDesktop: true, openSceneIndex: null},
-    {isDesktop: true, openSceneIndex: 0},
-    {isDesktop: true, openSceneIndex: 3},
-    {isDesktop: false, openSceneIndex: null},
-    {isDesktop: false, openSceneIndex: 0},
-    {isDesktop: false, openSceneIndex: 2},
+// Mount budget: with the fixed rail reserved for Assemble and the floating PiP
+// everywhere else, never more than ONE @remotion/player instance is mounted.
+describe('mountedPlayers — ≤1 budget', () => {
+  const cases: {isDesktop: boolean; openSceneIndex: number | null; onAssemble: boolean}[] = [
+    {isDesktop: true, openSceneIndex: null, onAssemble: false},
+    {isDesktop: true, openSceneIndex: 0, onAssemble: false},
+    {isDesktop: true, openSceneIndex: 3, onAssemble: false},
+    {isDesktop: false, openSceneIndex: null, onAssemble: false},
+    {isDesktop: false, openSceneIndex: 0, onAssemble: false},
+    {isDesktop: true, openSceneIndex: null, onAssemble: true},
+    {isDesktop: false, openSceneIndex: null, onAssemble: true},
   ];
 
-  it('never mounts more than two players in any state', () => {
+  it('never mounts more than one player in any state', () => {
     for (const c of cases) {
-      expect(mountedPlayers(c).length).toBeLessThanOrEqual(2);
+      expect(mountedPlayers(c).length).toBeLessThanOrEqual(1);
     }
   });
 
-  it('desktop, no row open → rail only', () => {
-    expect(mountedPlayers({isDesktop: true, openSceneIndex: null})).toEqual(['rail']);
+  it('Assemble + desktop → the full-size rail only', () => {
+    expect(mountedPlayers({isDesktop: true, openSceneIndex: null, onAssemble: true})).toEqual<PlayerId[]>(['rail']);
   });
 
-  it('desktop, row open → rail (paused) + scene', () => {
-    const m = mountedPlayers({isDesktop: true, openSceneIndex: 1});
-    expect(m).toEqual<PlayerId[]>(['rail', 'scene']);
+  it('Assemble + mobile → the floating PiP (rail is desktop-only)', () => {
+    expect(mountedPlayers({isDesktop: false, openSceneIndex: null, onAssemble: true})).toEqual<PlayerId[]>(['pip']);
   });
 
-  it('mobile, no row open → pip only', () => {
-    expect(mountedPlayers({isDesktop: false, openSceneIndex: null})).toEqual(['pip']);
+  it('editing gate, no row open → the floating PiP on every viewport', () => {
+    expect(mountedPlayers({isDesktop: true, openSceneIndex: null, onAssemble: false})).toEqual<PlayerId[]>(['pip']);
+    expect(mountedPlayers({isDesktop: false, openSceneIndex: null, onAssemble: false})).toEqual<PlayerId[]>(['pip']);
   });
 
-  it('mobile, row open → scene only (pip unmounts)', () => {
-    expect(mountedPlayers({isDesktop: false, openSceneIndex: 0})).toEqual(['scene']);
+  it('scenes gate, row open → the per-scene player only (PiP unmounts), any viewport', () => {
+    expect(mountedPlayers({isDesktop: true, openSceneIndex: 1, onAssemble: false})).toEqual<PlayerId[]>(['scene']);
+    expect(mountedPlayers({isDesktop: false, openSceneIndex: 0, onAssemble: false})).toEqual<PlayerId[]>(['scene']);
   });
 });
 
@@ -44,7 +46,7 @@ describe('shouldMountPiP / railPaused', () => {
     expect(shouldMountPiP(5)).toBe(false);
   });
 
-  it('rail pauses while a row is open', () => {
+  it('railPaused tracks an open row (a no-op on Assemble, where no row exists)', () => {
     expect(railPaused(null)).toBe(false);
     expect(railPaused(0)).toBe(true);
     expect(railPaused(2)).toBe(true);

@@ -14,6 +14,7 @@ import json
 from uuid import uuid4
 
 from session import api, store, job_ctx
+from session import prefs as prefs_mod
 from pipeline import projects as projects_mod
 
 
@@ -59,12 +60,16 @@ def _resume(sid: str) -> "api.Session":
 
 # ── gate operations ──────────────────────────────────────────────────────────
 
-def start(topic: str, *, auto_run: bool = False, target_length: int = 60) -> dict:
+def start(topic: str, *, auto_run: bool = False, target_length: int = 60,
+          prefs_override: dict | None = None) -> dict:
     """Start a new gated session.
 
     Design ruling 2: the sid line is printed FIRST, before any stage runs,
     so the SSE interstitial can open its EventSource immediately.
     target_length is stored on the session row so _resume can re-thread it.
+    prefs_override (per-video script-style tweaks) is persisted on the row and
+    composed — with the global script_prefs and style memory — into the additive
+    USER block; absent → byte-identical to a no-prefs run.
     """
     sid = f"v3-{uuid4().hex}"
     # ruling 2: emit sid event BEFORE building ctx or running any stage
@@ -80,9 +85,12 @@ def start(topic: str, *, auto_run: bool = False, target_length: int = 60) -> dic
             last_running.clear()
         _on_stage(stage, state, elapsed)
 
-    ctx = job_ctx.build_ctx(topic=topic, sid=sid, target_length=target_length)
+    extra = prefs_mod.compose_extra_block(sid, override=prefs_override)
+    ctx = job_ctx.build_ctx(topic=topic, sid=sid, target_length=target_length,
+                            extra_user_block=extra)
     sess = api.create(job_ctx.SESSIONS_DB, ctx, session_id=sid, topic=topic,
-                      target_length=target_length)
+                      target_length=target_length,
+                      prefs_override=json.dumps(prefs_override) if prefs_override else None)
     try:
         projects_mod.bootstrap(job_ctx.REPO_ROOT, sid, topic=topic)
         try:
@@ -200,14 +208,19 @@ if __name__ == "__main__":
     ap.add_argument("--target-length", type=int, default=60,
                     choices=[30, 60, 180, 300],
                     help="Target video length in seconds (30/60/180/300; default 60)")
+    ap.add_argument("--prefs-override-json",
+                    help="Per-video script-style override (JSON object) for start")
     args = ap.parse_args()
 
     try:
         if args.op == "start":
             if not args.topic:
                 raise ValueError("--topic is required for start")
+            prefs_override = (json.loads(args.prefs_override_json)
+                              if args.prefs_override_json else None)
             result = start(args.topic, auto_run=args.auto_run,
-                           target_length=args.target_length)
+                           target_length=args.target_length,
+                           prefs_override=prefs_override)
         elif args.op == "approve":
             if not args.sid or not args.gate:
                 raise ValueError("--sid and --gate are required for approve")

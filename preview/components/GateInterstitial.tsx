@@ -94,10 +94,18 @@ export function GateInterstitial({
   // Whether we have started streaming at all (avoid double-start in StrictMode)
   const startedRef = useRef(false);
 
-  // Generation token: each run()/Retry bumps it; an in-flight run (or its SSE
-  // handler / poll loop) checks alive() and bails the moment a newer run starts
-  // or the component unmounts — no concurrent state writes, no post-unmount leaks.
+  // Generation token: a Retry bumps it via run(); an in-flight run (or its SSE
+  // handler / poll loop) checks alive() and bails the moment a NEWER run starts.
+  // This is supersession only — it is NOT bumped on unmount (see mountedRef).
   const genRef = useRef(0);
+
+  // Mounted flag: gates state writes / onDone against a real unmount. Under
+  // StrictMode (dev) the effect runs setup→cleanup→setup; cleanup flips this
+  // false and the re-mounted setup flips it back true BEFORE the in-flight
+  // run's `done` arrives, so the single live run still delivers onDone. On a
+  // real unmount it stays false, so a stale run can't navigate. This replaces
+  // the old genRef-bump-on-cleanup, which invalidated the ONLY run (the hang).
+  const mountedRef = useRef(true);
 
   // ── timer helpers ───────────────────────────────────────────────────────────
 
@@ -218,7 +226,7 @@ export function GateInterstitial({
   const run = async () => {
     // Claim a generation: any prior run (and its SSE handler / poll) is now stale.
     const myGen = ++genRef.current;
-    const alive = () => genRef.current === myGen;
+    const alive = () => genRef.current === myGen && mountedRef.current;
 
     // Reset state for Retry
     setFailedMsg(null);
@@ -278,11 +286,21 @@ export function GateInterstitial({
   // ── initial auto-run + cleanup ────────────────────────────────────────────
 
   useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
-    run();
+    mountedRef.current = true;
+    // Start the approve POST exactly once. Under StrictMode the second setup
+    // re-enters here with startedRef already true, so it does NOT re-POST — it
+    // just restored mountedRef above, keeping the first (only) run alive.
+    if (!startedRef.current) {
+      startedRef.current = true;
+      run();
+    }
     return () => {
-      genRef.current++; // invalidate any in-flight run / SSE handler / poll
+      // Do NOT bump genRef here: that would invalidate the only in-flight run
+      // (the dev-only "locking the script…" hang). Mark unmounted instead; a
+      // StrictMode re-mount restores it before `done`, a real unmount keeps it
+      // false. Aborting the poll is a no-op under StrictMode (polling only
+      // starts after `await stream()`, i.e. after the re-mount has settled).
+      mountedRef.current = false;
       stopTick();
       pollAbortRef.current?.abort();
     };

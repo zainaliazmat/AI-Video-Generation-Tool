@@ -165,11 +165,22 @@ describe('ScenePlayer.tsx — source-text prop contracts', () => {
     expect(src).toContain('loop');
   });
 
-  it('does NOT use a PlayerRef + seekTo loop (inFrame/outFrame is the mechanism)', () => {
-    // Confirm we are using the clean inFrame/outFrame binding, not the manual seek approach.
-    expect(src).not.toContain('seekTo');
-    expect(src).not.toContain('addEventListener');
-    expect(src).not.toContain('useEffect');
+  it('span looping uses inFrame/outFrame + loop, not a manual seekTo loop', () => {
+    // The span loop is still the native inFrame/outFrame binding (asserted above).
+    // The PlayerRef/seekTo/frameupdate added for the custom control bar drive the
+    // scene-relative readout + scrub — they do NOT implement the span loop.
+    expect(src).toContain('loop');
+    expect(src).toContain('inFrame={startFrame}');
+    expect(src).toContain('outFrame={outFrame}');
+  });
+
+  it('replaces native controls with a scene-relative custom bar (no 0:42)', () => {
+    // Native controls would read the full composition length (e.g. 0:42) with the
+    // rest of the bar greyed. We disable them and render a scene-scoped bar: a
+    // scene-relative clock + a scrubber scoped to the span.
+    expect(src).toContain('controls={false}');
+    expect(src).toContain('formatSceneClock');
+    expect(src).toContain('clampRelative');
   });
 });
 

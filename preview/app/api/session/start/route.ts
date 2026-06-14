@@ -1,6 +1,7 @@
 import {spawn, type ChildProcess} from 'node:child_process';
 import path from 'node:path';
 import {inFlight} from '../../../../lib/sessionFlight';
+import {copyAssets} from '../../../../lib/copyAssets';
 
 // child_process is Node-only; never bundle this for Edge.
 export const runtime = 'nodejs';
@@ -26,11 +27,18 @@ export async function POST(req: Request) {
   let topic = '';
   let autoRun = false;
   let targetLength: number | undefined;
+  let prefsOverride: Record<string, unknown> | undefined;
   try {
     const body = await req.json();
     topic = typeof body?.topic === 'string' ? body.topic.trim() : '';
     autoRun = body?.autoRun === true;
     if (typeof body?.targetLength === 'number') targetLength = body.targetLength;
+    // Per-video script-style override (object of set fields). Ignore empties so the
+    // additive prompt block stays byte-identical when nothing is tweaked.
+    if (body?.prefsOverride && typeof body.prefsOverride === 'object' &&
+        Object.keys(body.prefsOverride).length > 0) {
+      prefsOverride = body.prefsOverride as Record<string, unknown>;
+    }
   } catch {
     topic = '';
   }
@@ -70,6 +78,7 @@ export async function POST(req: Request) {
   const args: string[] = ['--op', 'start', '--topic', topic];
   if (autoRun) args.push('--auto-run');
   if (targetLength !== undefined) args.push('--target-length', String(targetLength));
+  if (prefsOverride) args.push('--prefs-override-json', JSON.stringify(prefsOverride));
 
   const stream = new ReadableStream({
     start(controller) {
@@ -163,8 +172,12 @@ export async function POST(req: Request) {
         send({type: 'error', error: err.message});
         finish();
       });
-      child.on('close', (code) => {
+      child.on('close', async (code) => {
         if (code === 0) {
+          // Auto-run may build the whole pipeline (voiceover + footage) before the
+          // UI lands on a gate; mirror those into preview/public so the live player
+          // can fetch them instead of buffering forever. copyAssets never rejects.
+          await copyAssets();
           send({type: 'done', sid: finalSid, gates: finalGates});
         } else {
           const tail = stderrTail.trim().split('\n').slice(-3).join('\n');

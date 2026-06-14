@@ -48,3 +48,4 @@ def build_ctx(*, topic: str, fps: int = 30, sid: str | None = None,
 
 
 STYLE_MEMORY_PATH = REPO_ROOT / "style_memory.json"
+STYLE_PREFS_PATH = REPO_ROOT / "script_prefs.json"

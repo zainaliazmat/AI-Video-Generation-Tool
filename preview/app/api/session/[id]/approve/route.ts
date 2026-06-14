@@ -1,6 +1,7 @@
 import {spawn, type ChildProcess} from 'node:child_process';
 import path from 'node:path';
 import {inFlight} from '../../../../../lib/sessionFlight';
+import {copyAssets} from '../../../../../lib/copyAssets';
 
 // child_process is Node-only; never bundle this for Edge.
 export const runtime = 'nodejs';
@@ -163,8 +164,12 @@ export async function POST(req: Request, {params}: {params: Promise<{id: string}
         send({type: 'error', error: err.message});
         finish();
       });
-      child.on('close', (code) => {
+      child.on('close', async (code) => {
         if (code === 0) {
+          // Mirror the new voiceover + footage into preview/public BEFORE the UI
+          // navigates to the scenes gate, or the live player 404s on assets and
+          // buffers forever (the "stuck loading" bug). copyAssets never rejects.
+          await copyAssets();
           send({type: 'done', gates: finalGates});
         } else {
           const tail = stderrTail.trim().split('\n').slice(-3).join('\n');

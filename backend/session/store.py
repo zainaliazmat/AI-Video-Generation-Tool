@@ -115,6 +115,11 @@ def _migrate(conn) -> None:
             "ALTER TABLE sessions ADD COLUMN target_length INTEGER NOT NULL DEFAULT 60"
         )
         conn.commit()
+    if "prefs_override" not in cols:
+        # Per-video script-style override (JSON string) layered over the global
+        # script_prefs.json. NULL/absent → no override, byte-identical to today.
+        conn.execute("ALTER TABLE sessions ADD COLUMN prefs_override TEXT")
+        conn.commit()
 
 
 def connect(db_path) -> sqlite3.Connection:
@@ -130,18 +135,28 @@ def connect(db_path) -> sqlite3.Connection:
 
 
 def create_session(conn, *, id, topic, now, spec_path=None, current_stage=None,
-                   target_length: int = 60) -> None:
+                   target_length: int = 60, prefs_override=None) -> None:
     conn.execute(
         "INSERT INTO sessions"
-        " (id, topic, created_at, updated_at, current_stage, spec_path, target_length)"
-        " VALUES (?,?,?,?,?,?,?)",
-        (id, topic, now, now, current_stage, spec_path, target_length),
+        " (id, topic, created_at, updated_at, current_stage, spec_path, target_length,"
+        "  prefs_override)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        (id, topic, now, now, current_stage, spec_path, target_length, prefs_override),
     )
     conn.commit()
 
 
 def get_session(conn, session_id):
     return conn.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
+
+
+def get_prefs_override(conn, session_id):
+    """Return the session's per-video prefs override as a JSON string, or None."""
+    row = get_session(conn, session_id)
+    if row is None:
+        return None
+    keys = row.keys() if hasattr(row, "keys") else []
+    return row["prefs_override"] if "prefs_override" in keys else None
 
 
 def update_session(conn, session_id, *, now, **fields) -> None:

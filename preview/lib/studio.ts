@@ -154,6 +154,28 @@ export type StyleMemoryDoc = {
   caps: {examples: number; guidance: number};
 };
 
+// Channel-voice script preferences (the operator's DECLARED style; the sibling of
+// the LEARNED StyleMemoryDoc). Mirrors backend/pipeline/script_prefs.py EMPTY.
+// Every field is optional/empty by default — an empty doc keeps the prompt
+// byte-identical. Video length is NOT here; it's the existing target-length chip.
+export type ScriptPrefs = {
+  tone: string;
+  audience: {age_range: string; knowledge_level: string; interests: string[]};
+  style: {
+    wording: string;
+    sentence_length: string;
+    use_questions: boolean | null;
+    use_statistics: string;
+  };
+  hook_style: string;
+  personality: string;
+  use_humor: string;
+  storytelling: string;
+  cta_preference: string;
+  channel_niche: string;
+  script_types: string[];
+};
+
 export const studio = {
   script: {
     read: (id: string) => fetch(`/api/session/${id}/script`).then(j<ScriptGate>),
@@ -188,13 +210,25 @@ export const studio = {
   },
   project: (id: string) => fetch(`/api/projects/${id}`).then(j<{spec: any; sources: any}>),
 
+  // Global channel-voice preferences (set once, reused on every generation).
+  prefs: {
+    get: (): Promise<{ok: boolean; initialized: boolean; prefs: ScriptPrefs}> =>
+      fetch('/api/prefs').then(j<{ok: boolean; initialized: boolean; prefs: ScriptPrefs}>),
+    save: (prefs: Partial<ScriptPrefs>): Promise<{ok: boolean; initialized: boolean; prefs: ScriptPrefs}> =>
+      fetch('/api/prefs', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify(prefs),
+      }).then(j<{ok: boolean; initialized: boolean; prefs: ScriptPrefs}>),
+  },
+
   // Studio v3 M6 — session client.  Returns the raw streaming Response for
   // start/approve so the caller drives parsing via readSse (lib/sse.ts).
   session: {
     /** POST /api/session/start — returns the raw SSE streaming Response. */
     start: (
       topic: string,
-      opts?: {autoRun?: boolean; targetLength?: number},
+      opts?: {autoRun?: boolean; targetLength?: number; prefsOverride?: Partial<ScriptPrefs>},
     ): Promise<Response> =>
       fetch('/api/session/start', {
         method: 'POST',

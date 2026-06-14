@@ -5,10 +5,12 @@ import {useRouter} from 'next/navigation';
 import {Eyebrow, Button} from '@/components/ui';
 import {ProjectList} from '@/components/HistoryList';
 import type {ProjectMeta} from '@/lib/projects';
-import {studio} from '@/lib/studio';
+import {studio, type ScriptPrefs} from '@/lib/studio';
 import {readSse} from '@/lib/sse';
 import {LENHINT, DEFAULT_TARGET_LENGTH, type TargetLength} from '@/lib/topicScreen';
 import {cn} from '@/lib/cn';
+import {StylePrefsForm} from '@/components/StylePrefsForm';
+import {EMPTY_PREFS, diffOverride} from '@/lib/scriptPrefs';
 
 // Studio v3 T1 Home — Topic screen with length presets + auto-run toggle.
 //
@@ -36,11 +38,35 @@ export default function Home() {
   const [generating, setGenerating] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
+  // Channel-voice prefs: the global default + a per-video edit. The override sent to
+  // the backend is the DIFF (changed fields only) so an untouched panel keeps the
+  // prompt byte-identical.
+  const [globalPrefs, setGlobalPrefs] = useState<ScriptPrefs>(EMPTY_PREFS);
+  const [editedPrefs, setEditedPrefs] = useState<ScriptPrefs>(EMPTY_PREFS);
+  const [prefsInitialized, setPrefsInitialized] = useState(true); // assume true until told otherwise (no nudge flash)
+  const [styleOpen, setStyleOpen] = useState(false);
   // Guard state writes after the user navigates away mid-generate (the stale
   // `generating` closure can't detect unmount).
   const mountedRef = useRef(true);
   useEffect(() => () => {
     mountedRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    studio.prefs
+      .get()
+      .then((r) => {
+        const merged = {
+          ...EMPTY_PREFS,
+          ...r.prefs,
+          audience: {...EMPTY_PREFS.audience, ...r.prefs.audience},
+          style: {...EMPTY_PREFS.style, ...r.prefs.style},
+        };
+        setGlobalPrefs(merged);
+        setEditedPrefs(merged);
+        setPrefsInitialized(r.initialized);
+      })
+      .catch(() => {/* prefs are optional; ignore load failure */});
   }, []);
 
   const refreshProjects = useCallback(async () => {
@@ -64,7 +90,12 @@ export default function Home() {
     setStartError(null);
 
     try {
-      const res = await studio.session.start(t, {autoRun, targetLength});
+      const override = diffOverride(globalPrefs, editedPrefs);
+      const res = await studio.session.start(t, {
+        autoRun,
+        targetLength,
+        ...(Object.keys(override).length > 0 ? {prefsOverride: override} : {}),
+      });
 
       if (!res.ok || !res.body) {
         throw new Error(`Request failed (${res.status})`);
@@ -202,6 +233,61 @@ export default function Home() {
         <p className="mt-1 font-ui text-[11px] text-ink-muted">
           approves every gate with defaults — you can still edit after
         </p>
+      </div>
+
+      {/* First-run nudge — only until the operator has set a channel voice */}
+      {!prefsInitialized && (
+        <div className="mx-auto mt-4 flex max-w-[640px] items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-[rgba(94,92,230,0.25)] bg-[var(--tint-soft,rgba(94,92,230,0.1))] px-4 py-3">
+          <p className="font-ui text-[12px] text-ink-secondary">
+            Set up your channel voice once — tone, hook style, audience — and every
+            video follows it.
+          </p>
+          <button
+            type="button"
+            onClick={() => router.push('/settings/style')}
+            className="shrink-0 font-ui text-[12px] font-semibold text-[var(--accent-1)] hover:underline"
+          >
+            Set up →
+          </button>
+        </div>
+      )}
+
+      {/* Per-video style override — collapsible, prefilled from the global voice */}
+      <div className="mx-auto mt-4 max-w-[640px] px-1">
+        <button
+          type="button"
+          onClick={() => setStyleOpen((v) => !v)}
+          aria-expanded={styleOpen}
+          className="font-ui text-[12px] font-semibold text-ink-secondary hover:text-ink"
+        >
+          {styleOpen ? '▾' : '▸'} Style for this video
+          {Object.keys(diffOverride(globalPrefs, editedPrefs)).length > 0 && (
+            <span className="ml-2 rounded-full bg-[var(--accent-1)] px-2 py-[1px] text-[10px] text-white">
+              overridden
+            </span>
+          )}
+        </button>
+        {styleOpen && (
+          <div className="glass mt-3 rounded-[var(--radius-xl)] p-4">
+            <StylePrefsForm value={editedPrefs} onChange={setEditedPrefs} />
+            <div className="mt-4 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setEditedPrefs(globalPrefs)}
+                className="font-ui text-[12px] font-semibold text-ink-muted hover:text-ink"
+              >
+                Reset to channel voice
+              </button>
+              <button
+                type="button"
+                onClick={() => router.push('/settings/style')}
+                className="font-ui text-[12px] font-semibold text-ink-secondary hover:text-ink"
+              >
+                Edit channel voice →
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Generating affordance — covers the ~instant gap between click and sid */}
