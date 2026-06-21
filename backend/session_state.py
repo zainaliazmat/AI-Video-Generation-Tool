@@ -18,6 +18,14 @@ from session import store, job_ctx
 from pipeline import projects as projects_mod
 
 
+def _row_get(row, key, default=None):
+    """sqlite3.Row has no .get(); tolerate a column missing on legacy rows."""
+    try:
+        return row[key]
+    except (IndexError, KeyError):
+        return default
+
+
 def _beat_text_by_index(conn, sid: str) -> dict:
     """{scene_index: beat_text} from the persisted script stage (1 beat = 1 scene).
     Best-effort: returns {} if the script stage / JSON is missing."""
@@ -112,7 +120,12 @@ def build_state(sid: str) -> dict:
                 for r in scene_candidate_rows:
                     candidates.append({
                         "rank": r["rank"], "thumbUrl": r["thumb_url"], "query": r["query"],
-                        "durationFrames": r["duration_frames"], "selected": bool(r["selected"])})
+                        "durationFrames": r["duration_frames"], "selected": bool(r["selected"]),
+                        # merged-pool provenance: video vs photo + which source surfaced it,
+                        # so the gate can badge "photo" / "wide" candidates. Tolerate legacy
+                        # rows (sqlite Row created before the columns existed).
+                        "kind": _row_get(r, "kind", "video"),
+                        "source": _row_get(r, "source", None)})
             p = prov.get(i)
 
             # ── v3-M5 T7: five new keys ──────────────────────────────────────

@@ -37,6 +37,7 @@ from pipeline.contracts import Clip, FootageRequest
 Selection = namedtuple("Selection", "link duration_frames rank pexels_id pexels_url")
 
 PEXELS_VIDEO_SEARCH = "https://api.pexels.com/videos/search"
+PEXELS_PHOTO_SEARCH = "https://api.pexels.com/v1/search"
 
 # v3-M5 T2 (OV-5): hero scene background auto-fill policy.
 # "auto"     → pick rank-1 from the scene's pool (with K-floor) and download it.
@@ -110,20 +111,15 @@ def select_clip(videos, *, min_frames=0, fps):
     return first_usable if first_usable is not None else Selection(None, None, None, None, None)
 
 
-def search_pexels(query: str, key: str, *, _get=None, _sleep=None, max_retries: int = 3) -> dict:
-    """Search Pexels for portrait clips. Bounded retry with exponential backoff on
-    429/5xx (honoring a Retry-After header on 429 when present), then raise — the
-    caller (fetch_footage) broadens to the title on the raised error. The retry cap
-    is small and fixed (Phase-3 cost discipline); _get/_sleep are injectable for tests."""
+def _pexels_search(url, params, key, *, _get=None, _sleep=None, max_retries: int = 3) -> dict:
+    """Shared Pexels GET with bounded retry + exponential backoff on 429/5xx (honoring a
+    Retry-After header on 429 when present), then raise. The retry cap is small and fixed
+    (Phase-3 cost discipline); _get/_sleep are injectable for tests. Both the video and
+    photo searchers route through here so the backoff logic lives in exactly one place."""
     _get = _get or requests.get
     _sleep = _sleep or time.sleep
     for attempt in range(max_retries + 1):
-        r = _get(
-            PEXELS_VIDEO_SEARCH,
-            params={"query": query, "orientation": "portrait", "per_page": 15, "size": "medium"},
-            headers={"Authorization": key},
-            timeout=30,
-        )
+        r = _get(url, params=params, headers={"Authorization": key}, timeout=30)
         retryable = r.status_code == 429 or 500 <= r.status_code < 600
         if retryable and attempt < max_retries:
             retry_after = r.headers.get("Retry-After")
@@ -137,6 +133,44 @@ def search_pexels(query: str, key: str, *, _get=None, _sleep=None, max_retries: 
             continue
         r.raise_for_status()
         return r.json()
+
+
+def search_pexels(query: str, key: str, *, orientation: str | None = "portrait",
+                  _get=None, _sleep=None, max_retries: int = 3) -> dict:
+    """Search Pexels videos. `orientation` filters the result set; pass None to drop the
+    filter so Pexels returns its true relevance ranking across ALL orientations (the
+    footage-source-overhaul measurement passes None; production default stays "portrait"
+    until measurement validates the switch). On 429/5xx exhaustion this raises and the
+    caller (fetch_footage) broadens to the title."""
+    params = {"query": query, "per_page": 15, "size": "medium"}
+    if orientation is not None:
+        params["orientation"] = orientation
+    return _pexels_search(PEXELS_VIDEO_SEARCH, params, key,
+                          _get=_get, _sleep=_sleep, max_retries=max_retries)
+
+
+def search_pexels_photos(query: str, key: str, *, orientation: str | None = None,
+                         _get=None, _sleep=None, max_retries: int = 3) -> dict:
+    """Search Pexels photos (the alternate source for niche beats where video relevance is
+    thin). Default orientation is unfiltered: photos are high-res enough that a vertical
+    cover-crop never upscales, so we keep the full relevance ranking. Shares the retry
+    backoff with search_pexels (F3)."""
+    params = {"query": query, "per_page": 15}
+    if orientation is not None:
+        params["orientation"] = orientation
+    return _pexels_search(PEXELS_PHOTO_SEARCH, params, key,
+                          _get=_get, _sleep=_sleep, max_retries=max_retries)
+
+
+def pick_photo(photo: dict):
+    """Best downloadable src for a Pexels photo. Prefer the widest sizes (large2x ~1880w,
+    then original) so a 1080×1920 cover-crop stays crisp; never the small/medium/tiny
+    thumbs (they would upscale). Returns None when the photo carries no usable src."""
+    src = photo.get("src") or {}
+    for key in ("large2x", "original"):
+        if src.get(key):
+            return src[key]
+    return None
 
 
 def fetch_pool(
@@ -193,6 +227,125 @@ def fetch_pool(
         except OSError:
             pass  # write failure is non-fatal; next run re-fetches
 
+    return result
+
+
+def photo_candidate_rows(photos, *, query):
+    """Ranked candidate rows for a Pexels PHOTO search, shaped like candidate_rows so the
+    gate pool can mix photos and videos. kind="image", duration_frames=None (stills don't
+    loop), link = the high-res src pick_photo would download. Usable photos only (a photo
+    with no large2x/original src is skipped, so rank counts usable photos)."""
+    rows = []
+    for p in photos:
+        link = pick_photo(p)
+        if not link:
+            continue
+        src = p.get("src") or {}
+        rows.append({"rank": len(rows) + 1, "query": query, "duration_frames": None,
+                     "thumb_url": src.get("medium") or src.get("tiny"), "link": link,
+                     "pexels_id": p.get("id"), "pexels_url": p.get("url"), "kind": "image"})
+    return rows
+
+
+def _tag_rows(rows, *, kind, source):
+    for r in rows:
+        r["kind"] = kind
+        r["source"] = source
+    return rows
+
+
+def fetch_pool_merged(
+    query: str,
+    key: str,
+    fps: int,
+    *,
+    cache_dir=None,
+    per_source: int = 8,
+    search=None,
+    photo_search=None,
+) -> dict:
+    """The gate's candidate pool from THREE sources: portrait video (PRIMARY), unfiltered
+    video, and photos. The 2026-06-14 measurement showed no single source wins every topic
+    (portrait nails octopuses, photos nail antikythera, unfiltered helps niche), and the
+    worst niche failures are "on-word, wrong-sense" that no auto-trigger catches — so we
+    WIDEN the pool and let the human pick at the gate instead of auto-picking.
+
+    Each row is tagged: kind ∈ {"video","image"}, source ∈ {"portrait","unfiltered","photo"}.
+    Unfiltered rows that duplicate a portrait clip (same pexels_id OR link) are dropped.
+    The merged list is renumbered to ONE contiguous `rank` because the footage_candidates
+    PK and the gate pick op both address rows by rank.
+
+    Error policy (OV-6 honesty): only a PRIMARY (portrait) failure sets `error`; unfiltered
+    and photo are best-effort extras that degrade silently to fewer candidates. Caches the
+    merged blob under sha1(query) in `footage_pools_merged/` (distinct from fetch_pool's
+    portrait-only cache so the two never collide)."""
+    search = search or search_pexels
+    photo_search = photo_search or search_pexels_photos
+
+    cache_path = None
+    if cache_dir is not None:
+        pool_dir = Path(cache_dir) / "footage_pools_merged"
+        pool_dir.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha1(query.strip().lower().encode("utf-8")).hexdigest()[:16]
+        cache_path = pool_dir / f"pool_{digest}.json"
+        if cache_path.exists():
+            try:
+                return json.loads(cache_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                pass  # corrupt cache — re-fetch
+
+    # PRIMARY: portrait video. Its failure is the contract error (mirrors fetch_pool).
+    # Called WITHOUT an explicit orientation so it rides search_pexels' "portrait" default
+    # (and stays compatible with the (query, key) search seam the gate tests inject).
+    try:
+        videos = search(query, key).get("videos", [])
+        portrait = _tag_rows(candidate_rows(videos, query=query, fps=fps)[:per_source],
+                             kind="video", source="portrait")
+        error = None
+    except requests.HTTPError as exc:
+        portrait = []
+        error = ("rate_limited" if (exc.response is not None
+                                    and exc.response.status_code == 429) else "fetch_error")
+    except Exception:
+        portrait = []
+        error = "fetch_error"
+
+    seen_ids = {r["pexels_id"] for r in portrait if r.get("pexels_id") is not None}
+    seen_links = {r.get("link") for r in portrait}
+
+    # EXTRA 1: unfiltered video (best-effort) — drop clips already shown as portrait.
+    unfiltered = []
+    try:
+        uf = search(query, key, orientation=None).get("videos", [])
+        for r in candidate_rows(uf, query=query, fps=fps):
+            if r.get("pexels_id") in seen_ids or r.get("link") in seen_links:
+                continue
+            unfiltered.append(r)
+            if len(unfiltered) >= per_source:
+                break
+        _tag_rows(unfiltered, kind="video", source="unfiltered")
+    except Exception:
+        unfiltered = []
+
+    # EXTRA 2: photos (best-effort) — the niche-beat alternate source.
+    photos = []
+    try:
+        ph = photo_search(query, key).get("photos", [])
+        photos = _tag_rows(photo_candidate_rows(ph, query=query)[:per_source],
+                           kind="image", source="photo")
+    except Exception:
+        photos = []
+
+    merged = portrait + unfiltered + photos
+    for i, r in enumerate(merged, 1):
+        r["rank"] = i  # single contiguous rank space (PK + pick addressing)
+
+    result = {"rows": merged, "error": error}
+    if cache_path is not None and error is None:
+        try:
+            cache_path.write_text(json.dumps(result), encoding="utf-8")
+        except OSError:
+            pass
     return result
 
 

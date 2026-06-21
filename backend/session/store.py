@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS footage_candidates (
   duration_frames INTEGER,
   thumb_url       TEXT,
   selected        INTEGER NOT NULL DEFAULT 0,
+  kind            TEXT NOT NULL DEFAULT 'video',  -- 'video' | 'image' (photo pool source)
+  source          TEXT,                           -- 'portrait' | 'unfiltered' | 'photo' | 're_query'
   PRIMARY KEY (session_id, scene_index, rank)
 );
 CREATE TABLE IF NOT EXISTS media_provenance (
@@ -119,6 +121,16 @@ def _migrate(conn) -> None:
         # Per-video script-style override (JSON string) layered over the global
         # script_prefs.json. NULL/absent → no override, byte-identical to today.
         conn.execute("ALTER TABLE sessions ADD COLUMN prefs_override TEXT")
+        conn.commit()
+
+    # footage_candidates: kind/source for the merged gate pool (portrait video +
+    # unfiltered video + photos). Pre-overhaul DBs created these rows video-only.
+    fc_cols = {r[1] for r in conn.execute("PRAGMA table_info(footage_candidates)")}
+    if "kind" not in fc_cols:
+        conn.execute("ALTER TABLE footage_candidates ADD COLUMN kind TEXT NOT NULL DEFAULT 'video'")
+        conn.commit()
+    if "source" not in fc_cols:
+        conn.execute("ALTER TABLE footage_candidates ADD COLUMN source TEXT")
         conn.commit()
 
 
@@ -203,10 +215,12 @@ def replace_footage_candidates(conn, session_id, *, scene_index, candidates) -> 
                      (session_id, scene_index))
         conn.executemany(
             "INSERT INTO footage_candidates"
-            " (session_id, scene_index, rank, query, clip_path, duration_frames, thumb_url, selected)"
-            " VALUES (?,?,?,?,?,?,?,?)",
+            " (session_id, scene_index, rank, query, clip_path, duration_frames, thumb_url,"
+            "  selected, kind, source)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
             [(session_id, scene_index, c["rank"], c["query"], c.get("clip_path"),
-              c.get("duration_frames"), c.get("thumb_url"), int(c.get("selected", 0)))
+              c.get("duration_frames"), c.get("thumb_url"), int(c.get("selected", 0)),
+              c.get("kind", "video"), c.get("source"))
              for c in candidates],
         )
 

@@ -16,7 +16,10 @@ def test_run_footage_records_ranked_candidates(tmp_path, monkeypatch):
     plan = recipe_plan(script, theme=Theme())
     offsets = [LineOffset(0, "hook", 0, 1), LineOffset(1, "mid", 1, 3), LineOffset(2, "out", 3, 4)]
 
-    def fake_search(query, key):
+    # orientation kwarg: the merged pool calls this for portrait (filter) AND unfiltered
+    # (None). Returning the same clips both times exercises the dedup (unfiltered drops
+    # rows already shown as portrait, by link), so the pool stays the 2 portrait rows.
+    def fake_search(query, key, orientation="portrait"):
         return {"videos": [
             {"duration": 6, "video_files": [{"link": "a.mp4", "width": 1080, "height": 1920,
                                              "file_type": "video/mp4"}],
@@ -28,6 +31,7 @@ def test_run_footage_records_ranked_candidates(tmp_path, monkeypatch):
 
     monkeypatch.setattr("pipeline.footage.require_env", lambda name: "KEY")
     monkeypatch.setattr("pipeline.footage.search_pexels", fake_search)
+    monkeypatch.setattr("pipeline.footage.search_pexels_photos", lambda q, k: {"photos": []})
     monkeypatch.setattr("pipeline.footage._download", lambda url, dest: Path(dest).write_bytes(b"v"))
 
     ctx = EngineContext(topic="Reefs", fps=30, theme=Theme(), catalog={},
@@ -39,6 +43,7 @@ def test_run_footage_records_ranked_candidates(tmp_path, monkeypatch):
     pool = out["candidates"][1]
     assert [c["rank"] for c in pool] == [1, 2]
     assert pool[0]["thumb_url"] == "thumbA"
+    assert all(c["kind"] == "video" and c["source"] == "portrait" for c in pool)  # merged-pool tags
     assert any(c["selected"] for c in pool)                 # the chosen clip is marked
 
 
@@ -54,7 +59,7 @@ def test_run_footage_marks_the_displaced_pick_not_rank1(tmp_path, monkeypatch):
     # floor, the 10s rank-2 clears it -> select_clip yields to rank 2.
     offsets = [LineOffset(0, "hook", 0, 1), LineOffset(1, "mid", 1, 9), LineOffset(2, "out", 9, 10)]
 
-    def fake_search(query, key):
+    def fake_search(query, key, orientation="portrait"):
         return {"videos": [
             {"duration": 2, "video_files": [{"link": "short.mp4", "width": 1080, "height": 1920,
                                              "file_type": "video/mp4"}],
@@ -66,6 +71,7 @@ def test_run_footage_marks_the_displaced_pick_not_rank1(tmp_path, monkeypatch):
 
     monkeypatch.setattr("pipeline.footage.require_env", lambda name: "KEY")
     monkeypatch.setattr("pipeline.footage.search_pexels", fake_search)
+    monkeypatch.setattr("pipeline.footage.search_pexels_photos", lambda q, k: {"photos": []})
     monkeypatch.setattr("pipeline.footage._download", lambda url, dest: Path(dest).write_bytes(b"v"))
 
     ctx = EngineContext(topic="Reefs", fps=30, theme=Theme(), catalog={},

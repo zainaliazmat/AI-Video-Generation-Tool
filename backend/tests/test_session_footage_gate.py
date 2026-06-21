@@ -118,6 +118,34 @@ def test_requery_changes_pool_and_clip(tmp_path, monkeypatch):
     conn.close()
 
 
+def test_pick_photo_from_merged_pool_binds_image_clip(tmp_path, monkeypatch):
+    """Footage-source-overhaul: the merged gate pool surfaces PHOTOS for niche beats.
+    Picking a photo row must bind a kind="image" Clip (downloaded as .jpg) that renders
+    through the scene template's <Img> branch — the whole point of pool expansion."""
+    # override the autouse empty-photo stub: "coral reef" now yields one photo candidate
+    monkeypatch.setattr(
+        "pipeline.footage.search_pexels_photos",
+        lambda q, key: ({"photos": [{"id": 99, "url": "ph99", "width": 4000, "height": 6000,
+                                     "src": {"large2x": "http://x/photo.jpg", "medium": "m"}}]}
+                        if q == "coral reef" else {"photos": []}))
+    conn, eng = _seed(tmp_path, monkeypatch)
+
+    # pool: rank 1-2 portrait video, then the photo row (kind=image, source=photo)
+    pool = store.get_footage_candidates(conn, "s1", scene_index=1)
+    photo_row = next(r for r in pool if r["kind"] == "image")
+    assert photo_row["source"] == "photo"
+
+    eng.edit("footage", {"op": "pick", "scene_index": 1, "rank": photo_row["rank"]})
+
+    # the bound Clip is an image, and the spec renders it via media.type="image" + .jpg src
+    clip = next(c for c in eng._load_output("footage")["clips"] if c.index == 1)
+    assert clip.kind == "image"
+    media = json.loads((tmp_path / "spec.json").read_text())["scenes"][1]["templateProps"]["media"]
+    assert media["type"] == "image"
+    assert media["src"].endswith(".jpg")
+    conn.close()
+
+
 def test_pick_unknown_rank_fails_loud(tmp_path, monkeypatch):
     # pick reads the shown pool from the footage output (which retains each row's link),
     # so it is offline + deterministic. Picking a rank that isn't in the pool must raise

@@ -166,7 +166,10 @@ def run_footage(ctx: EngineContext, inputs: dict) -> dict:
             continue  # stat / enumeration / no-query scenes: no pool
         pool_result = {"rows": [], "error": "fetch_error"}
         if key:
-            pool_result = footage_stage.fetch_pool(
+            # Merged pool: portrait video (primary) + unfiltered video + photos, each
+            # source-tagged. Widens what the footage gate offers on niche beats without
+            # changing the autopilot pick (still portrait-video-first via fetch_footage).
+            pool_result = footage_stage.fetch_pool_merged(
                 ps.query, key, ctx.fps, cache_dir=ctx.cache_dir)
         rows = pool_result["rows"]
         pool_error = pool_result.get("error")

@@ -19,6 +19,22 @@ import {studio, type SceneState, type Candidate, type GatesDict} from '@/lib/stu
 import type {Spec} from '@remotion-src/schema';
 import {Badge, Eyebrow} from '@/components/ui';
 
+// footage-source-overhaul: the merged gate pool mixes portrait video (the default,
+// unbadged), unfiltered/landscape video, and photos. The measurement showed photos and
+// unfiltered clips are what rescue niche beats, so badge them in the corner so the user
+// can spot the alternate sources at a glance. Portrait video → no badge (the baseline).
+function sourceTag(c: Candidate): {label: string; cls: string; title: string} | null {
+  if (c.kind === 'image') {
+    return {label: 'photo', cls: 'bg-emerald-500/85 text-white',
+            title: 'A still photo (cover-cropped, Ken Burns) — crisper for niche topics.'};
+  }
+  if (c.source === 'unfiltered') {
+    return {label: 'wide', cls: 'bg-sky-500/85 text-white',
+            title: 'A landscape clip, center-cropped to vertical — wider Pexels relevance pool.'};
+  }
+  return null;
+}
+
 type EditBody =
   | {op: 'pick'; scene: number; rank: number; target?: 'footage' | 'background'}
   | {op: 're_query'; scene: number; query?: string; broaden?: boolean; target?: 'footage' | 'background'}
@@ -429,6 +445,17 @@ export function PoolGrid({
             <span className="absolute left-1 top-1 rounded-full bg-black/60 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-white">
               {c.rank === 1 ? 'auto' : `#${c.rank}`}
             </span>
+            {sourceTag(c) && (
+              <span
+                className={
+                  'absolute right-1 top-1 rounded-full px-1.5 py-0.5 font-mono text-[9px] font-semibold ' +
+                  sourceTag(c)!.cls
+                }
+                title={sourceTag(c)!.title}
+              >
+                {sourceTag(c)!.label}
+              </span>
+            )}
             {pendingPick && (
               <span className="absolute inset-x-0 bottom-0 bg-warn/90 px-1 py-0.5 text-center font-mono text-[8px] font-bold text-[#1a1308]">
                 pending
@@ -501,6 +528,17 @@ export function BackgroundGrid({
             <span className="absolute left-1 top-1 rounded-full bg-black/60 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-white">
               {c.rank === 1 ? 'auto' : `#${c.rank}`}
             </span>
+            {sourceTag(c) && (
+              <span
+                className={
+                  'absolute right-1 top-1 rounded-full px-1.5 py-0.5 font-mono text-[9px] font-semibold ' +
+                  sourceTag(c)!.cls
+                }
+                title={sourceTag(c)!.title}
+              >
+                {sourceTag(c)!.label}
+              </span>
+            )}
             {pendingPick && (
               <span className="absolute inset-x-0 bottom-0 bg-warn/90 px-1 py-0.5 text-center font-mono text-[8px] font-bold text-[#1a1308]">
                 pending

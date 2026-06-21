@@ -264,19 +264,20 @@ def test_run_footage_exhaustion_stage_completes_downstream_ok(tmp_path, monkeypa
     downstream assemble stage still produces a valid spec (pool_errors are advisory,
     never a render blocker).
 
-    Monkeypatches fetch_pool directly so fetch_footage's own search (for the
-    footage-scene clip download) continues to work — the two are separate seams.
+    Monkeypatches fetch_pool_merged directly (the gate-pool seam executors uses) so
+    fetch_footage's own search (for the footage-scene clip download) continues to work —
+    the two are separate seams.
     """
     script = BeatsScript(title="Reefs", beats=[
         Beat(text="hook"), Beat(text="mid", keywords="coral reef"), Beat(text="outro")])
     plan = recipe_plan(script, theme=Theme())
 
-    # fetch_pool always returns rate_limited — no real network call
-    def pool_rate_limited(query, key, fps, *, cache_dir=None, search=None):
+    # the merged gate pool always returns rate_limited — no real network call
+    def pool_rate_limited(query, key, fps, *, cache_dir=None, **kw):
         return {"rows": [], "error": "rate_limited"}
 
     monkeypatch.setattr("pipeline.footage.require_env", lambda name: "KEY")
-    monkeypatch.setattr("pipeline.footage.fetch_pool", pool_rate_limited)
+    monkeypatch.setattr("pipeline.footage.fetch_pool_merged", pool_rate_limited)
     monkeypatch.setattr("pipeline.footage.search_pexels",
                         lambda q, key: {"videos": [_fake_video()]})
     monkeypatch.setattr("pipeline.footage._download",

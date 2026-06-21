@@ -565,8 +565,13 @@ class Engine:
         if chosen is None:
             raise RuntimeError(f"no candidate for scene {scene} ({op})")
 
-        # download the chosen clip into the assets dir and bind it to the scene's Clip
-        dest = self.ctx.assets_dir / f"footage_{footage_stage.query_slug(chosen['query'])}_{chosen['rank']}.mp4"
+        # download the chosen candidate into the assets dir and bind it to the scene's Clip.
+        # The merged pool mixes video and photo rows: an image candidate downloads to .jpg
+        # and binds a kind="image" Clip (rendered via the scene template's <Img> branch);
+        # video stays .mp4. _download streams raw bytes, so it serves either.
+        kind = chosen.get("kind", "video")
+        ext = "jpg" if kind == "image" else "mp4"
+        dest = self.ctx.assets_dir / f"footage_{footage_stage.query_slug(chosen['query'])}_{chosen['rank']}.{ext}"
         if not dest.exists():
             link = chosen.get("link")
             if not link:
@@ -577,7 +582,8 @@ class Engine:
                     f"({op['op']}) — pool row carries no link and re-search recovery found none")
             footage_stage._download(link, dest)
         new_clip = Clip(index=scene, query=chosen["query"],
-                        path=f"assets/{dest.name}", duration_frames=chosen.get("duration_frames"))
+                        path=f"assets/{dest.name}", duration_frames=chosen.get("duration_frames"),
+                        kind=kind)
         out["clips"] = [new_clip if c.index == scene else c for c in out["clips"]]
         # re-mark selection; KEEP `link` in the output pool so a later pick stays offline
         # and deterministic. The footage_candidates TABLE is the display surface (no link

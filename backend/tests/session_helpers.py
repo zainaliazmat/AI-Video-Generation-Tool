@@ -64,7 +64,11 @@ def fakes_with_counts(monkeypatch):
             for r in reqs
         ],
     )
-    monkeypatch.setattr("pipeline.footage.search_pexels", lambda q, key: {"videos": []})
+    # search_pexels now takes orientation (merged pool calls it for portrait + unfiltered);
+    # search_pexels_photos is the photo arm of the merged gate pool. Both empty here.
+    monkeypatch.setattr("pipeline.footage.search_pexels",
+                        lambda q, key, orientation=None: {"videos": []})
+    monkeypatch.setattr("pipeline.footage.search_pexels_photos", lambda q, key: {"photos": []})
     monkeypatch.setattr("pipeline.footage.require_env", lambda name: "K")
 
     # Wrap each executor in a counter. We do this AFTER the pipeline fakes are

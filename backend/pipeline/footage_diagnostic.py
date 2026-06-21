@@ -27,7 +27,28 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # backend/
 import math
 from pathlib import Path
 
-from pipeline.footage import pick_video_file, _video_duration_frames, search_pexels, select_clip
+from pipeline.footage import (
+    pick_video_file, _video_duration_frames, search_pexels, select_clip,
+    search_pexels_photos, pick_photo,
+)
+
+
+def summarize_photos(photos):
+    """Rank-ordered view of a Pexels PHOTO search result: rank (relevance order), a small
+    thumb for the eyes-on read, the page url, the high-res src pick_photo would download,
+    and (w, h) dims so the operator can confirm the source clears a 1080x1920 crop without
+    upscaling. Pure; the I/O (thumbnail download) lives in the report layer."""
+    rows = []
+    for rank, p in enumerate(photos, 1):
+        src = p.get("src") or {}
+        rows.append({
+            "rank": rank,
+            "thumb": src.get("medium") or src.get("tiny"),
+            "page": p.get("url"),
+            "src": pick_photo(p),
+            "dims": (p.get("width"), p.get("height")),
+        })
+    return rows
 
 
 def summarize_candidates(videos, *, fps):
@@ -128,6 +149,57 @@ def _report(label, query, videos, *, fps, span_frames=None, min_frames=0, broad_
     return rows
 
 
+def _report_photos(label, query, photos, *, thumbs_dir=None, top_n=8, tag="p"):
+    """The photo arm of the measurement. Prints each candidate's rank, dims, and the
+    high-res src pick_photo would download, then dumps thumbnails for the eyes-on read.
+    Dims let the operator confirm the source clears a 1080x1920 cover-crop without
+    upscaling (the crop-quality question the whole measure-first decision hinges on)."""
+    rows = summarize_photos(photos)
+    print(f"\n=== {label}: query={query!r}  [PHOTOS] ===")
+    if not rows:
+        print("  (no photos returned)")
+        return rows
+    print("  rank   w x h     clears 1080x1920?  page")
+    for r in rows:
+        w, h = r["dims"]
+        clears = "yes" if (w and h and w >= 1080 and h >= 1920) else "crop/upscale"
+        print(f"  {r['rank']:>3}   {str(w)}x{str(h):<6}  {clears:>16}  {r['page']}")
+    if thumbs_dir:
+        d = Path(thumbs_dir); d.mkdir(parents=True, exist_ok=True)
+        for r in rows[:top_n]:
+            if r["thumb"]:
+                _download_thumb(r["thumb"], d / f"{tag}_rank{r['rank']:02d}.jpg")
+        print(f"  thumbnails -> {d}/{tag}_rank*.jpg")
+    return rows
+
+
+def _compare_slug(query):
+    """A short filesystem-safe token from a query so each query's three thumbnail sets get
+    distinct filenames (otherwise a multi-query run overwrites itself — every query shared
+    the same 'vid_portrait'/'vid_all'/'photo' tags)."""
+    token = "".join(c if c.isalnum() else "_" for c in query.lower()).strip("_")
+    return token[:24] or "q"
+
+
+def _run_compare(query, *, fps, thumbs_dir, top_n, span, key, idx=0):
+    """Measure-first comparison for one query: portrait video (current production) vs
+    unfiltered video (the proposed change) vs photos (the niche-beat alternate source).
+    Three thumbnail sets land side by side, each NAMESPACED by the query, for the eyes-on
+    read."""
+    min_frames = span // 2 if span else 0
+    pre = f"q{idx}_{_compare_slug(query)}"
+    print(f"\n########## COMPARE: {query!r} ##########")
+    portrait = search_pexels(query, key, orientation="portrait").get("videos", [])
+    _report("video [orientation=portrait]", query, portrait, fps=fps, span_frames=span,
+            min_frames=min_frames, thumbs_dir=thumbs_dir, top_n=top_n, tag=f"{pre}__vid_portrait")
+    unfiltered = search_pexels(query, key, orientation=None).get("videos", [])
+    _report("video [orientation=UNFILTERED]", query, unfiltered, fps=fps, span_frames=span,
+            min_frames=min_frames, thumbs_dir=thumbs_dir, top_n=top_n, tag=f"{pre}__vid_all")
+    photos = search_pexels_photos(query, key).get("photos", [])
+    _report_photos("photos [unfiltered]", query, photos,
+                   thumbs_dir=thumbs_dir, top_n=top_n, tag=f"{pre}__photo")
+
+
 def _run_topic(topic, *, fps, thumbs_dir, top_n, key):
     from pipeline import script as script_stage, recipe as recipe_stage
     from schema import Theme
@@ -165,12 +237,19 @@ if __name__ == "__main__":
     ap.add_argument("--thumbs", help="dir to download top-N thumbnails into (for the eyes-on relevance read)")
     ap.add_argument("--top-n", type=int, default=8)
     ap.add_argument("--span", type=int, help="span frames for --query loop-factor (optional)")
+    ap.add_argument("--compare", action="store_true",
+                    help="footage-source-overhaul Phase 0: for each --query, dump portrait "
+                         "video vs UNFILTERED video vs photos side by side for the eyes-on read")
     args = ap.parse_args()
 
     from pipeline.config import require_env
     pexels_key = require_env("PEXELS_API_KEY")
 
     for i, q in enumerate(args.query):
+        if args.compare:
+            _run_compare(q, fps=args.fps, thumbs_dir=args.thumbs, top_n=args.top_n,
+                         span=args.span, key=pexels_key, idx=i)
+            continue
         videos = search_pexels(q, pexels_key).get("videos", [])
         _report(f"query[{i}]", q, videos, fps=args.fps, span_frames=args.span,
                 min_frames=(args.span // 2 if args.span else 0),

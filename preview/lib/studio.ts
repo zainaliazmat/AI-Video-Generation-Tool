@@ -69,6 +69,10 @@ export interface Candidate {
   query: string;
   durationFrames: number;
   selected: boolean;
+  // footage-source-overhaul: the merged gate pool mixes video and photos from three
+  // sources. Optional so legacy/pre-overhaul state still types (defaults: video/portrait).
+  kind?: 'video' | 'image';
+  source?: 'portrait' | 'unfiltered' | 'photo' | 're_query' | null;
 }
 export interface FootageProvenance {
   source: 'auto' | 'pick' | 're_query' | 'uploaded';

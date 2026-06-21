@@ -1,7 +1,20 @@
 """Phase 4 — footage diagnostic: the pure core that turns a Pexels search result
 into a rank-ordered, eyeball-ready view, and the loop-playthrough math that answers
 the (3)-band question (does the relevance-first pick loop perceptibly?)."""
-from pipeline.footage_diagnostic import summarize_candidates, loop_playthroughs, kfloor_pick
+from pipeline.footage_diagnostic import (
+    summarize_candidates, loop_playthroughs, kfloor_pick, summarize_photos, _compare_slug,
+)
+
+
+def test_compare_slug_is_distinct_and_filesystem_safe():
+    # The namespacing fix: two different queries must produce different tokens so a
+    # multi-query --compare run does not overwrite its own thumbnails.
+    a = _compare_slug("the antikythera mechanism")
+    b = _compare_slug("outer space")
+    assert a != b
+    assert all(c.isalnum() or c == "_" for c in a)   # no spaces/punctuation in filenames
+    assert _compare_slug("") == "q"                  # degenerate query still yields a token
+    assert len(_compare_slug("x" * 100)) <= 24       # bounded length
 
 
 def _v(link, dur, ftype="video/mp4", w=1080, h=1920, image="t", url="p"):
@@ -21,6 +34,27 @@ def test_summarize_ranks_and_marks_first_usable_selected():
     assert [r["selected"] for r in rows] == [False, True, False]   # first USABLE, not first overall
     assert rows[1]["duration_frames"] == 150                       # 5s * 30
     assert rows[1]["thumb"] == "ta" and rows[1]["page"] == "pa"
+
+
+def test_summarize_photos_ranks_and_extracts_thumb_and_src():
+    # The photo arm of the measurement: rank in Pexels relevance order, a small thumb for
+    # the eyes-on read, the page url, the high-res src pick_photo would download, and dims
+    # so the operator can confirm the source clears a 1080x1920 crop without upscaling.
+    photos = [
+        {"id": 1, "url": "pa", "width": 4000, "height": 6000,
+         "src": {"medium": "ma", "large2x": "L2a"}},
+        {"id": 2, "url": "pb", "width": 3000, "height": 2000,
+         "src": {"medium": "mb", "large2x": "L2b"}},
+    ]
+    rows = summarize_photos(photos)
+    assert [r["rank"] for r in rows] == [1, 2]
+    assert rows[0]["thumb"] == "ma" and rows[0]["page"] == "pa" and rows[0]["src"] == "L2a"
+    assert rows[1]["dims"] == (3000, 2000)
+
+
+def test_summarize_photos_tolerates_missing_fields():
+    rows = summarize_photos([{"id": 9}])   # no src, no url, no dims
+    assert rows == [{"rank": 1, "thumb": None, "page": None, "src": None, "dims": (None, None)}]
 
 
 def test_loop_playthroughs_answers_the_band_question():

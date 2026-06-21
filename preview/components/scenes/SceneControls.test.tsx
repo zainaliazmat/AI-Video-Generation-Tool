@@ -69,6 +69,29 @@ describe('pool horizontal rails', () => {
     expect(container.querySelectorAll('[data-pool-rail] button').length).toBe(2);
   });
 
+  it('badges photo and wide (unfiltered) candidates, leaves portrait video unbadged', () => {
+    // footage-source-overhaul: the merged pool surfaces alternate sources for niche beats;
+    // the corner badge lets the user spot them. Portrait video is the baseline (no badge).
+    const mixed = [
+      {rank: 1, thumbUrl: 'http://x/1.jpg', query: 'q', durationFrames: 30, selected: false,
+       kind: 'video' as const, source: 'portrait' as const},
+      {rank: 2, thumbUrl: 'http://x/2.jpg', query: 'q', durationFrames: 30, selected: false,
+       kind: 'video' as const, source: 'unfiltered' as const},
+      {rank: 3, thumbUrl: 'http://x/3.jpg', query: 'q', durationFrames: 0, selected: false,
+       kind: 'image' as const, source: 'photo' as const},
+    ];
+    act(() => root.render(createElement(PoolGrid, {
+      rows: mixed, disabled: false, pending: false, onPick: () => {},
+    })));
+    const text = container.querySelector('[data-pool-rail]')?.textContent ?? '';
+    expect(text).toContain('photo');   // the image candidate
+    expect(text).toContain('wide');    // the unfiltered/landscape candidate
+    // portrait video carries only its rank ('auto' for rank 1), no source tag
+    const tile1 = container.querySelectorAll('[data-pool-rail] button')[0];
+    expect(tile1.textContent).not.toContain('photo');
+    expect(tile1.textContent).not.toContain('wide');
+  });
+
   it('BackgroundGrid renders the gradient tile + clips in a horizontal rail', () => {
     act(() => root.render(createElement(BackgroundGrid, {
       rows, isGradient: true, disabled: false, pending: false, onPick: () => {},
